@@ -102,53 +102,94 @@ then **Install from VSIX**. Nothing is published to the Marketplace.
   generator — changing how a planet looks is changing values, not
   rebuilding. A design polish pass is a later piece, after living with
   the pet a while.
-- **Tests:** `node test-pet.js` — 509 checks (XP counting, stage
+- **Tests:** `node test-pet.js` — 531 checks (XP counting, stage
   boundaries, no-auto-rebirth + orange max bar, starter bias, new-planet
   command, persistence round-trip, bad-data fallback, minerals /
   salvage / prestige, System Rank / slots / overflow, package.json
-  contract, share card, seed hatch). Plus a wiring harness
+  contract, share card, seed hatch, Instrument redesign, disc rules). Plus a wiring harness
   (`../scratch/test-system-panel.js`, fake `vscode` module) that
   loads `extension.js` for real and drives activation, typing
   events, status bar, webview messages and the generated HTML,
   including opening the Solar System panel and driving place /
-  remove through it: 33 checks, all passing.
+  remove through it: 38 checks, all passing.
 - **Not verified here:** the Extension Development Host can't run
   headless on this VM — Devon runs it with F5 on his PC. That's the
   real test.
 
-## Step 4 — Solar System / collection view (DONE Nov 11)
+## Step 4 — Solar System / collection view (DONE Nov 11; redesigned Nov 12)
 
 Command: **Protoplanet: Open solar system** (`protoplanet.openSolarSystem`).
 
-A full-screen webview panel, tilted orrery at the top and the
-Pokédex/Archive below it. The star sits in the middle (default star
-for now — no rarity or upgrades yet); one ring per unlocked slot, one
-planet per ring. Orbit rings are ellipses (tilt 0.42) while the planet
-discs stay upright, facing the viewer — the Stellaris-style tilted
-view Devon asked for, not top-down and not pure side view.
+A full-screen webview panel in the Instrument style (Devon, Nov 12):
+near-black background, thin hairline rules, monospace type, one amber
+accent, lots of empty space — no gradients, no glow, no cards, no
+dashboard chrome. Two full-screen modes, not one crowded screen: the
+**Orrery** (tilted, full-bleed, the star at the center) and the
+**Index** (the collection), switched from the tabs in the one thin top
+line. The star sits in the middle (default star for now — no rarity or
+upgrades yet); one ring per unlocked slot, one planet per ring. Orbit
+rings are ellipses (tilt 0.34) while the planet discs stay upright,
+facing the viewer — the Stellaris-style tilted view Devon asked for,
+not top-down and not pure side view.
 
 - **Slots / System Rank:** 4 rings at Rank 0. Each rank unlocks +1
   ring (Rank = floor(finished planets / 3), capped at 12 rings).
   Locked rings are visible as dashed rings with the unlock
   requirement written on them, e.g. "Ring 5 — grow 3 more planets".
   The header shows "N / M rings used" and the next unlock.
-- **Detail:** click a planet → a side panel with large ASCII art,
-  name, seed, terrain, ring type, moons, size, stage, characters
-  grown, mutations, and generation — plus **Remove from system**
-  (moves it to the Archive, never deletes it) and **Replace**.
-- **Archive:** scroll down for the grid of ALL owned planets
-  (unlimited), searchable and sortable, each card with an
-  "In system" badge and the count "N planets — M in system".
-  Click an empty ring → the Archive opens in picker mode, filtered
+- **Zoom to a planet:** click a planet → the camera zooms into it
+  and its details show in a floating sheet beside it — name, seed,
+  terrain, ring type, moons, size, stage, characters grown,
+  mutations, and generation — plus **Remove from system** (moves it
+  to the Index, never deletes it) and **Replace**. X or Esc zooms back
+  out to the view you had. This replaces the old detail modal, which
+  covered the solar system. Free zoom (Ctrl+scroll) and drag-pan to
+  explore; H hides the interface (only the orrery stays).
+- **Zoom detail (Nov 12):** zooming in doesn't just blow up the same
+  letters — the disc re-renders at a denser grid, so the planet gets
+  more detailed as you get closer. Stepped tiers from
+  `discDetail(zoom / fitZoom)` in `planet.js`: 46x24 below 2x, 92x48
+  from 2x, 136x76 (the full render, the cap) from 3x. The cell sizes
+  shrink in exact proportion, so the disc never changes size on
+  screen and the planet never jumps; the tier swaps once per
+  threshold, never continuously. Same planet at every tier (the
+  tier-2 grid downsampled is exactly the tier-0 grid). Applies to
+  the orrery zoom (Ctrl+scroll and click-to-zoom); the detail sheet
+  already shows the full render.
+- **Index:** the collection as its own mode — big tiles, 2–3 per row,
+  the planet's ASCII art as the tile, name + one datum, 1px hairline
+  gaps, no card chrome and no amber border on the tiles (amber is
+  kept only for the badges and the active tab); searchable and
+  sortable, each tile with an "In system" badge and the one slim
+  count line "N planets — M in system". The top line is trimmed too
+  ("Rank 1 · 4/5 rings · 2 to next ring").
+  Click an empty ring → the Index opens in picker mode, filtered
   to planets not already displayed.
+- **Stage-driven scale (Nov 12):** a planet's rendered size grows
+  with its stage — a newborn (Shattered birth) renders at half the
+  size of a mature planet (Civilization), so the collection reads as
+  a growth story and a newborn is clearly smaller than a mature
+  planet (and much smaller than the sun). `stageScale(stageIdx)` in
+  `planet.js` (0.5 → 1.0).
+- **No stars in the solar system (Nov 12):** the planet renders
+  carry their own starfield, but in the orrery and the Index tiles
+  it is dropped — plain black behind the planets, no stars hugging
+  each one. The panel has no shared starfield either (Devon's call:
+  good how it was). Stars stay in the planet's own frames (sidebar
+  pet view, zoom detail), where they twinkle.
+- **Full rings in the orrery (Nov 12):** a planet's entire ring
+  system is visible in its orrery disc — `ringFitZoom(planet, stage,
+  46, 24)` in `planet.js` shrinks a planet just enough that its
+  widest, steepest ring fits the disc grid. Rings may still clip at
+  a tile's or a standalone frame's edge — that stays as-is.
 - **Orbits:** always on. The planets drift slowly around the star —
   there is no static mode and no toggle (Devon's call, Nov 11). The
-  drift pauses momentarily on hover/focus and while the webview is
-  hidden, so a moving planet can still be clicked. 2D zoom
+  drift pauses momentarily on hover and while the detail sheet is
+  open, so a moving planet can still be clicked. 2D zoom
   (wheel/buttons, fit-to-system reset) and drag-pan only — no 3D
   rotation (ASCII shears, and rotation hurts click-to-select).
 - **Hard rules:** growing a new planet never fails because the system
-  is full — the new planet lands in the Archive. Removing a planet
+  is full — the new planet lands in the Index. Removing a planet
   from the system never deletes it.
 - **Planet names:** every planet gets a real catalog-style name tied
   to its seed — `generatePlanetName(seed)` in `planet.js` builds a
@@ -160,19 +201,22 @@ view Devon asked for, not top-down and not pure side view.
   uniqueness layer (`uniquePlanetName` in `petLogic.js`) nudges the
   number/letter deterministically when a name is already used by
   another planet in the collection, so no two planets share a name.
-  Shown in the orrery, the detail panel, and the Archive cards.
-- **Tests:** `node test-pet.js` — now 509 checks (was 110; sections 13–16
+  Shown in the orrery, the detail sheet, and the Index tiles.
+- **Tests:** `node test-pet.js` — now 537 checks (was 110; sections 13–19
   cover System Rank / slot unlocks, place/remove validation,
   salvage clearing a slot, rank-drop returning the planet to the
-  Archive, overflow-to-Archive, persistence, panel wiring, the
-  share card below, and seed hatch).
-  `node test-planet.js` — 207 checks; section 15 covers name determinism
+  Index, overflow-to-Index, persistence, panel wiring, the
+  share card below, seed hatch, the Instrument redesign, the
+  disc rules, and the zoom detail + Index de-box).
+  `node test-planet.js` — 223 checks; section 15 covers name determinism
   (same seed → same name, starter/tilt don't change the name),
-  format, and variety. Plus a wiring harness
+  format, and variety; section 18 covers the disc rules (stage
+  scale, noStars, ring fit); section 19 covers the zoom detail
+  (tiers, DOM size, same planet, ring fit at the top tier). Plus a wiring harness
   (`../scratch/test-system-panel.js`, fake `vscode` module) that
-  loads `extension.js` for real, grows 4 finished planets by typing,
-  opens the panel, and drives place/remove messages through the
-  webview: 33 checks, all passing.
+  loads `extension.js` for real, grows 4 finished planets by typing
+  and spawning, opens the panel, and drives place/remove messages
+  through the webview: 38 checks, all passing.
 
 ## Share card (DONE Nov 12)
 
@@ -253,9 +297,10 @@ shows in the pet window and status bar.
   (136×76 grid, limb fade, softer light, denser rings). See above.
 - **Piece 3 — mutations: DONE Nov 11** — birth rolls, no tiers,
   13 mutations (see `MUTATIONS.md`). Rarity: ~9.0% any mutation.
-- **Piece 4 — collection panel: DONE Nov 11** — the Solar System
-  view above (tilted orrery, detail panel, Archive, System Rank,
-  planet names).
+- **Piece 4 — collection panel: DONE Nov 11, redesigned Nov 12** — the Solar System
+  view above (tilted orrery, zoom-to-planet detail, Index, System Rank,
+  planet names; stage-scaled planets, no stars in the system, full rings
+  in the orrery).
 - **Piece 5 — minerals, salvage, prestige: DONE Nov 11** — feed
   minerals to tilt the NEXT planet's birth roll; destroy a planet
   for mineral pieces (a mutation planet yields a mineral of that

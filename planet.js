@@ -1791,7 +1791,99 @@ function applyGlitch(grid, sec, planet) {
 // stageIdx 0-6, t = seconds into the stage (morphs from the previous
 // stage over 3s), sec = global running clock (drives flicker/drift).
 // Returns a grid of [char, ansiColor] cells.
-function render(planet, stageIdx, t, sec, zoom, stage0Style, smokeScale) {
+// Stage-driven scale (Devon, Nov 12): in the solar system, a planet's
+// rendered size grows with its stage — a newborn (stage 0) is half the
+// size of a mature planet (stage 6), so the collection reads as a
+// growth story, a newborn is clearly smaller than a mature planet,
+// and everything stays much smaller than the sun. The stage radii
+// already grow a little (18 -> 28.5); this multiplies them so the
+// growth is obvious side by side.
+function stageScale(stageIdx) {
+  const s = clamp(stageIdx, 0, STAGES.length - 1);
+  return 0.5 + (s / (STAGES.length - 1)) * 0.5;
+}
+
+// Ring-fit zoom (Devon, Nov 12): the zoom at which this planet's whole
+// ring system fits inside an outW x outH cozy grid, so no ring clips
+// at the disc bounds in the orrery. 1.0 means it already fits. The
+// bounding box mirrors drawRingBand's own math (rx = r * outer,
+// ry = r * 0.40 * openness, rotated by the tilt) and drawRings' band
+// list (double = two bands, crossed = a second ring at crossTilt).
+// The caller takes min(stageScale, ringFitZoom) for orrery discs;
+// standalone frames and Index tiles do NOT use it (clipping at the
+// frame edge is fine there).
+function ringFitZoom(planet, stageIdx, outW, outH) {
+  const { W, H } = CONFIG;
+  const st = STAGES[stageIdx];
+  if (!st || st.ring <= 0.05) return 1.0; // no rings at this stage
+  const muts = activeMutations(planet);
+  let effId = planet.baseRingType || planet.ringType;
+  if (muts.has('double-rings')) effId = 'double';
+  else if ((muts.has('colored-rings') || muts.has('crossed-rings')) && effId === 'none') effId = 'thin';
+  const ringDef = CONFIG.RING_TYPES.find(rt => rt.id === effId) || CONFIG.RING_TYPES[2];
+  if (ringDef.id === 'none' || !ringDef.colors) return 1.0;
+  // Radius at zoom 1, at full stage (the disc render uses t = 10).
+  const r = st.radius * (planet.size || 1);
+  const openness = st.ring;
+  // Bands: [outer radius, tilt in degrees]. Double draws two bands;
+  // crossed adds a second, thinner ring at crossTilt.
+  const tiltDeg = planet.ringTilt || 0;
+  const bands = [];
+  if (ringDef.id === 'double') {
+    bands.push([1.70, tiltDeg], [2.45, tiltDeg]);
+  } else {
+    bands.push([ringDef.outer, tiltDeg]);
+  }
+  if (muts.has('crossed-rings') && planet.crossTilt !== null && planet.crossTilt !== undefined) {
+    bands.push([2.0, planet.crossTilt]);
+  }
+  let fit = 1.0;
+  for (const [outer, tDeg] of bands) {
+    const t = (tDeg * Math.PI) / 180;
+    const rx = r * outer;
+    const ry = Math.max(0.6, r * 0.40 * openness);
+    const bbW = rx * Math.abs(Math.cos(t)) + ry * Math.abs(Math.sin(t));
+    const bbH = rx * Math.abs(Math.sin(t)) + ry * Math.abs(Math.cos(t));
+    // A full-grid offset (dx, dy) lands at (dx * outW/W, dy * outH/H)
+    // in the output grid; leave a 1-cell margin all round.
+    fit = Math.min(fit, (outW / 2 - 1) / (bbW * outW / W), (outH / 2 - 1) / (bbH * outH / H));
+  }
+  return clamp(fit, 0.35, 1.0);
+}
+
+// Zoom detail (Devon, Nov 12): as the orrery camera zooms in, a disc
+// re-renders at a denser grid instead of just blowing up the same
+// letters — the letters stay the same pixel size on screen, the planet
+// just gets more detailed. Stepped tiers, not continuous: the swap
+// happens once per threshold (ratio = camera zoom / fit zoom), never
+// every frame, so it never flickers or pops mid-zoom. Base tier is the
+// disc's usual 46x24; the tiers step at 2x and 3x — 3x, not 4x, so the
+// top tier is actually reachable: the camera zoom caps at 3, and on a
+// 1440x900 panel the max ratio is ~3.2. Each tier roughly doubles the
+// grid until the full 136x76 render, which is the cap — the DOM never
+// holds more cells than the engine's own full grid. Cell sizes shrink in exact proportion, so
+// the disc's DOM size stays constant (46*2.6 = 92*1.3 = 136*0.88 wide,
+// 24*6.12 = 48*3.06 = 76*1.93 tall) and the planet never jumps.
+const DISC_DETAIL_BASE = { cols: 46, rows: 24, cellW: 2.6, cellH: 6.12 };
+const DISC_DETAIL_TIERS = [
+  { minRatio: 0, cols: 46, rows: 24 },
+  { minRatio: 2, cols: 92, rows: 48 },
+  { minRatio: 3, cols: 136, rows: 76 },
+];
+function discDetail(ratio) {
+  let tier = DISC_DETAIL_TIERS[0];
+  for (const t of DISC_DETAIL_TIERS) if (ratio >= t.minRatio) tier = t;
+  const idx = DISC_DETAIL_TIERS.indexOf(tier);
+  return {
+    tier: idx,
+    cols: tier.cols,
+    rows: tier.rows,
+    cellW: +((DISC_DETAIL_BASE.cols * DISC_DETAIL_BASE.cellW) / tier.cols).toFixed(2),
+    cellH: +((DISC_DETAIL_BASE.rows * DISC_DETAIL_BASE.cellH) / tier.rows).toFixed(2),
+  };
+}
+
+function render(planet, stageIdx, t, sec, zoom, stage0Style, smokeScale, noStars) {
   if (zoom === undefined) zoom = 1.0;
   if (stage0Style === undefined) stage0Style = 'exploded';
   if (smokeScale === undefined) smokeScale = 1;
@@ -1805,7 +1897,11 @@ function render(planet, stageIdx, t, sec, zoom, stage0Style, smokeScale) {
   // The mutations on this planet — all of them, from stage 0 (birth
   // rolls, Nov 11). Computed once, passed down to every draw step.
   const muts = activeMutations(planet);
-  const grid = starGrid(sec, planet.atmosphere);
+  // noStars (Devon, Nov 12): the solar-system panel shows planets
+  // side by side on plain black — no per-planet starfield hugging
+  // each one. Standalone frames (sidebar pet, zoom detail) keep the
+  // twinkling stars, so this defaults to stars on.
+  const grid = noStars ? makeGrid() : starGrid(sec, planet.atmosphere);
   if (ring > 0.05) drawRings(grid, radius, ring, sec, false, planet, muts);
   drawPlanet(grid, st, radius, sec, planet, fade, stage0Style, muts, smokeScale);
   if (ring > 0.05) drawRings(grid, radius, ring, sec, true, planet, muts);
@@ -1867,10 +1963,10 @@ function downsampleGrid(grid, outW, outH) {
 // instead of cropping it or shrinking the glyphs to pixels. This is
 // what the Space's Cozy mode and the VS Code sidebar's small-window
 // render should use (the sidebar wiring itself is piece 4).
-function renderCozy(planet, stageIdx, t, sec, zoom, outW, outH, stage0Style, smokeScale) {
+function renderCozy(planet, stageIdx, t, sec, zoom, outW, outH, stage0Style, smokeScale, noStars) {
   if (outW === undefined) outW = 68;
   if (outH === undefined) outH = 38;
-  return downsampleGrid(render(planet, stageIdx, t, sec, zoom, stage0Style, smokeScale), outW, outH);
+  return downsampleGrid(render(planet, stageIdx, t, sec, zoom, stage0Style, smokeScale, noStars), outW, outH);
 }
 
 // ---------------------------------------------------------------------------
@@ -2431,7 +2527,7 @@ const API = {
   mutationDef, activeMutations, hasMutation, mutationLabel,
   collisionFrame, collisionPhase, collisionShardAt, COLLISION_TIMELINE, COLLISION_END,
   drawComet, drawMeteorShower, applyGlitch,
-  makeGrid, render, renderCozy, downsampleGrid, drawPlanet, drawRings, drawMoons, drawMiniSphere, starGrid,
+  makeGrid, render, renderCozy, downsampleGrid, drawPlanet, drawRings, drawMoons, drawMiniSphere, starGrid, stageScale, ringFitZoom, discDetail,
   ansi256ToHex, ansi256ToRgb, shadeColor, blendHue, gridToHtml, gridToText,
   noise2, continentField, valueNoise, hash2, clamp, lerp,
 };

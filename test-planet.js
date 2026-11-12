@@ -11,6 +11,14 @@
 //  14. Mutations (piece 3): determinism, distribution, base rarity,
 //      labels, unlock gating, and one render check per mutation effect
 //      (carrier seed vs its plain twin) — incl. Crystal vs Glitch.
+//  18. Solar-system disc rules (Devon, Nov 12): stage-driven scale,
+//      noStars flag, ringFitZoom (verified empirically: rings vs
+//      rings-stripped diff never touches the disc border).
+//  19. Zoom detail (Devon, Nov 12): discDetail tiers (46x24 → 92x48 →
+//      136x76 at zoom/fit ratios 2 and 3), DOM size constant across
+//      tiers, same planet at every tier (downsample identity), more
+//      non-blank cells at denser tiers, ring fit conservative at the
+//      top tier.
 //   The old fidelity check vs lifecycle.py is RETIRED by design: the JS
 //   renderer is the look authority now and intentionally diverges from
 //   the Python loop (higher resolution, limb fade, softer light). Do not
@@ -1675,6 +1683,183 @@ check('name: generatePlanet carries the seed name',
   // Determinism: same seed -> same stripped planet.
   check('strip: deterministic (same seed -> same stripped planet)',
     JSON.stringify(P.stripMutations(P.generatePlanet(12345))) === JSON.stringify(P.stripMutations(P.generatePlanet(12345))));
+}
+
+// --- 18. Solar-system disc rules (Devon, Nov 12) ---------------------------
+// (1) Stage-driven scale: a planet's rendered size grows with its stage —
+// stage 0 is half the size of stage 6. (2) No per-planet stars in the
+// solar system: render()/renderCozy() take a noStars flag; the orrery
+// discs and Index tiles pass it, standalone frames don't. (3) Full
+// rings in the orrery: ringFitZoom shrinks a planet just enough that
+// its whole ring system fits the disc grid — verified empirically by
+// rendering with rings vs rings stripped and checking no ring cell
+// touches the output border.
+{
+  // (1) stageScale: 0.5 at stage 0, 1.0 at stage 6, strictly increasing.
+  const scales = [0, 1, 2, 3, 4, 5, 6].map((s) => P.stageScale(s));
+  check('disc: stageScale is 0.5 at stage 0 and 1.0 at stage 6',
+    scales[0] === 0.5 && scales[6] === 1.0, scales.join(', '));
+  check('disc: stageScale strictly increases with stage',
+    scales.every((v, i) => i === 0 || v > scales[i - 1]));
+  // A stage-0 planet really does render smaller than a mature one:
+  // bounding-box width at the disc zoom, on a moonless planet (so no
+  // moon inflates the box).
+  function discBBWidth(planet, stage, sec) {
+    const zoom = Math.min(P.stageScale(stage), P.ringFitZoom(planet, stage, 46, 24));
+    const g = P.downsampleGrid(P.render(planet, stage, 10, sec, zoom, undefined, 0.5, true), 46, 24);
+    let lo = 46, hi = -1;
+    for (let y = 0; y < 24; y++) for (let x = 0; x < 46; x++) {
+      if (g[y][x][0] !== ' ') { lo = Math.min(lo, x); hi = Math.max(hi, x); }
+    }
+    return hi - lo + 1;
+  }
+  let moonless = null;
+  for (let s = 1; s < 20000 && !moonless; s++) {
+    const p = P.generatePlanet(s);
+    if (p.moons.length === 0) moonless = p;
+  }
+  const w0 = discBBWidth(moonless, 0, 5), w5 = discBBWidth(moonless, 5, 5), w6 = discBBWidth(moonless, 6, 5);
+  check('disc: stage-0 planet renders clearly smaller than a Life-stage one',
+    w0 < 0.6 * w6 && w0 < w5, `stage0=${w0} life=${w5} civ=${w6} cells wide`);
+  // (2) noStars: a tiny render's far corners hold stars normally and
+  // nothing at all with noStars.
+  function cornerCount(grid) {
+    const H = grid.length, W = grid[0].length, CX = 68, CY = 38;
+    let c = 0;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      if ((Math.abs(x - CX) > 55 || Math.abs(y - CY) > 30) && grid[y][x][0] !== ' ') c++;
+    }
+    return c;
+  }
+  const starProbe = P.generatePlanet(12345);
+  check('disc: noStars drops the starfield (corners go blank)',
+    cornerCount(P.render(starProbe, 6, 10, 5, 0.3)) > 0
+    && cornerCount(P.render(starProbe, 6, 10, 5, 0.3, undefined, 1, true)) === 0);
+  check('disc: renderCozy passes noStars through (output border blank)',
+    (() => {
+      const g = P.renderCozy(starProbe, 6, 10, 5, 0.3, 46, 24, undefined, 1, true);
+      for (let x = 0; x < 46; x++) if (g[0][x][0] !== ' ' || g[23][x][0] !== ' ') return false;
+      for (let y = 0; y < 24; y++) if (g[y][0][0] !== ' ' || g[y][45][0] !== ' ') return false;
+      return true;
+    })());
+  check('disc: stars are still on by default (noStars omitted)',
+    cornerCount(P.render(starProbe, 6, 10, 5, 0.3)) > 0);
+  // (3) ringFitZoom: 1.0 for ringless planets, <= 1 always, and the
+  // empirical fit — no ring cell touches the disc border.
+  let ringless = null;
+  for (let s = 1; s < 5000 && !ringless; s++) {
+    const p = P.generatePlanet(s);
+    if (p.ringType === 'none' && p.mutations.length === 0) ringless = p;
+  }
+  check('disc: ringFitZoom is 1.0 for a ringless planet',
+    P.ringFitZoom(ringless, 6, 46, 24) === 1.0);
+  let fitOk = true, fitMin = 1;
+  for (let s = 1; s <= 3000; s++) {
+    const f = P.ringFitZoom(P.generatePlanet(s), 6, 46, 24);
+    if (f > 1.0 || f < 0.35) { fitOk = false; break; }
+    fitMin = Math.min(fitMin, f);
+  }
+  check('disc: ringFitZoom stays in [0.35, 1.0] over 3000 seeds', fitOk, 'min ' + fitMin.toFixed(3));
+  function stripRings(pl) {
+    const c = JSON.parse(JSON.stringify(pl));
+    c.ringType = 'none';
+    c.baseRingType = 'none';
+    c.mutations = (c.mutations || []).filter((m) => m !== 'double-rings' && m !== 'colored-rings' && m !== 'crossed-rings');
+    return c;
+  }
+  let checked = 0, clipped = 0, worstMargin = 99;
+  for (let seed = 1; seed <= 40000 && checked < 42; seed++) {
+    const pl = P.generatePlanet(seed);
+    if (pl.ringType === 'none' && !pl.mutations.some((m) => ['double-rings', 'colored-rings', 'crossed-rings'].includes(m))) continue;
+    for (const stage of [4, 5, 6]) {
+      const zoom = Math.min(P.stageScale(stage), P.ringFitZoom(pl, stage, 46, 24));
+      const a = P.downsampleGrid(P.render(pl, stage, 10, 5, zoom, undefined, 0.5, true), 46, 24);
+      const b = P.downsampleGrid(P.render(stripRings(pl), stage, 10, 5, zoom, undefined, 0.5, true), 46, 24);
+      let minEdge = 99;
+      for (let y = 0; y < 24; y++) for (let x = 0; x < 46; x++) {
+        if (a[y][x][0] !== b[y][x][0] || a[y][x][1] !== b[y][x][1]) {
+          minEdge = Math.min(minEdge, x, 45 - x, y, 23 - y);
+        }
+      }
+      checked++;
+      if (minEdge < 1) clipped++;
+      worstMargin = Math.min(worstMargin, minEdge);
+    }
+  }
+  check('disc: full rings fit — no ring cell touches the disc border',
+    clipped === 0, `${checked} renders, ${clipped} clipped, worst margin ${worstMargin} cell(s)`);
+}
+
+// --- 19. Zoom detail (Devon, Nov 12) ---------------------------------------
+// As the orrery camera zooms in, a disc re-renders at a denser grid
+// instead of just blowing up the same letters — the letters stay the
+// same pixel size on screen, the planet just gets more detailed.
+// Stepped tiers (never continuous), capped at the full 136x76 render,
+// DOM size constant across tiers, same planet at every tier.
+{
+  const d0 = P.discDetail(0), d199 = P.discDetail(1.99), d2 = P.discDetail(2),
+    d299 = P.discDetail(2.99), d3 = P.discDetail(3), d100 = P.discDetail(100);
+  check('zoom: detail tiers step at ratios 2 and 3',
+    d0.tier === 0 && d199.tier === 0 && d2.tier === 1 && d299.tier === 1 && d3.tier === 2 && d100.tier === 2,
+    `0->${d0.tier} 1.99->${d199.tier} 2->${d2.tier} 2.99->${d299.tier} 3->${d3.tier} 100->${d100.tier}`);
+  check('zoom: tier grids are 46x24, 92x48, 136x76 (cap = full render)',
+    d0.cols === 46 && d0.rows === 24 && d2.cols === 92 && d2.rows === 48
+    && d3.cols === P.CONFIG.W && d3.rows === P.CONFIG.H,
+    `${d0.cols}x${d0.rows} / ${d2.cols}x${d2.rows} / ${d3.cols}x${d3.rows}`);
+  // DOM size stays constant: the disc never jumps when the tier swaps.
+  const sizeOk = [d0, d2, d3].every((d) =>
+    Math.abs(d.cols * d.cellW - 119.6) < 0.5 && Math.abs(d.rows * d.cellH - 146.88) < 0.5);
+  check('zoom: disc DOM size is constant across tiers',
+    sizeOk, [d0, d2, d3].map((d) => `${(d.cols * d.cellW).toFixed(1)}x${(d.rows * d.cellH).toFixed(1)}`).join(' / '));
+  // Same planet, just sharper: the tier-2 grid downsampled to 46x24
+  // is exactly the tier-0 grid (the 1:1 downsample is the identity).
+  const zp = P.generatePlanet(40059);
+  const z = Math.min(P.stageScale(6), P.ringFitZoom(zp, 6, 46, 24));
+  const hi = P.renderCozy(zp, 6, 10, 5, z, 136, 76, undefined, 0.5, true);
+  const lo = P.renderCozy(zp, 6, 10, 5, z, 46, 24, undefined, 0.5, true);
+  check('zoom: tier-2 grid downsampled to tier-0 is exactly the tier-0 grid',
+    gridsEqual(P.downsampleGrid(hi, 46, 24), lo));
+  // And the denser grids really do carry more detail.
+  const count = (g) => g.flat().filter((c) => c[0] !== ' ').length;
+  const mid = P.renderCozy(zp, 6, 10, 5, z, 92, 48, undefined, 0.5, true);
+  const n0 = count(lo), n1 = count(mid), n2 = count(hi);
+  check('zoom: denser tiers show strictly more non-blank cells',
+    n0 < n1 && n1 < n2, `46x24=${n0} 92x48=${n1} 136x76=${n2}`);
+  // Ring fit stays conservative at the top tier: the base disc zoom
+  // (computed at 46x24) still fits the whole ring system at 136x76.
+  let fitOk = true;
+  for (let s = 1; s <= 3000; s++) {
+    const pl = P.generatePlanet(s);
+    if (P.ringFitZoom(pl, 6, 136, 76) < P.ringFitZoom(pl, 6, 46, 24) - 1e-9) { fitOk = false; break; }
+  }
+  check('zoom: ringFitZoom at 136x76 is never tighter than at 46x24', fitOk);
+  function stripRings2(pl) {
+    const c = JSON.parse(JSON.stringify(pl));
+    c.ringType = 'none';
+    c.baseRingType = 'none';
+    c.mutations = (c.mutations || []).filter((m) => m !== 'double-rings' && m !== 'colored-rings' && m !== 'crossed-rings');
+    return c;
+  }
+  let checked2 = 0, clipped2 = 0;
+  for (let seed = 1; seed <= 40000 && checked2 < 12; seed++) {
+    const pl = P.generatePlanet(seed);
+    if (pl.ringType === 'none' && !pl.mutations.some((m) => ['double-rings', 'colored-rings', 'crossed-rings'].includes(m))) continue;
+    for (const stage of [5, 6]) {
+      const zoom2 = Math.min(P.stageScale(stage), P.ringFitZoom(pl, stage, 46, 24));
+      const a = P.renderCozy(pl, stage, 10, 5, zoom2, 136, 76, undefined, 0.5, true);
+      const b = P.renderCozy(stripRings2(pl), stage, 10, 5, zoom2, 136, 76, undefined, 0.5, true);
+      let minEdge = 99;
+      for (let y = 0; y < 76; y++) for (let x = 0; x < 136; x++) {
+        if (a[y][x][0] !== b[y][x][0] || a[y][x][1] !== b[y][x][1]) {
+          minEdge = Math.min(minEdge, x, 135 - x, y, 75 - y);
+        }
+      }
+      checked2++;
+      if (minEdge < 1) clipped2++;
+    }
+  }
+  check('zoom: full rings still fit at the top tier (base disc zoom)',
+    clipped2 === 0, `${checked2} renders, ${clipped2} clipped`);
 }
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);

@@ -310,8 +310,8 @@ class ProtoplanetApp {
 
   // -- step 4: the Solar System / collection view ---------------------------
   // A full webview panel (not the sidebar): the orrery takes up the
-  // screen, and the Archive (Pokédex) lives below it in the same
-  // scroll. The panel is a dumb view of the state — every decision
+  // screen, and the Index is its own full-screen mode, reached from
+  // the top bar. The panel is a dumb view of the state — every decision
   // (slots, ranks, place/remove) lives in petLogic.js; this class
   // only builds the view model and applies the webview's messages.
 
@@ -396,7 +396,7 @@ class ProtoplanetApp {
     }
     // The next two locked rings stay visible (dashed, labeled) — the
     // locked ring IS the progression UI. More than two would crowd
-    // the orrery; the Archive header shows the full ladder instead.
+    // the orrery; the rest unlock as you finish more planets.
     for (let i = rank.totalSlots; i < Math.min(rank.totalSlots + 2, Logic.CONFIG.SYSTEM_MAX_RINGS); i++) {
       if (rank.nextAt === null) break;
       slots.push({
@@ -406,8 +406,8 @@ class ProtoplanetApp {
         planet: null,
       });
     }
-    const archive = this.state.past.map((p) => renderable(p, 'past'));
-    if (this.state.current) archive.push(renderable(this.state.current, 'current'));
+    const index = this.state.past.map((p) => renderable(p, 'past'));
+    if (this.state.current) index.push(renderable(this.state.current, 'current'));
     return {
       type: 'system',
       rank: rank.rank,
@@ -416,9 +416,9 @@ class ProtoplanetApp {
       nextAt: rank.nextAt,
       toNext: rank.toNext,
       ringsUsed,
-      totalPlanets: archive.length,
+      totalPlanets: index.length,
       slots,
-      archive,
+      index,
     };
   }
 
@@ -702,7 +702,7 @@ class ProtoplanetApp {
     this.viewProvider.postState(vm);
     // The Solar System panel gets the same push (its own view model)
     // — typing never opens it, but a new planet while it is open must
-    // show the new planet in the Archive right away.
+    // show the new planet in the Index right away.
     this.postSystemState();
     // Same for the Prestige panel — typing can make the current
     // planet eligible, and a fusion from the palette must show up
@@ -832,7 +832,7 @@ class ProtoplanetApp {
     else { mutEl.style.display = 'none'; }
     // No flavor text in the sidebar (Devon, Nov 11): the stage
     // description and the world details (terrain, ring, moons, seed,
-    // minerals) live in the detail panel / Pokedex. The sidebar keeps
+    // minerals) live in the detail sheet / Index. The sidebar keeps
     // the stage line, the grown-from line, and the XP bar only. The
     // pre-hatch guidance above stays until the first state arrives.
     document.getElementById('stageDesc').style.display = 'none';
@@ -869,14 +869,16 @@ class ProtoplanetApp {
 </html>`;
   }
   // -- step 4: the Solar System panel HTML -----------------------------------
-  // Full-screen orrery on top (tilted view: the orbit rings are
-  // ellipses seen at an angle, the planet discs stay upright facing
-  // you — Stellaris-style, not a top-down tabletop and not a side
-  // view that squashes the orbits into a line), the Archive below in
-  // the same scroll. Same fixed-cell rendering rule as the sidebar
-  // (gridToHtml + explicit cell sizes, 10:18 ratio, never a bare
-  // <pre>). The panel never pops anything up — it only posts place /
-  // remove messages, and the extension decides.
+  // Instrument direction (Devon, Nov 12): the orrery goes full-bleed
+  // (tilted view: the orbit rings are ellipses seen at an angle, the
+  // planet discs stay upright facing you — Stellaris-style, not a
+  // top-down tabletop and not a side view that squashes the orbits
+  // into a line), the Index is its own full-screen mode, and the
+  // detail sheet only appears when you zoom into a planet. Same
+  // fixed-cell rendering rule as the sidebar (gridToHtml + explicit
+  // cell sizes, 10:18 ratio, never a bare <pre>). The panel never
+  // pops anything up — it only posts place / remove messages, and
+  // the extension decides.
   getSystemHtml(webview) {
     const nonce = getNonce();
     const planetJsUri = webview.asWebviewUri(
@@ -895,7 +897,8 @@ class ProtoplanetApp {
   [hidden] { display: none !important; }
   html, body { -webkit-text-size-adjust: none; text-size-adjust: none; }
   body { margin: 0; background: #050505; color: var(--vscode-editor-foreground);
-    font-family: var(--vscode-font-family); }
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+    overflow: hidden; }
   /* Fixed-size cells — same rule as the sidebar (see getWebviewHtml). */
   .pp-grid { margin: 0;
     font-family: ${FONT_STACK};
@@ -905,23 +908,28 @@ class ProtoplanetApp {
   .pp-run { display: inline-block; height: var(--pp-ch, 18px);
     line-height: var(--pp-ch, 18px); vertical-align: top; overflow: hidden;
     white-space: pre; font-kerning: none; }
-  button { background: var(--vscode-button-background); color: var(--vscode-button-foreground);
-    border: none; border-radius: 4px; padding: 5px 11px; cursor: pointer; font-size: 12px; }
-  button:hover { background: var(--vscode-button-hoverBackground); }
+  button { background: transparent; color: #d4d4d4;
+    border: 1px solid #333; padding: 5px 11px; cursor: pointer; font-size: 12px;
+    font-family: inherit; }
+  button:hover { border-color: #e8b64c; color: #ffd75f; }
   button:disabled { opacity: .45; cursor: default; }
-  button.ghost { background: transparent; border: 1px solid var(--vscode-widget-border, #444);
-    color: var(--vscode-editor-foreground); }
-  #topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    padding: 10px 16px; border-bottom: 1px solid var(--vscode-widget-border, #222);
-    background: #080808; position: sticky; top: 0; z-index: 10; }
-  #topbar h1 { font-size: 15px; margin: 0 0 2px; }
-    background: #080808; position: sticky; top: 0; z-index: 10; }
-  #topbar h1 { font-size: 15px; margin: 0 0 2px; }
-  #rankLine { font-size: 12px; opacity: .75; }
-  #controls { display: flex; gap: 6px; align-items: center; }
-  /* The orrery takes up the screen: ~a full viewport tall, then you
-     scroll down to the Archive in the same view. */
-  #orreryWrap { position: relative; height: calc(100vh - 58px); min-height: 480px;
+  button.ghost { background: transparent; border: 1px solid #333; color: #d4d4d4; }
+  /* One thin top line: the title on the left, the mode tabs on the
+     right. No eyebrow microcopy, no dashboard chrome (Devon, Nov 12). */
+  #topbar { display: flex; align-items: center; gap: 16px;
+    height: 36px; padding: 0 14px; border-bottom: 1px solid #1e1e1e;
+    background: #050505; }
+  #topTitle { font-size: 12px; white-space: nowrap; }
+  #topTitle .dim { opacity: .55; }
+  #modeTabs { display: flex; gap: 2px; margin-left: auto; }
+  .tab { background: transparent; border: none; border-bottom: 1px solid transparent;
+    color: #888; font-size: 12px; padding: 9px 10px 8px; cursor: pointer; }
+  .tab:hover { color: #d4d4d4; }
+  .tab.active { color: #e8b64c; border-bottom-color: #e8b64c; }
+  /* The orrery takes up the whole screen below the top line — the
+     panel never scrolls to a second section anymore. The Index is
+     its own mode, reached from the tabs above. */
+  #orreryWrap { position: relative; height: calc(100vh - 37px);
     overflow: hidden; background: #050505; }
   #orrery { position: absolute; inset: 0; overflow: hidden; cursor: grab; }
   #orrery.panning { cursor: grabbing; }
@@ -932,7 +940,7 @@ class ProtoplanetApp {
   .ring.empty { border: 1px solid rgba(255, 255, 255, 0.16); }
   .ring.locked { border: 1px dashed rgba(255, 255, 255, 0.28); }
   /* Empty-ring hit area: a transparent ellipse over the ring line,
-     clickable to open the Archive picker. No persistent glyph, and
+     clickable to open the Index picker. No persistent glyph, and
      NO gold outline on hover (Devon, Nov 12 — the gold ring sat on
      top of the ring and read as a second ring doubling it). Hover
      highlights the ring itself instead: the .ring gets .hot, which
@@ -942,23 +950,30 @@ class ProtoplanetApp {
   .ring.hot { border-color: rgba(232, 182, 76, 0.95); border-width: 2px; }
   .lockLabel { position: absolute; transform: translate(-50%, -50%); font-size: 11px;
     color: rgba(255, 255, 255, 0.6); background: rgba(0, 0, 0, 0.65); padding: 3px 9px;
-    border-radius: 10px; border: 1px dashed rgba(255, 255, 255, 0.3); white-space: nowrap; }
+    border: 1px dashed rgba(255, 255, 255, 0.3); white-space: nowrap; }
   .disc { position: absolute; transform: translate(-50%, -50%); cursor: pointer; }
   .disc:hover { outline: 1px solid rgba(232, 182, 76, 0.7); outline-offset: 2px; border-radius: 4px; }
   .disc.sel { outline: 1px solid #e8b64c; outline-offset: 2px; border-radius: 4px; }
   .star { position: absolute; transform: translate(-50%, -50%); text-align: center; }
-  #orreryHint { position: absolute; left: 16px; bottom: 12px; font-size: 11px; opacity: .55;
-    pointer-events: none; z-index: 4; }
-  /* Detail modal on one side of the orrery. */
-  #detail { position: absolute; right: 14px; top: 14px; width: 360px;
-    max-height: calc(100% - 28px); overflow-y: auto; z-index: 5;
-    background: rgba(8, 8, 8, 0.95); border: 1px solid #3a3a3a; border-radius: 8px; padding: 14px; }
+  /* Bottom-centre strip: zoom controls + the one-line hint. Overlay
+     chrome only — it never takes space from the orrery. */
+  #bottomStrip { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
+    display: flex; gap: 10px; align-items: center; z-index: 4;
+    font-size: 11px; color: rgba(255, 255, 255, 0.55); white-space: nowrap; }
+  #bottomStrip button { padding: 2px 9px; }
+  /* Detail sheet: a floating card beside the zoomed planet, not a
+     modal over the system (Devon, Nov 12 — the old panel covered
+     the orrery). It lives at body level so it works in both modes. */
+  #detail { position: fixed; right: 16px; top: 50%; transform: translateY(-50%);
+    width: 340px; max-height: calc(100vh - 90px); overflow-y: auto; z-index: 20;
+    background: #080808; border: 1px solid #2a2a2a; padding: 14px;
+    transition: opacity 200ms ease; }
   #detail h2 { font-size: 16px; margin: 0 0 2px; }
   #detail .sub { font-size: 12px; opacity: .75; margin: 0 0 10px; line-height: 1.5; }
   #detailArt { background: #050505; border: 1px solid #222; padding: 4px; overflow-x: auto; margin-bottom: 10px; }
   #detail .mut { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .12em;
-    text-transform: uppercase; color: #ffd75f; background: rgba(255, 215, 95, .12);
-    border: 1px solid rgba(255, 215, 95, 0.55); border-radius: 3px; padding: 2px 7px; margin: 0 0 8px; }
+    text-transform: uppercase; color: #ffd75f; background: transparent;
+    border: 1px solid rgba(255, 215, 95, 0.55); padding: 2px 7px; margin: 0 0 8px; }
   #detail table { font-size: 12px; border-collapse: collapse; margin: 0 0 12px; }
   #detail td { padding: 2px 10px 2px 0; vertical-align: top; }
   #detail td.k { opacity: .6; white-space: nowrap; }
@@ -966,58 +981,63 @@ class ProtoplanetApp {
   #detail .note { font-size: 11px; opacity: .65; margin: 8px 0 0; line-height: 1.5; }
   #detailClose { position: absolute; top: 8px; right: 8px; padding: 2px 8px; }
   /* Picker banner (choosing a planet for a ring). */
-  #pickerBanner { position: sticky; top: 58px; z-index: 9; background: #1a1405;
+  #pickerBanner { background: #0a0a0a;
     border-bottom: 1px solid #e8b64c; color: #ffd75f; padding: 9px 16px; font-size: 12px;
     display: flex; gap: 12px; align-items: center; }
-  /* The Archive — the Pokédex below the orrery. */
-  #archive { padding: 20px 22px 48px; background: #070707; border-top: 1px solid #222; }
-  #archive h2 { font-size: 15px; margin: 0 0 4px; }
-  #archiveCount { font-size: 12px; opacity: .75; margin: 0 0 12px; }
-  #archiveBar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
-  #search { flex: 1; min-width: 180px; background: var(--vscode-input-background);
-    color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, #333);
-    border-radius: 4px; padding: 6px 9px; font-size: 12px; font-family: inherit; }
-  #sort { background: var(--vscode-input-background); color: var(--vscode-input-foreground);
-    border: 1px solid var(--vscode-input-border, #333); border-radius: 4px; padding: 6px; font-size: 12px; }
-  #cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(158px, 1fr)); gap: 12px; }
-  .card { background: #0b0b0b; border: 1px solid #262626; border-radius: 8px; padding: 10px;
-    cursor: pointer; }
-  .card:hover { border-color: #555; }
-  .card.inSystem { border-color: #e8b64c; }
-  .card.picking { border-color: #ffd75f; }
-  .card .thumb { background: #050505; border: 1px solid #1c1c1c; margin-bottom: 8px; overflow: hidden; }
-  .card .cname { font-size: 13px; font-weight: 600; }
-  .card .cmeta { font-size: 11px; opacity: .7; line-height: 1.5; margin-top: 2px; }
+  /* The Index — the collection as its own full-screen mode (Devon,
+     Nov 12: "Archive" renamed — they're not all archived). Big
+     tiles, 2–3 per row, the planet's ASCII art as the tile, name +
+     one datum, 1px hairline gaps, no card chrome. */
+  #index { display: none; height: calc(100vh - 37px); overflow-y: auto;
+    padding: 14px 28px 48px; background: #050505; }
+  body.mode-index #index { display: block; }
+  body.mode-index #orreryWrap { display: none; }
+  #indexCount { font-size: 11px; opacity: .55; margin: 0 0 10px; }
+  #indexBar { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  #search { flex: 1; min-width: 180px; background: #0a0a0a;
+    color: #d4d4d4; border: 1px solid #333;
+    padding: 6px 9px; font-size: 12px; font-family: inherit; }
+  #sort { background: #0a0a0a; color: #d4d4d4;
+    border: 1px solid #333; padding: 6px; font-size: 12px; }
+  #tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 1px; background: #1e1e1e; }
+  .tile { background: #050505; padding: 14px 14px 12px; cursor: pointer; }
+  .tile:hover { background: #0a0a0a; }
+  .tile .art { display: flex; justify-content: center; background: #050505; margin-bottom: 10px; overflow: hidden; }
+  .tile .tname { font-size: 13px; font-weight: 600; }
+  .tile .tmeta { font-size: 11px; opacity: .7; line-height: 1.5; margin-top: 2px; }
   .badge { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .08em;
-    text-transform: uppercase; border-radius: 3px; padding: 1px 6px; margin: 4px 4px 0 0; }
-  .badge.sys { color: #ffd75f; background: rgba(255, 215, 95, 0.14); border: 1px solid rgba(255, 215, 95, 0.5); }
-  .badge.cur { color: #7ee2a8; background: rgba(126, 226, 168, 0.12); border: 1px solid rgba(126, 226, 168, 0.5); }
-  .badge.mut { color: #ffd75f; background: rgba(255, 215, 95, 0.12); border: 1px solid rgba(255, 215, 95, 0.55); }
+    text-transform: uppercase; padding: 1px 6px; margin: 4px 4px 0 0; }
+  .badge.sys, .badge.cur { color: #ffd75f; border: 1px solid rgba(255, 215, 95, 0.5); }
+  .badge.mut { color: #ffd75f; border: 1px solid rgba(255, 215, 95, 0.55); }
   .empty { font-size: 13px; opacity: .65; padding: 18px 0; }
+  /* Hide-UI (H): only the orrery stays. */
+  body.hide-ui #topbar, body.hide-ui #bottomStrip { display: none !important; }
+  body.hide-ui #detail { visibility: hidden; }
 </style>
 </head>
 <body>
 <header id="topbar">
-  <div>
-    <h1>Solar System</h1>
-    <div id="rankLine">Loading&hellip;</div>
+  <div id="topTitle">SOLAR SYSTEM <span class="dim" id="rankLine">Loading&hellip;</span></div>
+  <div id="modeTabs">
+    <button id="tabOrrery" class="tab active" data-mode="orrery">Orrery</button>
+    <button id="tabIndex" class="tab" data-mode="index">Index</button>
   </div>
-  <div id="controls">
-    <button id="zoomOut" title="Zoom out">&minus;</button>
-    <button id="zoomIn" title="Zoom in">+</button>
-    <button id="fitBtn" title="Fit the whole system">Fit</button>
-  </div>
+  <button id="hideUiBtn" class="ghost" title="Hide the interface (H)">Hide UI</button>
 </header>
 <div id="orreryWrap">
   <div id="orrery"><div id="world"></div></div>
-  <div id="detail" hidden></div>
-  <div id="orreryHint">Click a planet for details &middot; Click an empty ring to place a planet &middot; Drag to pan &middot; Ctrl+Scroll to zoom &middot; Scroll down for the Archive</div>
+  <div id="bottomStrip">
+    <button id="zoomOut" title="Zoom out">&minus;</button>
+    <button id="zoomIn" title="Zoom in">+</button>
+    <button id="fitBtn" title="Fit the whole system">Fit</button>
+    <span>Drag to pan &middot; Ctrl+Scroll to zoom &middot; Click a planet to zoom in &middot; H hides the UI</span>
+  </div>
 </div>
+<div id="detail" hidden></div>
 <div id="pickerBanner" hidden></div>
-<section id="archive">
-  <h2>Archive</h2>
-  <p id="archiveCount"></p>
-  <div id="archiveBar">
+<section id="index">
+  <p id="indexCount"></p>
+  <div id="indexBar">
     <input id="search" type="text" placeholder="Search name, terrain, seed&hellip;" autocomplete="off">
     <select id="sort">
       <option value="newest">Newest first</option>
@@ -1027,7 +1047,7 @@ class ProtoplanetApp {
       <option value="terrain">Terrain</option>
     </select>
   </div>
-  <div id="cards"></div>
+  <div id="tiles"></div>
 </section>
 <script nonce="${nonce}" src="${planetJsUri}"></script>
 <script nonce="${nonce}">
@@ -1056,15 +1076,40 @@ class ProtoplanetApp {
   var angles = {}; // ring index -> current angle (radians)
   var anglePlanet = {}; // ring index -> 'seed:generation' the angle belongs to
   var hoverPlanet = false, detailOpen = false, pickerRing = null;
-  var selected = null; // { seed, generation } of the planet in the detail panel
+  var selected = null; // { seed, generation } of the planet in the detail sheet
   var searchText = '', sortMode = 'newest';
   var lastSig = '', discs = []; // [{ el, planet, ring }]
+  var mode = 'orrery'; // 'orrery' | 'index' — two full screens, not one crowded one (Devon, Nov 12)
+  var zoomed = false, prevView = null; // zoom-to-planet: the view before the zoom, restored on close
   var starGridEl = null; // the star's .pp-grid — re-rendered on the tick so the sun churns + flares
   var orreryEl = document.getElementById('orrery');
   var worldEl = document.getElementById('world');
   var detailEl = document.getElementById('detail');
   var bannerEl = document.getElementById('pickerBanner');
-  var cardsEl = document.getElementById('cards');
+  var tilesEl = document.getElementById('tiles');
+
+  // --- modes: Orrery <-> Index ----------------------------------------------
+  // Two full screens, not one crowded one (Devon, Nov 12 — the research's
+  // strongest pattern): each mode gets 100% of the panel, so neither the
+  // orrery nor the collection has to shrink for the other.
+  function setMode(m) {
+    if (m === mode) return;
+    mode = m;
+    document.body.classList.toggle('mode-index', m === 'index');
+    document.getElementById('tabOrrery').classList.toggle('active', m === 'orrery');
+    document.getElementById('tabIndex').classList.toggle('active', m === 'index');
+    if (m === 'orrery') {
+      // The orrery was display:none — its size is 0 until it is back,
+      // so recompute the fit and re-apply the current view.
+      computeFit();
+      applyTransform();
+    }
+  }
+  document.getElementById('tabOrrery').addEventListener('click', function () { setMode('orrery'); });
+  document.getElementById('tabIndex').addEventListener('click', function () { setMode('index'); });
+  document.getElementById('hideUiBtn').addEventListener('click', function () {
+    document.body.classList.toggle('hide-ui');
+  });
 
   function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -1105,8 +1150,8 @@ class ProtoplanetApp {
   }
   function findPlanet(seed, generation) {
     if (!state) return null;
-    for (var i = 0; i < state.archive.length; i++) {
-      var p = state.archive[i];
+    for (var i = 0; i < state.index.length; i++) {
+      var p = state.index[i];
       if (p.seed === seed && p.generation === generation) return p;
     }
     return null;
@@ -1428,8 +1473,8 @@ class ProtoplanetApp {
         disc.setAttribute('data-seed', String(slot.planet.seed));
         disc.setAttribute('data-gen', String(slot.planet.generation));
         // No name label on the orrery itself (Devon, Nov 11 — they
-        // made it messy). Names live in the detail panel and the
-        // Pokedex cards.
+        // made it messy). Names live in the detail sheet and the
+        // Index tiles.
         disc.innerHTML = '<div class="pp-grid" style="--pp-fs:6.12px;--pp-ch:6.12px"></div>';
         worldEl.appendChild(disc);
         discs.push({ el: disc, planet: slot.planet, ring: i });
@@ -1478,6 +1523,17 @@ class ProtoplanetApp {
   }
 
   function renderDiscs() {
+    // Zoom detail (Devon, Nov 12): the disc re-renders at a denser
+    // grid as the camera zooms in — the letters stay the same pixel
+    // size on screen, the planet just gets more detailed. The tier
+    // comes from P.discDetail (stepped, never continuous), and the
+    // cell sizes shrink in exact proportion, so the disc's DOM size
+    // never changes and the planet never jumps. The disc zoom itself
+    // stays computed at the base 46x24 (stage scale + ring fit) —
+    // the ring fit is slightly conservative at higher tiers, so the
+    // whole ring system still fits.
+    var detail = discDetailNow();
+    discTier = detail.tier;
     for (var k = 0; k < discs.length; k++) {
       var d = discs[k];
       var gridEl = d.el.querySelector('.pp-grid');
@@ -1485,25 +1541,95 @@ class ProtoplanetApp {
       // orrery crowded and messy). 46x24 at 2.6px cells: the detail
       // goes into the sun instead, and the detail panel still shows
       // the full large render.
-      if (gridEl) gridEl.innerHTML = P.gridToHtml(
-        // smokeScale 0.5 (Devon, Nov 12): stage-0 smoke stays close
-        // to the core in the system view instead of filling the frame.
-        P.renderCozy(d.planet.planet, d.planet.stageIdx, 10, sec, 1.0, 46, 24, undefined, 0.5), 2.6, 6.12);
+      // Stage-driven scale + full rings (Devon, Nov 12): the planet
+      // grows with its stage (a newborn is half-size), and the disc
+      // zoom shrinks just enough that the whole ring system fits —
+      // no clipped rings in the orrery. No per-planet starfield here
+      // either (the panel stays plain black); stars stay in the
+      // sidebar pet and the zoom detail, where they twinkle.
+      if (gridEl) {
+        // The font-size vars track the cell height, or the glyphs
+        // would stay 6.12px tall while the cells shrink.
+        gridEl.style.setProperty('--pp-fs', detail.cellH + 'px');
+        gridEl.style.setProperty('--pp-ch', detail.cellH + 'px');
+        var discZoom = Math.min(P.stageScale(d.planet.stageIdx),
+          P.ringFitZoom(d.planet.planet, d.planet.stageIdx, 46, 24));
+        gridEl.innerHTML = P.gridToHtml(
+          // smokeScale 0.5 (Devon, Nov 12): stage-0 smoke stays close
+          // to the core in the system view instead of filling the frame.
+          P.renderCozy(d.planet.planet, d.planet.stageIdx, 10, sec, discZoom, detail.cols, detail.rows, undefined, 0.5, true), detail.cellW, detail.cellH);
+      }
     }
   }
 
-  // --- detail panel --------------------------------------------------------
+  // The disc's current detail tier, from the camera zoom relative to
+  // the fit zoom. refreshDiscDetail re-renders only when the tier
+  // actually changed — the tick re-renders the discs every 450ms
+  // anyway, so this is just the prompt path after a zoom gesture.
+  var discTier = 0;
+  function discDetailNow() {
+    var ratio = (fitZoom && isFinite(fitZoom) && fitZoom > 0) ? zoom / fitZoom : 1;
+    return P.discDetail(ratio);
+  }
+  function refreshDiscDetail() {
+    if (discDetailNow().tier !== discTier) renderDiscs();
+  }
+
+  // --- detail sheet + zoom-to-planet -----------------------------------------
+  // Click a planet and the camera zooms into it — the details show
+  // beside the zoomed planet, not in a modal over the system (Devon,
+  // Nov 12 — the old panel covered the orrery). X / Esc zooms back
+  // out to the view you had. In Index mode there is no camera to
+  // move, so the sheet just appears.
   function openDetail(planet) {
     selected = { seed: planet.seed, generation: planet.generation };
     detailOpen = true;
     renderDetail();
     renderOrrerySel();
+    if (mode === 'orrery') zoomToPlanet(planet);
   }
   function closeDetail() {
+    if (zoomed) unzoom();
     selected = null;
     detailOpen = false;
     detailEl.hidden = true;
     renderOrrerySel();
+  }
+  function zoomToPlanet(planet) {
+    var disc = null;
+    for (var k = 0; k < discs.length; k++) {
+      if (discs[k].planet.seed === planet.seed && discs[k].planet.generation === planet.generation) { disc = discs[k]; break; }
+    }
+    if (!disc) return; // not on a ring (shouldn't happen in orrery mode)
+    if (!zoomed) prevView = { zoom: zoom, panX: panX, panY: panY };
+    var pos = planetPos({ index: disc.ring }, angles[disc.ring]);
+    var ow = orreryEl.clientWidth, oh = orreryEl.clientHeight;
+    var zoomT = Math.min(3, Math.max(1.6, fitZoom * 2.6));
+    // Land the planet left of centre (the sheet takes the right side).
+    var tx = ow * 0.34, ty = oh * 0.5;
+    var panTX = tx - ow / 2 - (pos.x - CX) * zoomT;
+    var panTY = ty - oh / 2 - (pos.y - CY) * zoomT;
+    zoom = zoomT; panX = panTX; panY = panTY;
+    worldEl.style.transition = 'transform 450ms cubic-bezier(.22,.61,.36,1)';
+    applyTransform();
+    refreshDiscDetail();
+    setTimeout(function () { worldEl.style.transition = ''; }, 500);
+    zoomed = true;
+  }
+  function unzoom() {
+    if (!zoomed) return;
+    zoomed = false;
+    if (prevView) {
+      zoom = prevView.zoom; panX = prevView.panX; panY = prevView.panY;
+      prevView = null;
+    } else {
+      fitView();
+      return;
+    }
+    worldEl.style.transition = 'transform 450ms cubic-bezier(.22,.61,.36,1)';
+    applyTransform();
+    refreshDiscDetail();
+    setTimeout(function () { worldEl.style.transition = ''; }, 500);
   }
   function renderOrrerySel() {
     var ds = worldEl.querySelectorAll('.disc');
@@ -1553,27 +1679,31 @@ class ProtoplanetApp {
       html += '<p class="note">No empty rings — grow ' + state.toNext + ' more planet' + (state.toNext === 1 ? '' : 's') + ' to unlock Ring ' + (state.totalSlots + 1) + '.</p>';
     }
     if (ring >= 0) {
-      html += '<p class="note">Removing a planet from the system never deletes it — it stays in the Archive below.</p>';
+      html += '<p class="note">Removing a planet from the system never deletes it — it stays in the Index.</p>';
     }
     detailEl.innerHTML = html;
   }
 
-  // --- archive ---------------------------------------------------------------
-  function archiveSignature() {
+  // --- index -------------------------------------------------------------------
+  // The collection as its own full-screen mode (Devon, Nov 12 — the old
+  // Archive sat below the orrery in the same scroll, which is what
+  // squeezed both). Big tiles, 2–3 per row, the planet's ASCII art as
+  // the tile, name + one datum, 1px hairline gaps, no card chrome.
+  function indexSignature() {
     if (!state) return '';
     var cur = null;
-    for (var i = 0; i < state.archive.length; i++) {
-      if (state.archive[i].kind === 'current') cur = state.archive[i].seed + ':' + state.archive[i].stageIdx;
+    for (var i = 0; i < state.index.length; i++) {
+      if (state.index[i].kind === 'current') cur = state.index[i].seed + ':' + state.index[i].stageIdx;
     }
     return JSON.stringify([
-      state.archive.map(function (p) { return p.seed + ':' + p.generation; }),
+      state.index.map(function (p) { return p.seed + ':' + p.generation; }),
       state.slots.map(function (s) { return s.planet ? s.planet.seed + ':' + s.planet.generation : ''; }),
       cur,
     ]);
   }
-  function filteredArchive() {
+  function filteredIndex() {
     var q = searchText.trim().toLowerCase();
-    var list = state.archive.filter(function (p) {
+    var list = state.index.filter(function (p) {
       if (!q) return true;
       var hay = (p.name + ' ' + p.terrainLabel + ' ' + p.seed + ' ' + (p.mutationLabel || '')).toLowerCase();
       return hay.indexOf(q) >= 0;
@@ -1588,14 +1718,14 @@ class ProtoplanetApp {
     });
     return list;
   }
-  function renderArchive() {
+  function renderIndex() {
     if (!state) return;
-    var list = filteredArchive();
+    var list = filteredIndex();
     if (pickerRing !== null) list = list.filter(function (p) { return slotOf(p.seed, p.generation) < 0; });
-    document.getElementById('archiveCount').textContent =
+    document.getElementById('indexCount').textContent =
       state.totalPlanets + ' planet' + (state.totalPlanets === 1 ? '' : 's') + ' — ' + state.ringsUsed + ' in system';
     if (list.length === 0) {
-      cardsEl.innerHTML = '<div class="empty">' + (state.totalPlanets === 0
+      tilesEl.innerHTML = '<div class="empty">' + (state.totalPlanets === 0
         ? 'No planets yet — type to grow your first one, and it will show up here when you start a new planet.'
         : (pickerRing !== null ? 'Every planet is already in your system.' : 'Nothing matches that search.')) + '</div>';
       return;
@@ -1604,12 +1734,15 @@ class ProtoplanetApp {
     for (var i = 0; i < list.length; i++) {
       var p = list[i];
       var inSys = slotOf(p.seed, p.generation) >= 0;
-      var thumb = P.gridToHtml(P.renderCozy(p.planet, p.stageIdx, 10, 5, 1.0, 34, 19, undefined, 0.5), 3.4, 6.12);
-      html += '<div class="card' + (inSys ? ' inSystem' : '') + (pickerRing !== null ? ' picking' : '') + '"'
+      // Stage-driven scale, no per-planet stars (Devon, Nov 12 — same
+      // rules as the orrery discs, minus the ring fit: rings may clip
+      // at a tile's edge, that stays as-is).
+      var art = P.gridToHtml(P.renderCozy(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx), 68, 38, undefined, 0.5, true), 4.4, 7.92);
+      html += '<div class="tile' + (inSys ? ' inSystem' : '') + (pickerRing !== null ? ' picking' : '') + '"'
         + ' data-seed="' + p.seed + '" data-gen="' + p.generation + '">'
-        + '<div class="thumb"><div class="pp-grid" style="--pp-fs:6.12px;--pp-ch:6.12px">' + thumb + '</div></div>'
-        + '<div class="cname">' + esc(p.name) + '</div>'
-        + '<div class="cmeta">' + esc(p.terrainLabel) + ' &middot; ' + esc(p.stageName) + ' &middot; ' + p.chars + ' chars &middot; Gen ' + p.generation + '</div>'
+        + '<div class="art"><div class="pp-grid" style="--pp-fs:4.4px;--pp-ch:7.92px">' + art + '</div></div>'
+        + '<div class="tname">' + esc(p.name) + '</div>'
+        + '<div class="tmeta">' + esc(p.terrainLabel) + ' &middot; ' + esc(p.stageName) + ' &middot; ' + p.chars + ' chars &middot; Gen ' + p.generation + '</div>'
         + (inSys ? '<span class="badge sys">In system</span>' : '')
         + (p.kind === 'current' ? '<span class="badge cur">Growing now</span>' : '')
         // The mutation badge keeps its full label ("MUTATION · Glitch")
@@ -1619,31 +1752,38 @@ class ProtoplanetApp {
         + (p.mutationLabel ? '<span class="badge mut">' + esc(p.mutationLabel) + '</span>' : '')
         + '</div>';
     }
-    cardsEl.innerHTML = html;
+    tilesEl.innerHTML = html;
   }
 
   // --- picker mode (choosing a planet for a ring) ---------------------------
+  // Picking happens in the Index: the banner says which ring you are
+  // filling, and tapping a tile places it. Cancel takes you back to
+  // the orrery.
   function startPicker(ring) {
     pickerRing = ring;
     bannerEl.hidden = false;
-    bannerEl.innerHTML = '<span>Choose a planet for <b>Ring ' + (ring + 1) + '</b> — tap a card below to place it.</span>'
+    bannerEl.innerHTML = '<span>Choose a planet for <b>Ring ' + (ring + 1) + '</b> — tap a tile in the Index to place it.</span>'
       + '<button id="pickerCancel" class="ghost">Cancel</button>';
     document.getElementById('pickerCancel').addEventListener('click', cancelPicker);
-    renderArchive();
-    document.getElementById('archive').scrollIntoView({ behavior: 'smooth' });
+    renderIndex();
+    setMode('index');
   }
   function cancelPicker() {
     pickerRing = null;
     bannerEl.hidden = true;
-    renderArchive();
+    renderIndex();
+    setMode('orrery');
   }
 
   // --- rank line -------------------------------------------------------------
+  // One slim line (Devon, Nov 12 — the old one packed rank, finished
+  // planets, rings used and the next unlock into one sentence). The
+  // finished count lives in the Index count line; the lock labels on
+  // the orrery already say how many more planets the next ring needs.
   function updateRankLine() {
     if (!state) return;
-    var line = 'System Rank ' + state.rank + ' &middot; ' + state.finished + ' finished planet' + (state.finished === 1 ? '' : 's')
-      + ' &middot; ' + state.ringsUsed + ' / ' + state.totalSlots + ' rings used';
-    if (state.nextAt !== null) line += ' &middot; next ring at ' + state.nextAt + ' finished (' + state.toNext + ' to go)';
+    var line = 'Rank ' + state.rank + ' &middot; ' + state.ringsUsed + '/' + state.totalSlots + ' rings';
+    if (state.nextAt !== null) line += ' &middot; ' + state.toNext + ' to next ring';
     else line += ' &middot; max rings';
     document.getElementById('rankLine').innerHTML = line;
   }
@@ -1661,6 +1801,7 @@ class ProtoplanetApp {
     zoom = fitZoom;
     panX = 0; panY = 0;
     applyTransform();
+    refreshDiscDetail();
   }
   var panning = null, dragged = false, suppressClick = false;
   orreryEl.addEventListener('pointerdown', function (e) {
@@ -1691,13 +1832,14 @@ class ProtoplanetApp {
     panning = null;
   });
   orreryEl.addEventListener('wheel', function (e) {
-    // Ctrl+scroll (Cmd+scroll on Mac) zooms; a plain scroll lets the
-    // page scroll down to the Archive (Devon, Nov 12 — plain scroll
-    // used to zoom, so you could never scroll down to the index).
+    // Ctrl+scroll (Cmd+scroll on Mac) zooms. A plain scroll does
+    // nothing — the panel is one viewport now (the Index is its own
+    // mode, reached from the tabs), so there is no page to scroll.
     if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
     zoom = Math.max(0.3, Math.min(3, zoom * Math.exp(-e.deltaY * 0.001)));
     applyTransform();
+    refreshDiscDetail();
   }, { passive: false });
 
   // --- clicks (delegated; suppressed right after a drag-pan) ----------------
@@ -1759,44 +1901,48 @@ class ProtoplanetApp {
       closeDetail();
     }
   });
-  cardsEl.addEventListener('click', function (e) {
+  tilesEl.addEventListener('click', function (e) {
     if (suppressClick) return;
-    var card = e.target.closest ? e.target.closest('.card') : null;
-    if (!card) return;
-    var seed = +card.getAttribute('data-seed'), gen = +card.getAttribute('data-gen');
+    var tile = e.target.closest ? e.target.closest('.tile') : null;
+    if (!tile) return;
+    var seed = +tile.getAttribute('data-seed'), gen = +tile.getAttribute('data-gen');
     if (pickerRing !== null) {
       vscodeApi.postMessage({ type: 'place', ring: pickerRing, seed: seed, generation: gen });
       cancelPicker();
-      document.getElementById('orreryWrap').scrollIntoView({ behavior: 'smooth' });
       var planet = findPlanet(seed, gen);
       if (planet) setTimeout(function () { openDetail(planet); }, 350);
       return;
     }
     var planet2 = findPlanet(seed, gen);
-    if (planet2) {
-      openDetail(planet2);
-      document.getElementById('orreryWrap').scrollIntoView({ behavior: 'smooth' });
-    }
+    if (planet2) openDetail(planet2);
   });
 
   // --- top bar -----------------------------------------------------------------
   document.getElementById('zoomIn').addEventListener('click', function () {
-    zoom = Math.min(3, zoom * 1.25); applyTransform();
+    zoom = Math.min(3, zoom * 1.25); applyTransform(); refreshDiscDetail();
   });
   document.getElementById('zoomOut').addEventListener('click', function () {
-    zoom = Math.max(0.3, zoom / 1.25); applyTransform();
+    zoom = Math.max(0.3, zoom / 1.25); applyTransform(); refreshDiscDetail();
   });
   document.getElementById('fitBtn').addEventListener('click', fitView);
   document.getElementById('search').addEventListener('input', function (e) {
-    searchText = e.target.value; renderArchive();
+    searchText = e.target.value; renderIndex();
   });
   document.getElementById('sort').addEventListener('change', function (e) {
-    sortMode = e.target.value; renderArchive();
+    sortMode = e.target.value; renderIndex();
   });
   document.addEventListener('keydown', function (e) {
-    if (e.key !== 'Escape') return;
-    if (pickerRing !== null) cancelPicker();
-    else if (detailOpen) closeDetail();
+    if (e.key === 'Escape') {
+      if (pickerRing !== null) cancelPicker();
+      else if (detailOpen) closeDetail();
+      else if (document.body.classList.contains('hide-ui')) document.body.classList.remove('hide-ui');
+      return;
+    }
+    // H hides the interface (only the orrery stays) — not while
+    // typing in the search box.
+    if ((e.key === 'h' || e.key === 'H') && !/^(INPUT|SELECT|TEXTAREA)$/.test((e.target && e.target.tagName) || '')) {
+      document.body.classList.toggle('hide-ui');
+    }
   });
   window.addEventListener('resize', function () { computeFit(); });
 
@@ -1812,6 +1958,9 @@ class ProtoplanetApp {
     // UNIFORM drift: every ring advances by the same angle per tick,
     // so the slot angles — and the separation they guarantee — never
     // change. Planets can never drift into each other or the star.
+    // The drift pauses while you hover a planet or while the detail
+    // sheet is open — which includes while you are zoomed into one
+    // (zoomed always implies detailOpen: openDetail sets it first).
     if (!hoverPlanet && !detailOpen) {
       for (var i in angles) {
         angles[i] += 0.0078;
@@ -1820,6 +1969,8 @@ class ProtoplanetApp {
     }
     if (tick % 3 === 0) renderDiscs(); // discs shimmer ~2x/sec; full re-render every tick is wasteful
     if (tick % 2 === 0) renderStar(); // the sun churns + flares ~3x/sec — never frozen while the planets orbit. Outside the hover/detail guard on purpose: hovering a planet shouldn't freeze the sun.
+    // The sheet's art re-renders every tick while it is open, so the
+    // zoomed planet keeps shimmering — the drift itself is paused.
     if (detailOpen && selected) {
       var artEl = document.getElementById('detailArt');
       if (artEl) {
@@ -1839,11 +1990,11 @@ class ProtoplanetApp {
     if (!msg || msg.type !== 'system') return;
     state = msg;
     updateRankLine();
-    var sig = archiveSignature();
+    var sig = indexSignature();
     if (sig !== lastSig) {
       lastSig = sig;
       renderOrrery();
-      renderArchive();
+      renderIndex();
       if (detailOpen) renderDetail();
     } else if (detailOpen) {
       renderDetail(); // live XP/stage for the current planet

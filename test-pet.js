@@ -937,13 +937,20 @@ check('sidebar: meta is only the grown-from line',
   && !extSrc.includes('msg.summary'));
 check('sidebar: XP bar has a visible track and a numbers label',
   extSrc.includes('#xplabel') && extSrc.includes("getElementById('xplabel')"));
-check('ext: orrery discs are small again (46x24 cozy, not 68x38)',
-  extSrc.includes('P.renderCozy(d.planet.planet, d.planet.stageIdx, 10, sec, 1.0, 46, 24, undefined, 0.5), 2.6, 6.12')
+check('ext: orrery discs render from the discDetail tiers (46x24 base, not 68x38)',
+  extSrc.includes('P.renderCozy(d.planet.planet, d.planet.stageIdx, 10, sec, discZoom, detail.cols, detail.rows, undefined, 0.5, true), detail.cellW, detail.cellH')
   && !extSrc.includes('68, 38), 3.4, 6.12'));
 check('ext: detail panel uses the full render, not the cozy downsample',
   extSrc.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5), 2.35, 4.23'));
-check('ext: detail panel no longer uses the cozy art',
-  !extSrc.includes('4.4, 7.92'));
+// The detail sheet uses the full render, not the cozy downsample —
+// the 4.4/7.92 cells now belong to the Index tiles, so this scopes
+// the check to renderDetail itself instead of the whole file.
+(function () {
+  const detailSrc = extSrc.slice(extSrc.indexOf('function renderDetail() {'), extSrc.indexOf('function indexSignature() {'));
+  check('ext: detail sheet uses the full render, not the cozy downsample',
+    detailSrc.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5)')
+    && !detailSrc.includes('renderCozy'), detailSrc.slice(0, 200));
+})();
 check('ext: card mutation badge keeps the full MUTATION label',
   extSrc.includes("'<span class=\"badge mut\">' + esc(p.mutationLabel)") &&
   !extSrc.includes("mutationLabel.replace('MUTATION"));
@@ -955,13 +962,15 @@ check('ext: no "+" buttons on empty rings (ringHit hit-areas instead)',
   !extSrc.includes('ringBtn') && extSrc.includes("className = 'ringHit'"));
 
 // 13l. Batch #9 (Devon, Nov 11, 11:36 PM — queued notes, fixed Nov 12):
-// (1) plain scroll scrolls the page to the Archive instead of
-// zooming; (2) hovering a ring highlights the ring itself, no
-// separate gold ring drawn above it; (3) no 'Sol' label under the
-// sun; (4) no standing-still stars around the sun; (5) Shattered
-// birth smoke stays close to the core in the solar-system renders.
+// (1) plain scroll does nothing (the panel is one viewport now — the
+// Index is its own mode, reached from the tabs — so there is no page
+// to scroll); only Ctrl/Cmd+scroll zooms; (2) hovering a ring
+// highlights the ring itself, no separate gold ring drawn above it;
+// (3) no 'Sol' label under the sun; (4) no standing-still stars
+// around the sun; (5) Shattered birth smoke stays close to the core
+// in the solar-system renders.
 // (1) Wheel gating: the handler returns before preventDefault on a
-// plain wheel, so the page scrolls; only Ctrl/Cmd+scroll zooms.
+// plain wheel; only Ctrl/Cmd+scroll zooms.
 (function () {
   const wheelSrc = extSrc.slice(extSrc.indexOf("addEventListener('wheel'"), extSrc.indexOf("addEventListener('wheel'") + 600);
   check('ext: plain wheel does not zoom (returns before preventDefault)',
@@ -1017,10 +1026,10 @@ check('ext: no Sol label under the sun',
     farHalf === 0, farHalf + ' hits at radN 1.6, scale 0.5');
   check('smoke: the haze still exists close in at the solar-system scale',
     nearHalf > 0, nearHalf + ' hits at radN 1.2, scale 0.5');
-  check('ext: solar-system renders pass the reduced smoke scale (orrery, detail, archive, tick)',
-    extSrc.includes('P.renderCozy(d.planet.planet, d.planet.stageIdx, 10, sec, 1.0, 46, 24, undefined, 0.5)')
+  check('ext: solar-system renders pass the reduced smoke scale (orrery, detail, index, tick)',
+    extSrc.includes('P.renderCozy(d.planet.planet, d.planet.stageIdx, 10, sec, discZoom, detail.cols, detail.rows, undefined, 0.5, true)')
     && extSrc.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5)')
-    && extSrc.includes('P.renderCozy(p.planet, p.stageIdx, 10, 5, 1.0, 34, 19, undefined, 0.5)'));
+    && extSrc.includes('P.renderCozy(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx), 68, 38, undefined, 0.5, true)'));
   check('ext: sidebar pet and prestige renders keep the full smoke (default scale)',
     extSrc.includes('P.render(state.planet, state.stageIdx, t, sec), cellW, cellH)')
     && extSrc.includes('P.renderCozy(p.planet, p.stageIdx, 10, 5, 1.0, 34, 19), 3.4, 6.12)'));
@@ -1340,6 +1349,95 @@ check('ext: hatchFromSeed asks for the seed', extSrc.includes('showInputBox') &&
 check('ext: hatchFromSeed validates with parseSeedInput', extSrc.includes('Logic.parseSeedInput'));
 check('ext: hatchFromSeed calls Logic.hatchFromSeed', extSrc.includes('Logic.hatchFromSeed(this.state'));
 check('ext: hatchFromSeed confirms with a modal warning', extSrc.includes('Yes, hatch it'));
+
+// 17. Instrument redesign (Devon, Nov 12): the solar-system panel is
+// two full-screen modes (Orrery / Index) in the Instrument style —
+// near-black, hairline rules, mono type, one amber accent, no cards,
+// no dashboard chrome. Clicking a planet zooms the camera into it
+// and shows its details beside it (the old detail modal covered the
+// orrery); X / Esc zooms back out. Archive is renamed Index.
+(function () {
+  const sysHtml = extSrc.slice(extSrc.indexOf('  getSystemHtml(webview) {'), extSrc.indexOf('  getPrestigeHtml(webview) {'));
+  // Modes: two full screens, not one crowded one.
+  check('ext: orrery/index mode tabs exist', sysHtml.includes('id="tabOrrery"') && sysHtml.includes('id="tabIndex"'));
+  check('ext: mode switch toggles the body class', sysHtml.includes("document.body.classList.toggle('mode-index', m === 'index')"));
+  check('ext: index is its own full-screen section', sysHtml.includes('id="index"') && sysHtml.includes('id="tiles"'));
+  check('ext: index tiles are big (340px min, 1px hairline gaps)',
+    sysHtml.includes('grid-template-columns: repeat(auto-fill, minmax(340px, 1fr))') && sysHtml.includes('gap: 1px'));
+  check('ext: index tiles use the big cozy art (68x38)',
+    sysHtml.includes('P.renderCozy(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx), 68, 38, undefined, 0.5, true)'));
+  check('ext: no card chrome in the system panel',
+    !sysHtml.includes('class="card') && !sysHtml.includes('id="cards"') && !sysHtml.includes('border-radius: 8px'));
+  check('ext: bottom strip holds the zoom controls + hint', sysHtml.includes('id="bottomStrip"') && !sysHtml.includes('orreryHint'));
+  // Zoom-to-planet replaces the detail modal.
+  check('ext: clicking a planet zooms the camera into it',
+    sysHtml.includes('function zoomToPlanet(') && sysHtml.includes('zoomToPlanet(planet)'));
+  check('ext: zoom restores the previous view on close',
+    sysHtml.includes('function unzoom(') && sysHtml.includes('prevView = { zoom: zoom, panX: panX, panY: panY }'));
+  check('ext: detail sheet is fixed beside the zoomed planet', sysHtml.includes('position: fixed; right: 16px'));
+  check('ext: drift pauses while the detail sheet is open (incl. while zoomed)',
+    sysHtml.includes('if (!hoverPlanet && !detailOpen)')
+    && sysHtml.includes("if (mode === 'orrery') zoomToPlanet(planet);"));
+  // Hide-UI (H).
+  check('ext: H hides the interface', sysHtml.includes("classList.toggle('hide-ui')") && sysHtml.includes('body.hide-ui'));
+  // Instrument style: mono type, one amber accent, no green badge.
+  check('ext: system panel uses a monospace stack', sysHtml.includes("ui-monospace, SFMono-Regular, Menlo"));
+  check('ext: no green badge left in the system panel', !sysHtml.includes('#7ee2a8'));
+  // Rename: no user-facing "Archive" / "Pokédex" left in the panel
+  // (the only "Archive" strings left are two comments explaining the
+  // rename, and the archivedAt data field — not UI).
+  check('ext: archive renamed to index (no archive/pokedex UI strings)',
+    !sysHtml.includes('id="archive"') && !sysHtml.includes('<h2>Archive</h2>')
+    && !sysHtml.includes('Scroll down for the Archive') && !sysHtml.includes('Pokédex') && !sysHtml.includes('Pokedex')
+    && sysHtml.includes('id="index"'));
+  check('ext: view model calls the collection index, not archive',
+    extSrc.includes('const index = this.state.past.map') && extSrc.includes('totalPlanets: index.length,')
+    && !extSrc.includes('const archive = this.state.past.map'));
+})();
+
+// 18. Solar-system disc rules (Devon, Nov 12): stage-driven scale, no
+// per-planet stars in the orrery/Index, full rings in the orrery.
+// The engine side (stageScale values, noStars behavior, ringFitZoom
+// fit) is covered in test-planet.js §18; this checks the wiring.
+(function () {
+  const sysHtml = extSrc.slice(extSrc.indexOf('  getSystemHtml(webview) {'), extSrc.indexOf('  getPrestigeHtml(webview) {'));
+  check('ext: orrery discs scale with stage and fit their rings',
+    sysHtml.includes('Math.min(P.stageScale(d.planet.stageIdx),')
+    && sysHtml.includes('P.ringFitZoom(d.planet.planet, d.planet.stageIdx, 46, 24)'));
+  check('ext: index tiles scale with stage', sysHtml.includes('P.stageScale(p.stageIdx)'));
+  check('ext: orrery discs and index tiles drop the per-planet stars',
+    sysHtml.includes(', 0.5, true), detail.cellW, detail.cellH') && sysHtml.includes(', 0.5, true), 4.4, 7.92'));
+  check('ext: detail sheet keeps its stars (no noStars flag)',
+    sysHtml.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5)')
+    && !sysHtml.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5, true)'));
+  check('ext: sidebar pet keeps its stars',
+    extSrc.includes('P.render(state.planet, state.stageIdx, t, sec), cellW, cellH)'));
+  check('ext: no shared starfield added to the panel (plain black, per Devon)',
+    !sysHtml.includes('id="starfield"') && !sysHtml.includes('starLayer')
+    && !sysHtml.includes('backgroundStars') && !sysHtml.includes('renderStars'));
+})();
+
+// 19. Zoom detail + Index de-box (Devon, Nov 12): the orrery discs get
+// denser as the camera zooms in (P.discDetail tiers, stepped, never
+// continuous); the Index tiles have no amber border — 1px hairline
+// gaps only, amber kept for the badges and the active tab; the Index
+// header is one slim line and the rank line is trimmed.
+(function () {
+  const sysHtml = extSrc.slice(extSrc.indexOf('  getSystemHtml(webview) {'), extSrc.indexOf('  getPrestigeHtml(webview) {'));
+  check('ext: discs use the discDetail tiers',
+    sysHtml.includes('P.discDetail(') && sysHtml.includes('function discDetailNow()'));
+  check('ext: zoom gestures refresh the disc detail',
+    (sysHtml.match(/refreshDiscDetail\(\)/g) || []).length >= 6);
+  check('ext: index tiles have no amber border (hairline gaps only)',
+    !sysHtml.includes('.tile.inSystem') && !sysHtml.includes('.tile.picking')
+    && sysHtml.includes('gap: 1px'));
+  check('ext: amber stays on badges and the active tab only',
+    sysHtml.includes('.badge.sys') && sysHtml.includes('.tab.active') && sysHtml.includes('#e8b64c'));
+  check('ext: index header is one slim line, no heading',
+    !sysHtml.includes('<h2>Index</h2>') && sysHtml.includes('id="indexCount"'));
+  check('ext: rank line is trimmed (rank + rings + to-next only)',
+    sysHtml.includes("'Rank ' + state.rank") && !sysHtml.includes('finished planet'));
+})();
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) {
