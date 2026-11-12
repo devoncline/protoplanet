@@ -798,36 +798,67 @@ function newPlanet(state, nextSeed) {
 // unique to the original — nobody gets your rare mutated planet just
 // by pasting its seed.
 //
-// One honest limit: a FIRST planet born from a starter pick has its
-// terrain forced by the pick, not the seed — hatching from its seed
-// gives the seed's canonical terrain, which can differ. Every later
-// planet (new planet / recycle / prestige) is born from the seed
-// alone, so those reproduce exactly.
+// One honest limit, now closed (Nov 12 seed-hatch fix): a FIRST
+// planet born from a starter pick has its terrain forced by the
+// pick, not the seed — so its share prints the seed TAGGED with the
+// terrain ("948502300-icy", via shareSeedFor): the tag is a note on
+// the share, the seed number never changes, and hatching the tagged
+// seed reproduces the pinned terrain. A bare seed hatches the seed's
+// canonical terrain (the weighted roll). Every later planet (new
+// planet / recycle / prestige) is born from the seed alone, so those
+// reproduce exactly from the bare seed.
 // ---------------------------------------------------------------------------
 
 // Parse a pasted seed for "Hatch from seed": a plain integer in the
-// range randomSeed() produces (0..999999999). Every shared seed comes
-// from a real planet, so it is in this range. Rejects empty input,
-// non-digits, negatives, decimals, and out-of-range numbers with a
-// plain reason the input box can show.
+// range randomSeed() produces (0..999999999), optionally followed by
+// "-terrain" — the tagged form a share card prints when the planet's
+// terrain was pinned by a starter pick ("948502300-icy"). The terrain
+// is a note on the share, not part of the seed: the seed number is
+// never modified, and its rings/moons/size/name rolls are untouched
+// (the starter pick consumes one rng draw either way). A bare seed
+// keeps the old behavior — the weighted terrain roll. Rejects empty
+// input, non-digits, negatives, decimals, out-of-range numbers, and
+// unknown terrain names with a plain reason the input box can show.
+// The terrain match is case-insensitive ("948502300-ICY" works);
+// spaces around the hyphen are tolerated.
 function parseSeedInput(text) {
   const t = String(text == null ? '' : text).trim();
   if (!t) return { ok: false, reason: 'Enter a seed number.' };
-  if (!/^\d+$/.test(t)) return { ok: false, reason: 'A seed is a whole number — digits only.' };
-  const seed = Number(t);
+  const parts = t.split('-');
+  if (parts.length > 2) {
+    return { ok: false, reason: 'A shared seed looks like 948502300 or 948502300-icy.' };
+  }
+  const numPart = parts[0].trim();
+  if (!/^\d+$/.test(numPart)) return { ok: false, reason: 'A seed is a whole number — digits only.' };
+  const seed = Number(numPart);
   if (!Number.isSafeInteger(seed) || seed < 0 || seed > 999999999) {
     return { ok: false, reason: 'Seed must be between 0 and 999999999.' };
   }
-  return { ok: true, seed };
+  let terrain = null;
+  if (parts.length === 2) {
+    const raw = parts[1].trim();
+    if (!raw) {
+      return { ok: false, reason: 'A shared seed looks like 948502300 or 948502300-icy.' };
+    }
+    const known = Planet.CONFIG.TERRAINS.find((x) => x.id === raw.toLowerCase());
+    if (!known) {
+      return { ok: false, reason: `Unknown terrain '${raw}' — use one of: rocky, ocean, jungle, icy, desert, lava, gas, crystal, toxic, metal.` };
+    }
+    terrain = known.id;
+  }
+  return { ok: true, seed, terrain };
 }
 
 // The seed's base planet, mutations stripped: same terrain, rings,
 // moons, size and name as the seed's canonical planet — the name is
 // seed-derived (same seed = same name), nudged only when that name
 // is already taken in this collection (the same birth-time
-// uniqueness rule every other birth follows).
-function makeSeedPlanet(seed, takenNames) {
-  const p = Planet.stripMutations(Planet.generatePlanet(seed));
+// uniqueness rule every other birth follows). `terrain` (optional)
+// pins the terrain — a tagged share ("948502300-icy") hatches the
+// pinned terrain instead of the seed's canonical roll; without it
+// the bare-seed behavior stands.
+function makeSeedPlanet(seed, takenNames, terrain) {
+  const p = Planet.stripMutations(Planet.generatePlanet(seed, terrain || undefined));
   if (takenNames) p.name = uniquePlanetName(p.name, seed, takenNames);
   p.xp = 0;
   p.chars = 0;
@@ -845,7 +876,7 @@ function makeSeedPlanet(seed, takenNames) {
 // prestige). When there is no current planet yet (first run), the
 // seed hatch IS the first planet (starter done + the one free
 // starter mineral), so the first-run pick never pops up afterwards.
-function hatchFromSeed(state, seed) {
+function hatchFromSeed(state, seed, terrain) {
   if (state.current) {
     archiveCurrent(state);
     state.generation += 1;
@@ -855,7 +886,7 @@ function hatchFromSeed(state, seed) {
   } else {
     state.generation += 1;
   }
-  state.current = makeSeedPlanet(seed, takenNamesFor(state));
+  state.current = makeSeedPlanet(seed, takenNamesFor(state), terrain);
   return state.current;
 }
 
@@ -873,6 +904,23 @@ function hatchFromSeed(state, seed) {
 // sits next to the README wherever the player puts it.
 // ---------------------------------------------------------------------------
 const SHARE_REPO_URL = 'https://github.com/devoncline/protoplanet';
+
+// The seed as it is SHARED (Nov 12 seed-hatch fix): the bare seed
+// when the planet's terrain is what its seed rolls anyway, otherwise
+// the seed tagged with the terrain ("948502300-icy"). Only a planet
+// born from a starter pick can differ from its seed's canonical
+// terrain — the pick forced it — so only those shares carry a tag.
+// The tag is a note on the share, never a change to the seed: the
+// number and every roll after the terrain draw are identical either
+// way (the starter pick consumes one rng draw). A planet with no
+// stored terrain, or an unknown one, shares its bare seed, as before.
+function shareSeedFor(planet) {
+  if (!planet || typeof planet.seed !== 'number') return String(planet && planet.seed != null ? planet.seed : '');
+  const terrain = planet.terrain;
+  if (!terrain || !Planet.CONFIG.TERRAINS.some((t) => t.id === terrain)) return String(planet.seed);
+  if (Planet.generatePlanet(planet.seed).terrain === terrain) return String(planet.seed);
+  return `${planet.seed}-${terrain}`;
+}
 
 // protoplanet-k2-277c-gen5.png — the catalog name slugified, so the
 // file is readable and unique per planet (names are unique in a
@@ -893,7 +941,7 @@ function shareCardMarkdown(planet, filename) {
   lines.push('');
   lines.push(`**${planet.name}** · ${planet.terrainLabel || 'Protoplanet'} · ${planet.stageName} · Gen ${planet.generation} · grown from ${Number(planet.chars || 0).toLocaleString()} characters`);
   if (planet.mutationLabel) lines.push(planet.mutationLabel);
-  lines.push(`Seed \`${planet.seed}\` — hatch the same base planet in [Protoplanet](${SHARE_REPO_URL}).`);
+  lines.push(`Seed \`${shareSeedFor(planet)}\` — hatch the same base planet in [Protoplanet](${SHARE_REPO_URL}).`);
   return lines.join('\n');
 }
 
@@ -939,7 +987,7 @@ module.exports = {
   shouldCountDocument, countInsertedChars,
   stageForXp, stageInfo, displayStageForXp, isMaxed,
   randomSeed, makePlanet, nameForPlanet, uniquePlanetName, takenNamesFor, freshState, startFirstPlanet,
-  archiveCurrent, applyXp, newPlanet, parseSeedInput, makeSeedPlanet, hatchFromSeed,
+  archiveCurrent, applyXp, newPlanet, parseSeedInput, makeSeedPlanet, hatchFromSeed, shareSeedFor,
   finishedCount, systemRank, lockedRingLabel, resolveSlotPlanet,
   slotIndexForPlanet, normalizeSystem, placePlanet, removeFromSystem,
   mineralName, mineralTiltsText, makeMineral, grantStarterMineral,

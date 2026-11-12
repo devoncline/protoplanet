@@ -1882,19 +1882,21 @@ check('name: generatePlanet carries the seed name',
   // swallowed by a dark belt) stay transparent.
   // Round 3 (Nov 12 — black squares at stage 1+): the night side is
   // speckled, not solid — pattern noise pushes the brightness across
-  // the space threshold cell by cell — so a 1-3 cell dark run painted
+  // the space threshold cell by cell — so a short dark run painted
   // with a background is a small sharp rectangle ("black square") at
-  // full-res sizes. Only runs of 4+ cells (the solid deep night side)
-  // get a background; the 1-3 cell speckle stays transparent (on
-  // black it reads as black anyway, no rectangle). The 4-cell run
-  // below still paints; the 2-cell run in the second row does not.
-  const nightGrid = [[[' ', 16], [' ', 16], [' ', 16], [' ', 16], ['.', 232]], [[' ', 229], [' ', null], ['*', 250]]];
+  // full-res sizes. Round 4: the 4+ rule left the solid night side
+  // painting (77 spans over 41 frames, max run 8) — those ARE the
+  // rectangles Devon sees. Only runs of 10+ cells (a truly solid
+  // stretch) get a background now; 1-9 cell speckle stays transparent
+  // (on black it reads as black anyway, no rectangle). The 10-cell
+  // run below still paints; the 9-cell run in the speckle grid does not.
+  const nightGrid = [[[' ', 16], [' ', 16], [' ', 16], [' ', 16], [' ', 16], [' ', 16], [' ', 16], [' ', 16], [' ', 16], [' ', 16], ['.', 232]], [[' ', 229], [' ', null], ['*', 250]]];
   const nightHtml = P.gridToHtml(nightGrid, 10, 18);
   check('stars: dark space runs paint their background (opaque night side)',
     nightHtml.includes('background:#000000'));
-  const speckleGrid = [[['.', 232], [' ', 16], [' ', 16], ['.', 232]], [[' ', 16], ['.', 232], [' ', 16], [' ', 16]]];
+  const speckleGrid = [[['.', 232], [' ', 16], [' ', 16], ['.', 232]], [[' ', 16], ['.', 232], [' ', 16], [' ', 16]], [[' ', 16], [' ', 16], [' ', 16], [' ', 16], [' ', 16], [' ', 16], [' ', 16], [' ', 16], [' ', 16], ['.', 232]]];
   const speckleHtml = P.gridToHtml(speckleGrid, 10, 18);
-  check('stars: short dark runs (1-3 cells, terminator speckle) stay transparent — no black squares',
+  check('stars: short dark runs (1-9 cells, terminator speckle) stay transparent — no black squares',
     !speckleHtml.includes('background:'));
   check('stars: bright space runs stay transparent (no background)',
     !nightHtml.includes('background:#ffffaf') && !nightHtml.includes('background:#ffffd7'));
@@ -2148,10 +2150,13 @@ check('name: generatePlanet carries the seed name',
   // exists once the planet has a disc — 75 at stage 1 on GJ-364c,
   // vs 0 at stage 0), so the grid-level count can't be 0 there. What
   // must hold is the HTML: the detail sheet may only paint a
-  // background on the solid night side (runs of 4+ cells), never on
-  // the 1-3 cell terminator speckle. Measured on GJ-364c over 41
-  // frames: stage 1 max 5 bg spans/frame, stage 6 max 10 — vs ~30
-  // before the run-length rule.
+  // background on the solid night side, never on the terminator
+  // speckle. Round 3's run-length rule (>=4 cells) left the solid
+  // night side painting — 77 spans over 41 frames, max run 8, pure
+  // #000000 — and those ARE the rectangles Devon sees. Round 4
+  // raised the threshold to 10: no run paints at stage 1 (max
+  // observed length 8 over 41 frames), and stage 6 keeps at most one
+  // solid-night-side run (measured 1).
   function sheetBgSpans(planet, stageIdx) {
     let worst = 0;
     for (let i = 0; i <= 40; i++) {
@@ -2165,15 +2170,59 @@ check('name: generatePlanet carries the seed name',
   }
   const gj1 = P.generatePlanet(948502300, 'icy');
   const s1spans = sheetBgSpans(gj1, 1), s6spans = sheetBgSpans(gj1, 6);
-  check('pixel-blocks: stage-1 detail sheet paints only the solid night side (<=8 bg spans/frame)',
-    s1spans <= 8, `stage1 worst ${s1spans}`);
-  check('pixel-blocks: stage-6 detail sheet paints only the solid night side (<=12 bg spans/frame)',
-    s6spans <= 12, `stage6 worst ${s6spans}`);
+  check('pixel-blocks: stage-1 detail sheet paints zero bg spans (41 frames)',
+    s1spans === 0, `stage1 worst ${s1spans}`);
+  check('pixel-blocks: stage-6 detail sheet paints at most one solid night-side run (41 frames)',
+    s6spans <= 2, `stage6 worst ${s6spans}`);
   // FIX 2's resolution half: discDetail reaches the full 136 cols at
   // ~5.91x zoom (the 6x cap), so the zoomed disc can match the sheet.
   check('zoom: discDetail reaches the full 136 cols at ~5.91x (6x cap)',
     P.discDetail(5.91).cols === 136 && P.discDetail(6).cols === 136 && P.discDetail(3).cols === 69,
     `5.91->${P.discDetail(5.91).cols} 6->${P.discDetail(6).cols} 3->${P.discDetail(3).cols}`);
+  // Round-4 zoom blend (Devon, Nov 12 — one mouse scroll jumped the
+  // disc from few characters to a ton): the round-3 switch at 2x
+  // jumped the disc char count 43 -> 288 (6.7x) in one step. The
+  // blend ramps the crop in over z=2..4, so no 0.1 zoom step may jump
+  // the count by more than 2x. Replicates renderDiscs exactly via
+  // P.discBlend (same box, same output size, same render).
+  function blendedChars(planet, z) {
+    const detail = P.discDetail(z);
+    const dz = Math.min(P.stageScale(1), P.ringFitZoom(planet, 1, detail.cols, detail.rows));
+    const zcrop = P.sidebarCrop(planet, 1, 10, 2.5);
+    const bl = P.discBlend(z, zcrop, detail, false);
+    const full = P.render(planet, 1, 10, 2, dz, undefined, 0.5, true);
+    const cropped = P.cropGrid(full, bl.box);
+    const grid = (bl.outCols < bl.box.cols || bl.outRows < bl.box.rows)
+      ? P.downsampleGrid(cropped, bl.outCols, bl.outRows) : cropped;
+    let n = 0;
+    for (const row of grid) for (const [ch] of row) if (ch !== ' ') n++;
+    return n;
+  }
+  let prevChars = 0, worstRatio = 0;
+  for (let zi = 15; zi <= 25; zi++) {
+    const n = blendedChars(gj1, zi / 10);
+    if (prevChars) worstRatio = Math.max(worstRatio, n / prevChars);
+    prevChars = n;
+  }
+  check('zoom-blend: no 0.1 zoom step jumps the disc char count by more than 2x (z=1.5..2.5)',
+    worstRatio < 2, `worst ratio ${worstRatio.toFixed(2)}x`);
+  // Blend endpoints: blend 0 is exactly the cozy render; blend 1 is
+  // exactly the old cropped render (full detail at high zoom kept).
+  const cozy19 = P.renderCozy(gj1, 1, 10, 2,
+    Math.min(P.stageScale(1), P.ringFitZoom(gj1, 1, P.discDetail(1.9).cols, P.discDetail(1.9).rows)),
+    P.discDetail(1.9).cols, P.discDetail(1.9).rows, undefined, 0.5, true);
+  let nCozy = 0;
+  for (const row of cozy19) for (const [ch] of row) if (ch !== ' ') nCozy++;
+  check('zoom-blend: blend 0 equals the cozy render at z=1.9',
+    blendedChars(gj1, 1.9) === nCozy, `blended ${blendedChars(gj1, 1.9)} vs cozy ${nCozy}`);
+  const zcrop1 = P.sidebarCrop(gj1, 1, 10, 2.5);
+  const d47 = P.discDetail(4.7);
+  const dz47 = Math.min(P.stageScale(1), P.ringFitZoom(gj1, 1, d47.cols, d47.rows));
+  let nOld = 0;
+  for (const row of P.cropGrid(P.render(gj1, 1, 10, 2, dz47, undefined, 0.5, true), zcrop1))
+    for (const [ch] of row) if (ch !== ' ') nOld++;
+  check('zoom-blend: blend 1 equals the old cropped render at z=4.7 (full detail kept)',
+    blendedChars(gj1, 4.7) === nOld, `blended ${blendedChars(gj1, 4.7)} vs cropped ${nOld}`);
 }
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);

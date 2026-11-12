@@ -968,7 +968,9 @@ check('sidebar: meta is only the grown-from line',
 check('sidebar: XP bar has a visible track and a numbers label',
   extSrc.includes('#xplabel') && extSrc.includes("getElementById('xplabel')"));
 check('ext: orrery discs render from the continuous detail grid (not tiers, not 68x38)',
-  extSrc.includes('P.renderCozy(d.planet.planet, d.planet.stageIdx, 10, sec, discZoom, detail.cols, detail.rows, undefined, 0.5, true), detail.cellW, detail.cellH')
+  extSrc.includes('P.discBlend(zoom, zcrop, detail, isSel)')
+  && extSrc.includes('P.render(d.planet.planet, d.planet.stageIdx, 10, sec, discZoom, undefined, 0.5, true)')
+  && extSrc.includes('P.downsampleGrid(cropped, bl.outCols, bl.outRows)')
   && !extSrc.includes('68, 38), 3.4, 6.12') && !extSrc.includes('discTier'));
 check('ext: detail panel uses the cropped full render, not the cozy downsample',
   extSrc.includes('function fillDetailArt()')
@@ -1068,13 +1070,13 @@ check('ext: no "+" buttons on empty rings (ringHit hit-areas instead)',
 // (1) Wheel gating: the handler returns before preventDefault on a
 // plain wheel; only Ctrl/Cmd+scroll zooms.
 (function () {
-  const wheelSrc = extSrc.slice(extSrc.indexOf("addEventListener('wheel'"), extSrc.indexOf("addEventListener('wheel'") + 600);
+  const wheelSrc = extSrc.slice(extSrc.indexOf("addEventListener('wheel'"), extSrc.indexOf("addEventListener('wheel'") + 1000);
   check('ext: plain wheel does not zoom (returns before preventDefault)',
     wheelSrc.indexOf('if (!e.ctrlKey && !e.metaKey) return;') !== -1
     && wheelSrc.indexOf('if (!e.ctrlKey && !e.metaKey) return;') < wheelSrc.indexOf('e.preventDefault()'),
     wheelSrc.slice(0, 220));
-  check('ext: ctrl/cmd+wheel still zooms (cap 6x, round 3 — was 3x)',
-    wheelSrc.includes('zoom = Math.max(0.3, Math.min(6, zoom * Math.exp(-e.deltaY * 0.001)))'));
+  check('ext: ctrl/cmd+wheel still zooms (cap 6x, round 3 — was 3x; round 4 halved the per-event step)',
+    wheelSrc.includes('zoom = Math.max(0.3, Math.min(6, zoom * Math.exp(-e.deltaY * 0.0005)))'));
   check('ext: zoom hint names Ctrl+Scroll', extSrc.includes('Ctrl+Scroll to zoom'));
 })();
 // (2) Ring hover highlights the ring itself.
@@ -1123,7 +1125,7 @@ check('ext: no Sol label under the sun',
   check('smoke: the haze still exists close in at the solar-system scale',
     nearHalf > 0, nearHalf + ' hits at radN 1.2, scale 0.5');
   check('ext: solar-system renders pass the reduced smoke scale (orrery, detail, index, tick)',
-    extSrc.includes('P.renderCozy(d.planet.planet, d.planet.stageIdx, 10, sec, discZoom, detail.cols, detail.rows, undefined, 0.5, true)')
+    extSrc.includes('P.render(d.planet.planet, d.planet.stageIdx, 10, sec, discZoom, undefined, 0.5, true)')
     && extSrc.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.0, undefined, 0.5, true)')
     && extSrc.includes('P.render(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx), undefined, 0.5, true)'));
   check('ext: sidebar pet and prestige renders keep the full smoke (default scale)',
@@ -1344,6 +1346,25 @@ check('share: markdown has no mutation line for a plain planet',
 check('share: plain card still embeds the seed',
   plainMd.includes('Seed `805839337`'), plainMd);
 
+// 15a. Seed-hatch terrain tag (Nov 12): a planet whose terrain was
+// pinned by a starter pick shares its seed tagged with the terrain;
+// a planet whose terrain is what its seed rolls anyway shares bare.
+eq('share: bare seed for a planet whose terrain matches its seed roll',
+  L.shareSeedFor({ seed: 805839337, terrain: 'toxic' }), '805839337');
+eq('share: tagged seed for a starter-picked planet (GJ-364c)',
+  L.shareSeedFor({ seed: 948502300, terrain: 'icy' }), '948502300-icy');
+eq('share: bare seed when no terrain is stored',
+  L.shareSeedFor({ seed: 948502300 }), '948502300');
+eq('share: bare seed for an unknown terrain',
+  L.shareSeedFor({ seed: 948502300, terrain: 'bogus' }), '948502300');
+const taggedMd = L.shareCardMarkdown(
+  { ...sharePlanet, seed: 948502300, terrain: 'icy', terrainLabel: 'Icy world', name: 'GJ-364c', mutationLabel: null },
+  'protoplanet-gj-364c-gen1.png');
+check('share: markdown embeds the tagged seed for a starter-picked planet',
+  taggedMd.includes('Seed `948502300-icy`'), taggedMd);
+check('share: markdown still names the tagged planet',
+  taggedMd.includes('**GJ-364c** · Icy world'), taggedMd);
+
 // 15b. package.json + extension.js wiring for the Share panel.
 check('pkg: sharePlanet command', cmds.some((c) => c.command === 'protoplanet.sharePlanet'));
 check('ext: registers sharePlanet', extSrc.includes("'protoplanet.sharePlanet'"));
@@ -1391,6 +1412,20 @@ check('seed input: decimal rejected', L.parseSeedInput('1.5').ok === false);
 check('seed input: too big rejected', L.parseSeedInput('1000000000').ok === false);
 check('seed input: null rejected', L.parseSeedInput(null).ok === false);
 
+// parseSeedInput, tagged form (Nov 12 seed-hatch fix): "seed-terrain"
+// hatches the pinned terrain. The terrain is a note on the share —
+// the seed number never changes.
+eq('seed input: tagged seed', L.parseSeedInput('948502300-icy').ok, true);
+eq('seed input: tagged seed value', L.parseSeedInput('948502300-icy').seed, 948502300);
+eq('seed input: tagged seed terrain', L.parseSeedInput('948502300-icy').terrain, 'icy');
+eq('seed input: bare seed has no terrain', L.parseSeedInput('805839337').terrain, null);
+eq('seed input: terrain is case-insensitive', L.parseSeedInput('948502300-ICY').terrain, 'icy');
+eq('seed input: spaces around the hyphen', L.parseSeedInput('948502300 - icy').terrain, 'icy');
+check('seed input: bad terrain rejected', L.parseSeedInput('948502300-bogus').ok === false);
+check('seed input: trailing hyphen rejected', L.parseSeedInput('948502300-').ok === false);
+check('seed input: double suffix rejected', L.parseSeedInput('948502300-icy-extra').ok === false);
+check('seed input: tagged out-of-range rejected', L.parseSeedInput('1000000000-icy').ok === false);
+
 // makeSeedPlanet: the canonical roll for the seed, mutations stripped.
 {
   let mutSeed = null, mutPlanet = null;
@@ -1411,6 +1446,34 @@ check('seed input: null rejected', L.parseSeedInput(null).ok === false);
     JSON.stringify(L.makeSeedPlanet(mutSeed, new Set())) === JSON.stringify(hatched));
 }
 
+// Tagged hatch (Nov 12 seed-hatch fix): "948502300-icy" hatches the
+// pinned icy planet — the same base planet as Devon's live GJ-364c
+// (born from the icy starter pick), mutations stripped.
+{
+  const live = L.makePlanet(948502300, 'icy');
+  const hatched = L.makeSeedPlanet(948502300, new Set(), 'icy');
+  const base = Planet.stripMutations(Planet.generatePlanet(948502300, 'icy'));
+  check('seed planet tagged: terrain is the pinned one', hatched.terrain === 'icy' && hatched.terrain === live.terrain);
+  check('seed planet tagged: same name as the live planet', hatched.name === live.name);
+  check('seed planet tagged: same size as the live planet', hatched.size === live.size);
+  check('seed planet tagged: same rings as the live planet', hatched.ringType === base.ringType && hatched.baseRingType === live.baseRingType);
+  check('seed planet tagged: same moons as the live planet', hatched.moons.length === live.moons.length && JSON.stringify(hatched.moons) === JSON.stringify(base.moons));
+  check('seed planet tagged: no mutations', hatched.mutations.length === 0);
+  check('seed planet tagged: deterministic',
+    JSON.stringify(L.makeSeedPlanet(948502300, new Set(), 'icy')) === JSON.stringify(hatched));
+}
+// The bare seed keeps the old behavior: GJ-364c's seed without the
+// tag hatches the seed's canonical terrain (lava), not the pinned
+// icy one — the documented fallback.
+{
+  const bare = L.makeSeedPlanet(948502300, new Set());
+  check('seed planet bare: GJ-364c seed without the tag hatches lava', bare.terrain === 'lava');
+  check('seed planet bare: rings/moons/size/name still match the pinned twin except terrain',
+    bare.ringType === Planet.generatePlanet(948502300, 'icy').ringType
+    && bare.size === Planet.generatePlanet(948502300, 'icy').size
+    && bare.name === Planet.generatePlanet(948502300, 'icy').name);
+}
+
 // hatchFromSeed: archives the current planet (mutations KEPT in the
 // collection), hatches the seed's base planet, generation +1.
 {
@@ -1428,6 +1491,19 @@ check('seed input: null rejected', L.parseSeedInput(null).ok === false);
   check('seed hatch: current is the seed planet', st.current === p && p.seed === 805839337);
   check('seed hatch: hatched planet has no mutations', p.mutations.length === 0);
   check('seed hatch: hatched planet is the canonical roll', p.terrain === Planet.generatePlanet(805839337).terrain && p.name === Planet.generatePlanet(805839337).name);
+}
+// Tagged hatch through hatchFromSeed: the full command path with a
+// tagged seed hatches the pinned terrain, generation +1, archive kept.
+{
+  const live = L.makePlanet(948502300, 'icy');
+  const st = freshWithPlanet(42);
+  const p = L.hatchFromSeed(st, 948502300, 'icy');
+  check('seed hatch tagged: current is the pinned planet', st.current === p && p.seed === 948502300 && p.terrain === 'icy');
+  check('seed hatch tagged: same name/size/rings as the live planet',
+    p.name === live.name && p.size === live.size && p.ringType === live.ringType);
+  check('seed hatch tagged: no mutations', p.mutations.length === 0);
+  check('seed hatch tagged: generation +1', st.generation === 2);
+  check('seed hatch tagged: old planet archived', st.past.length === 1 && st.past[0].seed === 42);
 }
 // A fed mineral is NOT consumed by a seed hatch — the hatch is the
 // seed's canonical planet, not a roll — and it still applies to the
@@ -1469,7 +1545,12 @@ check('ext: registers hatchFromSeed', extSrc.includes("'protoplanet.hatchFromSee
 check('ext: hatchFromSeed asks for the seed', extSrc.includes('showInputBox') && extSrc.includes('hatchFromSeed'));
 check('ext: hatchFromSeed validates with parseSeedInput', extSrc.includes('Logic.parseSeedInput'));
 check('ext: hatchFromSeed calls Logic.hatchFromSeed', extSrc.includes('Logic.hatchFromSeed(this.state'));
+check('ext: hatchFromSeed passes the parsed terrain through', extSrc.includes('Logic.hatchFromSeed(this.state, parsed.seed, parsed.terrain)'));
 check('ext: hatchFromSeed confirms with a modal warning', extSrc.includes('Yes, hatch it'));
+check('ext: share view model carries the shared seed', extSrc.includes('shareSeed: Logic.shareSeedFor(p)'));
+check('ext: share copies the shared seed string', extSrc.includes('shareViewModel().shareSeed'));
+check('ext: share panel shows the shared seed', extSrc.includes('state.shareSeed || state.seed'));
+check('ext: share PNG caption uses the shared seed', extSrc.includes("(state.shareSeed || state.seed)"));
 
 // 17. Instrument redesign (Devon, Nov 12): the solar-system panel is
 // two full-screen modes (Orrery / Index) in the Instrument style —
@@ -1531,7 +1612,7 @@ check('ext: hatchFromSeed confirms with a modal warning', extSrc.includes('Yes, 
     && sysHtml.includes('P.ringFitZoom(d.planet.planet, d.planet.stageIdx, detail.cols, detail.rows)'));
   check('ext: index tiles scale with stage', sysHtml.includes('P.stageScale(p.stageIdx)'));
   check('ext: orrery discs and index tiles drop the per-planet stars',
-    sysHtml.includes(', 0.5, true), detail.cellW, detail.cellH')
+    sysHtml.includes('P.render(d.planet.planet, d.planet.stageIdx, 10, sec, discZoom, undefined, 0.5, true)')
     && sysHtml.includes('P.cropGrid(P.render(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx), undefined, 0.5, true), crop)'));
   // The detail sheet keeps its stars — as a layer of the frame now,
   // not baked into the planet render (Devon, Nov 12 — §21).
@@ -1566,12 +1647,17 @@ check('ext: hatchFromSeed confirms with a modal warning', extSrc.includes('Yes, 
   // (the selected-disc-only path, generalized) so the zoomed disc
   // matches its sheet.
   check('ext: zoom cap is 6x at all three clamp sites (wheel, zoom-in button, zoomToPlanet)',
-    sysHtml.includes('zoom = Math.max(0.3, Math.min(6, zoom * Math.exp(-e.deltaY * 0.001)))')
+    sysHtml.includes('zoom = Math.max(0.3, Math.min(6, zoom * Math.exp(-e.deltaY * 0.0005)))')
     && sysHtml.includes('zoom = Math.min(6, zoom * 1.25)')
     && sysHtml.includes('var zoomT = Math.min(6, Math.max(1.6, fitZoom * 5));')
     && !sysHtml.includes('Math.min(3, zoom') && !sysHtml.includes('fitZoom * 2.6'));
+  // Round 4 (Devon, Nov 12): the 2x switch itself was a cliff — one
+  // step jumped the disc 43 -> 288 chars — so the crop now blends in
+  // over z=2..4 via P.discBlend; a selected disc jumps straight to
+  // blend 1 (its sheet is open). The zoomed disc still matches its
+  // sheet at high zoom (blend 1 is exactly the old cropped render).
   check('ext: any disc at high zoom renders cropped to the planet (not selected-only)',
-    sysHtml.includes('if (zoom >= 2 || isSel)') && sysHtml.includes('var isSel = zoomed && selected'));
+    sysHtml.includes('P.discBlend(zoom, zcrop, detail, isSel)') && sysHtml.includes('var isSel = zoomed && selected'));
   check('ext: index tiles have no amber border (hairline gaps only)',
     !sysHtml.includes('.tile.inSystem') && !sysHtml.includes('.tile.picking')
     && sysHtml.includes('gap: 0; background: #050505;'));

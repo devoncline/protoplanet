@@ -149,7 +149,7 @@ class ProtoplanetApp {
   async hatchFromSeed() {
     const raw = await vscode.window.showInputBox({
       prompt: 'Protoplanet: hatch a planet from a shared seed',
-      placeHolder: 'Seed number, e.g. 805839337',
+      placeHolder: 'Seed, e.g. 805839337 or 948502300-icy',
       ignoreFocusOut: true,
       validateInput: (v) => {
         if (!v.trim()) return null;
@@ -160,13 +160,14 @@ class ProtoplanetApp {
     if (raw === undefined) return; // dismissed
     const parsed = Logic.parseSeedInput(raw);
     if (!parsed.ok) return; // validateInput already rejected it; defensive
+    const shown = parsed.terrain ? `${parsed.seed}-${parsed.terrain}` : String(parsed.seed);
     const answer = await vscode.window.showWarningMessage(
-      `Hatch the planet from seed ${parsed.seed}? Your current planet will be kept in your collection. The hatched planet is the seed's base planet — it never carries mutations.`,
+      `Hatch the planet from seed ${shown}? Your current planet will be kept in your collection. The hatched planet is the seed's base planet — it never carries mutations.`,
       { modal: true },
       'Yes, hatch it'
     );
     if (answer !== 'Yes, hatch it') return;
-    Logic.hatchFromSeed(this.state, parsed.seed);
+    Logic.hatchFromSeed(this.state, parsed.seed, parsed.terrain);
     this.saveNow();
     this.pushState();
   }
@@ -599,11 +600,15 @@ class ProtoplanetApp {
 
   // Everything the card needs: the renderable planet (same shared
   // helper as the Solar System and Prestige panels) plus the PNG
-  // filename and the README markdown from petLogic.js.
+  // filename and the README markdown from petLogic.js. `shareSeed` is
+  // the seed as it is shared — the bare seed, or seed-terrain when
+  // the planet's terrain was pinned by a starter pick (Nov 12
+  // seed-hatch fix): the panel, the copy button and the PNG caption
+  // all show the same string.
   shareViewModel() {
     const p = this.renderablePlanet(this.state.current, 'current');
     const filename = Logic.shareCardFilename(p.name, p.generation);
-    return { type: 'share', ...p, filename, markdown: Logic.shareCardMarkdown(p, filename) };
+    return { type: 'share', ...p, filename, shareSeed: Logic.shareSeedFor(p), markdown: Logic.shareCardMarkdown(p, filename) };
   }
 
   postShareState() {
@@ -617,7 +622,7 @@ class ProtoplanetApp {
   async onShareMessage(msg) {
     if (!msg || typeof msg !== 'object') return;
     if (msg.type === 'copySeed' && this.state.current) {
-      await vscode.env.clipboard.writeText(String(this.state.current.seed));
+      await vscode.env.clipboard.writeText(this.shareViewModel().shareSeed);
       if (this.sharePanel) this.sharePanel.webview.postMessage({ type: 'copied', what: 'seed' });
     } else if (msg.type === 'copyMarkdown') {
       await vscode.env.clipboard.writeText(this.shareViewModel().markdown);
@@ -1814,7 +1819,7 @@ class ProtoplanetApp {
     // orrery. No per-planet starfield here either (the panel stays
     // plain black).
     var detail = discDetailNow();
-    discCols = detail.cols; discRows = detail.rows;
+    discCols = detail.cols; discRows = detail.rows; discZoomSeen = zoom;
     for (var k = 0; k < discs.length; k++) {
       var d = discs[k];
       var gridEl = d.el.querySelector('.pp-grid');
@@ -1822,37 +1827,35 @@ class ProtoplanetApp {
         var discZoom = Math.min(P.stageScale(d.planet.stageIdx),
           P.ringFitZoom(d.planet.planet, d.planet.stageIdx, detail.cols, detail.rows));
         // The zoomed-in disc (Devon, Nov 12 — round 2, generalized
-        // round 3): the full-grid disc keeps the planet small even at
-        // 3x — stage 0's body is 18% of the grid, ~66px in a 359px
-        // box. A disc at high zoom renders CROPPED to the planet +
-        // its whole ring system and 1.4x bigger than its world
-        // footprint, so the zoomed planet fills the view with readable
-        // glyphs instead of sitting small in a big empty box — the
-        // same full planet the detail sheet shows. Round 2 this was
-        // selected-disc-only; round 3 it applies to ANY disc at 2x+,
-        // because a wheel-zoomed disc had the same half-detail gap
-        // vs its sheet. Same cost as the cozy path: both render the
-        // full grid once per disc per tick; the crop skips the
-        // downsample instead of adding work.
+        // round 3, blended round 4): the full-grid disc keeps the
+        // planet small even at 3x — stage 0's body is 18% of the
+        // grid, ~66px in a 359px box. A disc at high zoom renders
+        // CROPPED to the planet + its whole ring system and 1.4x
+        // bigger than its world footprint, so the zoomed planet fills
+        // the view with readable glyphs instead of sitting small in
+        // a big empty box — the same full planet the detail sheet
+        // shows. Round 2 this was selected-disc-only; round 3 it
+        // applied to ANY disc at 2x+, because a wheel-zoomed disc had
+        // the same half-detail gap vs its sheet. Round 4: the 2x
+        // switch itself was a cliff (43 -> 288 chars, +40% width in
+        // one step), so the crop now blends in over z=2..4 via
+        // P.discBlend — at blend 0 the output is exactly the cozy
+        // render, at blend 1 exactly the old cropped render, and
+        // neither the size nor the character count jumps in between.
+        // A selected disc jumps straight to blend 1 (its sheet is
+        // open). Same cost as the cozy path: both render the full
+        // grid once per disc per tick; the crop skips the downsample
+        // instead of adding work.
         var isSel = zoomed && selected && selected.seed === d.planet.seed && selected.generation === d.planet.generation;
-        if (zoom >= 2 || isSel) {
-          var zcrop = P.sidebarCrop(d.planet.planet, d.planet.stageIdx, 10, 2.5);
-          var zCellW = (detail.cols * detail.cellW * 1.4) / zcrop.cols;
-          var zCellH = zCellW * 1.8;
-          gridEl.style.setProperty('--pp-fs', cellFont(zCellW, zCellH) + 'px');
-          gridEl.style.setProperty('--pp-ch', zCellH.toFixed(2) + 'px');
-          gridEl.innerHTML = P.gridToHtml(
-            P.cropGrid(P.render(d.planet.planet, d.planet.stageIdx, 10, sec, discZoom, undefined, 0.5, true), zcrop), zCellW, zCellH);
-          continue;
-        }
-        // The cell size is constant now (the counter-scale handles
-        // the zoom), but keep the font-size vars in sync anyway.
-        gridEl.style.setProperty('--pp-fs', cellFont(detail.cellW, detail.cellH) + 'px');
-        gridEl.style.setProperty('--pp-ch', detail.cellH + 'px');
-        gridEl.innerHTML = P.gridToHtml(
-          // smokeScale 0.5 (Devon, Nov 12): stage-0 smoke stays close
-          // to the core in the system view instead of filling the frame.
-          P.renderCozy(d.planet.planet, d.planet.stageIdx, 10, sec, discZoom, detail.cols, detail.rows, undefined, 0.5, true), detail.cellW, detail.cellH);
+        var zcrop = P.sidebarCrop(d.planet.planet, d.planet.stageIdx, 10, 2.5);
+        var bl = P.discBlend(zoom, zcrop, detail, isSel);
+        var full = P.render(d.planet.planet, d.planet.stageIdx, 10, sec, discZoom, undefined, 0.5, true);
+        var cropped = P.cropGrid(full, bl.box);
+        var grid = (bl.outCols < bl.box.cols || bl.outRows < bl.box.rows)
+          ? P.downsampleGrid(cropped, bl.outCols, bl.outRows) : cropped;
+        gridEl.style.setProperty('--pp-fs', cellFont(bl.cellW, bl.cellH) + 'px');
+        gridEl.style.setProperty('--pp-ch', bl.cellH.toFixed(2) + 'px');
+        gridEl.innerHTML = P.gridToHtml(grid, bl.cellW, bl.cellH);
       }
     }
   }
@@ -1863,13 +1866,17 @@ class ProtoplanetApp {
   // re-renders only when the computed grid size actually changed by
   // >= 1 cell — the tick re-renders the discs every 450ms anyway, so
   // this is just the prompt path after a zoom gesture.
-  var discCols = 0, discRows = 0;
+  var discCols = 0, discRows = 0, discZoomSeen = 0;
   function discDetailNow() {
     return P.discDetail(zoom);
   }
   function refreshDiscDetail() {
     var d = discDetailNow();
-    if (d.cols !== discCols || d.rows !== discRows) renderDiscs();
+    // Round 4: the blended disc changes with zoom even when the cozy
+    // grid size doesn't (the blend itself moves), so a zoom change
+    // alone must re-render — otherwise the disc would lag a small
+    // scroll until the 450ms tick caught up.
+    if (d.cols !== discCols || d.rows !== discRows || zoom !== discZoomSeen) renderDiscs();
   }
 
   // --- detail sheet + zoom-to-planet -----------------------------------------
@@ -2227,8 +2234,13 @@ class ProtoplanetApp {
     if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
     // Round 3: cap 6x (was 3x) — discDetail needs 5.91x for the full
-    // 136 cols, and 3x only ever reached 69.
-    zoom = Math.max(0.3, Math.min(6, zoom * Math.exp(-e.deltaY * 0.001)));
+    // 136 cols, and 3x only ever reached 69. Round 4: halved the
+    // per-event step (was 0.001) — one mouse scroll fires a burst of
+    // wheel events, and at 0.001 a 3-event burst moved zoom x1.35,
+    // nearly doubling the sun's character count (chars scale as z^2)
+    // in a single scroll. At 0.0005 a 3-event burst is x1.16, sun
+    // chars x1.35 — the density changes, but it no longer jumps.
+    zoom = Math.max(0.3, Math.min(6, zoom * Math.exp(-e.deltaY * 0.0005)));
     applyTransform();
     scheduleZoomRefresh();
   }, { passive: false });
@@ -3101,7 +3113,7 @@ class ProtoplanetApp {
     else { mutEl.style.display = 'none'; }
     document.getElementById('meta').textContent =
       state.stageName + ' \\u00b7 Gen ' + state.generation + ' \\u00b7 grown from ' + state.chars + ' characters';
-    document.getElementById('seedText').textContent = state.seed;
+    document.getElementById('seedText').textContent = state.shareSeed || state.seed;
     document.getElementById('markdownBlock').textContent = state.markdown;
   }
 
@@ -3190,7 +3202,7 @@ class ProtoplanetApp {
     }
     ctx.fillStyle = '#e8b64c';
     ctx.font = '20px ' + FONT_STACK;
-    ctx.fillText(state.name + ' \\u00b7 seed ' + state.seed,
+    ctx.fillText(state.name + ' \\u00b7 seed ' + (state.shareSeed || state.seed),
       canvas.width / 2, Math.round(P.CONFIG.H * PNG_CELL_H) + 28);
     return canvas;
   }

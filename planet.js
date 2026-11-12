@@ -1973,6 +1973,37 @@ function sunDetail(zoom) {
   };
 }
 
+// Continuous disc-zoom blend (Devon, Nov 12 — round 4): the round-3
+// switch at 2x was a cliff — a wheel-zoomed disc jumped from 43 to 288
+// characters and +40% width in one step (z=1.9 cozy 44x30 -> z=2.0
+// cropped 100x52). The crop now blends in over z=2..4: the displayed
+// box shrinks from the full world to the planet crop, the output grid
+// grows from the cozy size to the full crop size, and the width factor
+// ramps 1.0 -> 1.4 — so neither the size nor the character count
+// jumps. At blend 0 the output is exactly the cozy render (same box,
+// same grid, same cells); at blend 1 it is exactly the old cropped
+// render (full detail, fills the view, matches the detail sheet).
+// `instant` (selected disc, sheet open) jumps straight to blend 1.
+// Returns { blend, box, outCols, outRows, wFactor, cellW, cellH }.
+function discBlend(zoom, zcrop, detail, instant) {
+  const z = (zoom && isFinite(zoom) && zoom > 0) ? zoom : 1;
+  const blend = instant ? 1 : Math.max(0, Math.min(1, (z - 2) / 2));
+  const box = {
+    x0: Math.round(zcrop.x0 * blend),
+    y0: Math.round(zcrop.y0 * blend),
+    cols: Math.round(CONFIG.W + (zcrop.cols - CONFIG.W) * blend),
+    rows: Math.round(CONFIG.H + (zcrop.rows - CONFIG.H) * blend),
+  };
+  // Output size interpolates the same way; clamped to the box so the
+  // crop is never upsampled (a smaller crop at high zoom just shows
+  // at 1:1 once the blend reaches it).
+  const outCols = Math.min(box.cols, Math.round(detail.cols + (box.cols - detail.cols) * blend));
+  const outRows = Math.min(box.rows, Math.round(detail.rows + (box.rows - detail.rows) * blend));
+  const wFactor = 1 + 0.4 * blend;
+  const cellW = (wFactor * DISC_WORLD_W * z) / outCols;
+  return { blend, box, outCols, outRows, wFactor, cellW, cellH: cellW * 1.8 };
+}
+
 // Sidebar crop (Devon, Nov 12 — F5 feedback, round 2): the Explorer
 // pet renders the planet big in a narrow frame — the full 136x76 grid
 // is mostly empty sky around a small planet. sidebarCrop returns the
@@ -2692,24 +2723,25 @@ function gridToHtml(grid, cellW, cellH) {
         // invisible, not disc. On a #050505 page the dark backgrounds
         // (#000000–#303030) are imperceptible, so baked-in renders
         // look exactly as before.
-        // BUT only for runs of 4+ cells (round 3, Nov 12 — black
-        // squares at stage 1+): the night side is speckled, not
-        // solid — pattern noise pushes the brightness across the
-        // space threshold cell by cell, so the terminator is a mix
-        // of dark spaces and dim glyphs. A 1-3 cell dark run painted
-        // with a background is a small sharp rectangle — a "black
-        // square" — visible at full-res sizes (the detail sheet)
-        // because #000000/#080808 edges read against #050505.
-        // Measured run histogram, stage 1 full render (5 frames):
-        // len 1: 105, 2: 30, 3: 13, 4: 10, 5: 2, 6: 2 — the speckle
-        // is 1-3 cells; the solid deep night side is 4+. Short runs
-        // stay transparent (on black they read as black anyway, no
-        // rectangle); the solid night side keeps its opaque
-        // background, so the starfield protection stands where the
-        // night side is actually solid. Stage 0 has no night side
-        // (0 dark-space cells), so this changes nothing there.
+        // BUT only for runs of 10+ cells (round 4, Nov 12 — the
+        // round-3 4+ rule left the solid night side painting: the
+        // night side is speckled, not solid — pattern noise pushes
+        // the brightness across the space threshold cell by cell, so
+        // the terminator is a mix of dark spaces and dim glyphs, and
+        // the leftover 4-8 cell runs ARE the black rectangles Devon
+        // sees (measured: 77 spans over 41 frames, all inside the
+        // disc, pure #000000, max length 8; a 4-cell run is 26.8x12px
+        // in a wide sidebar, matching his measured 28x13px bars).
+        // With the threshold at 10, no run paints at stage 1 (max
+        // observed length 8 over 41 frames) — and the 1-9 cell gaps
+        // stay transparent, which reads as black on black anyway, no
+        // rectangle. The deep night side keeps its opaque background
+        // wherever a run actually reaches 10 cells, so starfield
+        // protection stands where the night side is truly solid.
+        // Stage 0 has no night side (0 dark-space cells), so this
+        // changes nothing there.
         let bg = '';
-        if (/^ +$/.test(buf) && buf.length >= 4) {
+        if (/^ +$/.test(buf) && buf.length >= 10) {
           const [r, g, b] = ansi256ToRgb(cur);
           if ((r + g + b) / 3 < 96) bg = `;background:${ansi256ToHex(cur)}`;
         }
@@ -2741,7 +2773,7 @@ const API = {
   mutationDef, activeMutations, hasMutation, mutationLabel,
   collisionFrame, collisionPhase, collisionShardAt, COLLISION_TIMELINE, COLLISION_END,
   drawComet, drawMeteorShower, applyGlitch,
-  makeGrid, render, renderCozy, downsampleGrid, drawPlanet, drawRings, drawMoons, drawMiniSphere, starGrid, starfieldGrid, starfieldHtml, stageScale, ringFitZoom, discDetail, sunDetail, sidebarCrop, cropGrid,
+  makeGrid, render, renderCozy, downsampleGrid, drawPlanet, drawRings, drawMoons, drawMiniSphere, starGrid, starfieldGrid, starfieldHtml, stageScale, ringFitZoom, discDetail, sunDetail, discBlend, sidebarCrop, cropGrid,
   ansi256ToHex, ansi256ToRgb, shadeColor, blendHue, gridToHtml, gridToText,
   noise2, continentField, valueNoise, hash2, clamp, lerp,
 };
