@@ -771,11 +771,14 @@ class ProtoplanetApp {
   .ring.empty { border: 1px solid rgba(255, 255, 255, 0.16); }
   .ring.locked { border: 1px dashed rgba(255, 255, 255, 0.28); }
   /* Empty-ring hit area: a transparent ellipse over the ring line,
-     clickable to open the Archive picker. No persistent glyph — only
-     a faint gold outline on hover (Devon, Nov 11). */
+     clickable to open the Archive picker. No persistent glyph, and
+     NO gold outline on hover (Devon, Nov 12 — the gold ring sat on
+     top of the ring and read as a second ring doubling it). Hover
+     highlights the ring itself instead: the .ring gets .hot, which
+     brightens and thickens its own border. */
   .ringHit { position: absolute; border-radius: 50%; cursor: pointer;
     border: 1px solid transparent; background: transparent; }
-  .ringHit:hover { border-color: rgba(232, 182, 76, 0.45); }
+  .ring.hot { border-color: rgba(232, 182, 76, 0.95); border-width: 2px; }
   .lockLabel { position: absolute; transform: translate(-50%, -50%); font-size: 11px;
     color: rgba(255, 255, 255, 0.6); background: rgba(0, 0, 0, 0.65); padding: 3px 9px;
     border-radius: 10px; border: 1px dashed rgba(255, 255, 255, 0.3); white-space: nowrap; }
@@ -783,7 +786,6 @@ class ProtoplanetApp {
   .disc:hover { outline: 1px solid rgba(232, 182, 76, 0.7); outline-offset: 2px; border-radius: 4px; }
   .disc.sel { outline: 1px solid #e8b64c; outline-offset: 2px; border-radius: 4px; }
   .star { position: absolute; transform: translate(-50%, -50%); text-align: center; }
-  .starName { font-size: 11px; color: #ffd75f; text-shadow: 0 1px 3px #000; margin-top: 1px; }
   #orreryHint { position: absolute; left: 16px; bottom: 12px; font-size: 11px; opacity: .55;
     pointer-events: none; z-index: 4; }
   /* Detail modal on one side of the orrery. */
@@ -848,7 +850,7 @@ class ProtoplanetApp {
 <div id="orreryWrap">
   <div id="orrery"><div id="world"></div></div>
   <div id="detail" hidden></div>
-  <div id="orreryHint">Click a planet for details &middot; Click an empty ring to place a planet &middot; Drag to pan &middot; Scroll to zoom &middot; Scroll down for the Archive</div>
+  <div id="orreryHint">Click a planet for details &middot; Click an empty ring to place a planet &middot; Drag to pan &middot; Ctrl+Scroll to zoom &middot; Scroll down for the Archive</div>
 </div>
 <div id="pickerBanner" hidden></div>
 <section id="archive">
@@ -1195,9 +1197,10 @@ class ProtoplanetApp {
         if (ay2 >= 0 && ay2 < H && ax2 >= 0 && ax2 < W) grid[ay2][ax2] = fch;
       }
     }
-    grid[4][12] = ['*', 255]; grid[6][73] = ['+', 226];
-    grid[36][10] = ['.', 250]; grid[37][75] = ['*', 226];
-    grid[3][58] = ['.', 255]; grid[39][30] = ['+', 250];
+    // No fixed star specks around the sun (Devon, Nov 12): six
+    // stamped cells used to sit at fixed grid spots and never move —
+    // standing-still stars. The limb flames + halo already give the
+    // sun its edge life; nothing static is stamped here anymore.
     return P.gridToHtml(grid, 3.67, 6.6);
   }
 
@@ -1216,7 +1219,7 @@ class ProtoplanetApp {
     star.style.left = CX + 'px';
     star.style.top = CY + 'px';
     star.style.zIndex = '1';
-    star.innerHTML = '<div class="pp-grid" style="--pp-fs:6.6px;--pp-ch:6.6px">' + starHtml(sec) + '</div><div class="starName">Sol</div>';
+    star.innerHTML = '<div class="pp-grid" style="--pp-fs:6.6px;--pp-ch:6.6px">' + starHtml(sec) + '</div>';
     starGridEl = star.querySelector('.pp-grid');
     worldEl.appendChild(star);
     // Rings + planets.
@@ -1230,6 +1233,7 @@ class ProtoplanetApp {
       var R = ringRadius(i, total);
       var ring = document.createElement('div');
       ring.className = 'ring ' + (slot.unlocked ? (slot.planet ? 'open' : 'empty') : 'locked');
+      ring.setAttribute('data-ring', String(i)); // hover highlight finds its ring by this
       ring.style.left = (CX - R) + 'px';
       ring.style.top = (CY - R) + 'px';
       ring.style.width = (2 * R) + 'px';
@@ -1321,7 +1325,9 @@ class ProtoplanetApp {
       // goes into the sun instead, and the detail panel still shows
       // the full large render.
       if (gridEl) gridEl.innerHTML = P.gridToHtml(
-        P.renderCozy(d.planet.planet, d.planet.stageIdx, 10, sec, 1.0, 46, 24), 2.6, 6.12);
+        // smokeScale 0.5 (Devon, Nov 12): stage-0 smoke stays close
+        // to the core in the system view instead of filling the frame.
+        P.renderCozy(d.planet.planet, d.planet.stageIdx, 10, sec, 1.0, 46, 24, undefined, 0.5), 2.6, 6.12);
     }
   }
 
@@ -1356,7 +1362,9 @@ class ProtoplanetApp {
     // Full detail: the whole 136x76 render, not the cozy downsample —
     // this is the big version of the planet (Devon, Nov 11). Zoom 1.2
     // fills more of the frame; the cells fit the 360px panel.
-    var art = P.gridToHtml(P.render(planet.planet, planet.stageIdx, 10, sec, 1.2), 2.35, 4.23);
+    // smokeScale 0.5 (Devon, Nov 12): stage-0 smoke stays close to
+    // the core instead of filling the frame.
+    var art = P.gridToHtml(P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5), 2.35, 4.23);
     var html = '<button id="detailClose" class="ghost" data-action="close" title="Close">&times;</button>'
       + '<h2>' + esc(planet.name) + '</h2>'
       + '<p class="sub">' + esc(planet.summary) + ' &middot; Seed ' + planet.seed + '</p>'
@@ -1435,7 +1443,7 @@ class ProtoplanetApp {
     for (var i = 0; i < list.length; i++) {
       var p = list[i];
       var inSys = slotOf(p.seed, p.generation) >= 0;
-      var thumb = P.gridToHtml(P.renderCozy(p.planet, p.stageIdx, 10, 5, 1.0, 34, 19), 3.4, 6.12);
+      var thumb = P.gridToHtml(P.renderCozy(p.planet, p.stageIdx, 10, 5, 1.0, 34, 19, undefined, 0.5), 3.4, 6.12);
       html += '<div class="card' + (inSys ? ' inSystem' : '') + (pickerRing !== null ? ' picking' : '') + '"'
         + ' data-seed="' + p.seed + '" data-gen="' + p.generation + '">'
         + '<div class="thumb"><div class="pp-grid" style="--pp-fs:6.12px;--pp-ch:6.12px">' + thumb + '</div></div>'
@@ -1522,6 +1530,10 @@ class ProtoplanetApp {
     panning = null;
   });
   orreryEl.addEventListener('wheel', function (e) {
+    // Ctrl+scroll (Cmd+scroll on Mac) zooms; a plain scroll lets the
+    // page scroll down to the Archive (Devon, Nov 12 — plain scroll
+    // used to zoom, so you could never scroll down to the index).
+    if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
     zoom = Math.max(0.3, Math.min(3, zoom * Math.exp(-e.deltaY * 0.001)));
     applyTransform();
@@ -1552,11 +1564,23 @@ class ProtoplanetApp {
       startPicker(+hit.getAttribute('data-ring'));
     }
   });
+  // Ring hover highlight (Devon, Nov 12): hovering an empty ring
+  // highlights the ring ITSELF — the .ring gets .hot, which brightens
+  // and thickens its own border. The old gold outline on the hit
+  // element sat on top of the ring and read as a second ring.
+  function setRingHot(idx, on) {
+    var r = worldEl.querySelector('.ring[data-ring="' + idx + '"]');
+    if (r) r.classList.toggle('hot', !!on);
+  }
   worldEl.addEventListener('mouseover', function (e) {
     if (e.target.closest && e.target.closest('.disc')) hoverPlanet = true;
+    var hit = e.target.closest ? e.target.closest('.ringHit') : null;
+    if (hit) setRingHot(+hit.getAttribute('data-ring'), true);
   });
   worldEl.addEventListener('mouseout', function (e) {
     if (e.target.closest && e.target.closest('.disc')) hoverPlanet = false;
+    var hit = e.target.closest ? e.target.closest('.ringHit') : null;
+    if (hit && !(e.relatedTarget && hit.contains(e.relatedTarget))) setRingHot(+hit.getAttribute('data-ring'), false);
   });
   detailEl.addEventListener('click', function (e) {
     var t = e.target.closest ? e.target.closest('[data-action]') : null;
@@ -1642,7 +1666,7 @@ class ProtoplanetApp {
         if (planet) {
           var gridEl = artEl.querySelector('.pp-grid');
           if (gridEl) gridEl.innerHTML = P.gridToHtml(
-            P.render(planet.planet, planet.stageIdx, 10, sec, 1.2), 2.35, 4.23);
+            P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5), 2.35, 4.23);
         }
       }
     }

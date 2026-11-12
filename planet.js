@@ -841,13 +841,19 @@ function buildSmoke(seed) {
 // core, dissolving with distance. Edges are frayed by seeded noise
 // so it reads as haze, not a solid chunk. Only the dim end of the
 // ramp ('.' and ',') and dim greys — never a saturated color.
-function smokeCellAt(x, y, r, radN, smoke, sec, seed, far) {
+// `smokeScale` (Nov 12, Devon — the smoke filled the whole frame):
+// scales how far the tips reach. 1.0 = the old reach (tips to 2.0x
+// the disc radius); 0.5 = tips to ~1.3x, a tight haze hugging the
+// core. The Solar System panel passes 0.5; everything else defaults
+// to 1.0 and is unchanged.
+function smokeCellAt(x, y, r, radN, smoke, sec, seed, far, smokeScale) {
+  if (smokeScale === undefined) smokeScale = 1;
   const { CX, CY } = CONFIG;
   const ox = x - CX, oy = y - CY;
   for (const p of smoke) {
     if (far !== null && p.far !== far) continue;
     const h = pymod(sec * p.speed + p.phase, 1.0);
-    const tipN = 0.6 + h * p.reach;
+    const tipN = 0.6 + h * p.reach * smokeScale;
     if (radN > tipN) continue; // the plume hasn't grown this far yet
     const co = Math.cos(p.ang), si = Math.sin(p.ang);
     const cl = Math.sqrt(co * co + 0.25 * si * si);
@@ -943,8 +949,9 @@ function coreMarkerAt(marker, spin, sec, r) {
   };
 }
 
-function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts) {
+function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts, smokeScale) {
   if (stage0Style === undefined) stage0Style = 'exploded';
+  if (smokeScale === undefined) smokeScale = 1;
   const { CX, CY, RAMP } = CONFIG;
   const mode = st.mode;
   // The mutations on this planet — all of them, from stage 0 (birth
@@ -1119,7 +1126,7 @@ function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts) {
             // smoke visibly leaves the sphere instead of appearing
             // out at the ring. No ring inside this annulus, so depth
             // doesn't apply here; both sides draw.
-            const sc = smokeCellAt(x, y, r, radN, smoke, sec, seed, null);
+            const sc = smokeCellAt(x, y, r, radN, smoke, sec, seed, null, smokeScale);
             if (sc) grid[y][x] = sc;
             continue;
           }
@@ -1127,7 +1134,7 @@ function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts) {
           // (top half) is drawn BEFORE the ring, so the fragments and
           // the debris ring occlude it — it passes BEHIND the ring.
           const key = y * CONFIG.W + x;
-          const farCell = smokeCellAt(x, y, r, radN, smoke, sec, seed, true);
+          const farCell = smokeCellAt(x, y, r, radN, smoke, sec, seed, true, smokeScale);
           if (farCell) { grid[y][x] = farCell; farSmoke.add(key); }
           // Fragments: glowing chunks flying outward from the core
           // AND orbiting around it — their angle advances with sec,
@@ -1212,7 +1219,7 @@ function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts) {
           // may cover fragment and debris-ring cells, but never a
           // sparkle. This is the depth cue on the near side: the
           // smoke crosses over the ring instead of peeling off it.
-          const nearCell = smokeCellAt(x, y, r, radN, smoke, sec, seed, false);
+          const nearCell = smokeCellAt(x, y, r, radN, smoke, sec, seed, false, smokeScale);
           if (nearCell && (grid[y][x][1] === null || fragCells.has(key) || debrisCells.has(key))) {
             grid[y][x] = nearCell;
           }
@@ -1757,9 +1764,10 @@ function applyGlitch(grid, sec, planet) {
 // stageIdx 0-7, t = seconds into the stage (morphs from the previous
 // stage over 3s), sec = global running clock (drives flicker/drift).
 // Returns a grid of [char, ansiColor] cells.
-function render(planet, stageIdx, t, sec, zoom, stage0Style) {
+function render(planet, stageIdx, t, sec, zoom, stage0Style, smokeScale) {
   if (zoom === undefined) zoom = 1.0;
   if (stage0Style === undefined) stage0Style = 'exploded';
+  if (smokeScale === undefined) smokeScale = 1;
   const st = STAGES[stageIdx];
   const prev = STAGES[(stageIdx - 1 + STAGES.length) % STAGES.length];
   const m = clamp(t / 3.0); // smooth morph from the previous stage
@@ -1773,7 +1781,7 @@ function render(planet, stageIdx, t, sec, zoom, stage0Style) {
   const muts = activeMutations(planet);
   const grid = starGrid(sec, planet.atmosphere);
   if (ring > 0.05) drawRings(grid, radius, ring, sec, false, planet, muts);
-  drawPlanet(grid, st, radius, sec, planet, fade, stage0Style, muts);
+  drawPlanet(grid, st, radius, sec, planet, fade, stage0Style, muts, smokeScale);
   if (ring > 0.05) drawRings(grid, radius, ring, sec, true, planet, muts);
   drawMoons(grid, radius, sec, planet, muts);
   // Sky mutations fly in front of everything (they are in the sky,
@@ -1833,10 +1841,10 @@ function downsampleGrid(grid, outW, outH) {
 // instead of cropping it or shrinking the glyphs to pixels. This is
 // what the Space's Cozy mode and the VS Code sidebar's small-window
 // render should use (the sidebar wiring itself is piece 4).
-function renderCozy(planet, stageIdx, t, sec, zoom, outW, outH, stage0Style) {
+function renderCozy(planet, stageIdx, t, sec, zoom, outW, outH, stage0Style, smokeScale) {
   if (outW === undefined) outW = 68;
   if (outH === undefined) outH = 38;
-  return downsampleGrid(render(planet, stageIdx, t, sec, zoom, stage0Style), outW, outH);
+  return downsampleGrid(render(planet, stageIdx, t, sec, zoom, stage0Style, smokeScale), outW, outH);
 }
 
 // ---------------------------------------------------------------------------

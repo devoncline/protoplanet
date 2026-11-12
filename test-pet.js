@@ -900,10 +900,10 @@ check('sidebar: meta is only the grown-from line',
 check('sidebar: XP bar has a visible track and a numbers label',
   extSrc.includes('#xplabel') && extSrc.includes("getElementById('xplabel')"));
 check('ext: orrery discs are small again (46x24 cozy, not 68x38)',
-  extSrc.includes('P.renderCozy(d.planet.planet, d.planet.stageIdx, 10, sec, 1.0, 46, 24), 2.6, 6.12')
+  extSrc.includes('P.renderCozy(d.planet.planet, d.planet.stageIdx, 10, sec, 1.0, 46, 24, undefined, 0.5), 2.6, 6.12')
   && !extSrc.includes('68, 38), 3.4, 6.12'));
 check('ext: detail panel uses the full render, not the cozy downsample',
-  extSrc.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.2), 2.35, 4.23'));
+  extSrc.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5), 2.35, 4.23'));
 check('ext: detail panel no longer uses the cozy art',
   !extSrc.includes('4.4, 7.92'));
 check('ext: card mutation badge keeps the full MUTATION label',
@@ -915,6 +915,78 @@ check('ext: discs share one z-index — no depth sorting (separation is geometri
 check('ext: no name labels on the orrery', !extSrc.includes('discName'));
 check('ext: no "+" buttons on empty rings (ringHit hit-areas instead)',
   !extSrc.includes('ringBtn') && extSrc.includes("className = 'ringHit'"));
+
+// 13l. Batch #9 (Devon, Nov 11, 11:36 PM — queued notes, fixed Nov 12):
+// (1) plain scroll scrolls the page to the Archive instead of
+// zooming; (2) hovering a ring highlights the ring itself, no
+// separate gold ring drawn above it; (3) no 'Sol' label under the
+// sun; (4) no standing-still stars around the sun; (5) Shattered
+// birth smoke stays close to the core in the solar-system renders.
+// (1) Wheel gating: the handler returns before preventDefault on a
+// plain wheel, so the page scrolls; only Ctrl/Cmd+scroll zooms.
+(function () {
+  const wheelSrc = extSrc.slice(extSrc.indexOf("addEventListener('wheel'"), extSrc.indexOf("addEventListener('wheel'") + 600);
+  check('ext: plain wheel does not zoom (returns before preventDefault)',
+    wheelSrc.indexOf('if (!e.ctrlKey && !e.metaKey) return;') !== -1
+    && wheelSrc.indexOf('if (!e.ctrlKey && !e.metaKey) return;') < wheelSrc.indexOf('e.preventDefault()'),
+    wheelSrc.slice(0, 220));
+  check('ext: ctrl/cmd+wheel still zooms',
+    wheelSrc.includes('zoom = Math.max(0.3, Math.min(3, zoom * Math.exp(-e.deltaY * 0.001)))'));
+  check('ext: zoom hint names Ctrl+Scroll', extSrc.includes('Ctrl+Scroll to zoom'));
+})();
+// (2) Ring hover highlights the ring itself.
+check('ext: no separate gold ring drawn above a hovered ring',
+  !extSrc.includes('.ringHit:hover'));
+check('ext: hovered ring brightens and thickens itself (.ring.hot)',
+  extSrc.includes('.ring.hot { border-color: rgba(232, 182, 76, 0.95); border-width: 2px; }'));
+check('ext: ring hover is driven by mouseover/mouseout on the hit areas',
+  extSrc.includes("worldEl.addEventListener('mouseover'") && extSrc.includes('setRingHot('));
+// (3) No 'Sol' text under the sun.
+check('ext: no Sol label under the sun',
+  !extSrc.includes('starName') && !extSrc.includes("'Sol'"));
+// (4) No standing-still stars stamped around the sun: the six fixed
+// speck assignments are gone from starHtml.
+(function () {
+  const starSrc = extSrc.slice(extSrc.indexOf('function starHtml(sec) {'), extSrc.indexOf('// --- orrery'));
+  const specks = ['grid[4][12]', 'grid[6][73]', 'grid[36][10]', 'grid[37][75]', 'grid[3][58]', 'grid[39][30]'];
+  check('ext: no fixed star specks stamped around the sun',
+    specks.every((s) => !starSrc.includes(s)),
+    specks.filter((s) => starSrc.includes(s)).join(', ') || 'none remain');
+})();
+// (5) Shattered-birth smoke stays close to the core in the solar
+// system (smokeScale 0.5): plume tips reach ~1.3x radius, not ~2.0x,
+// so the haze no longer fills the whole frame. Measured on the real
+// smokeCellAt, along each plume's axis over 4 seconds.
+(function () {
+  const seed = 12345, r = 18, CX = 68, CY = 38;
+  const smoke = Planet.buildSmoke(seed);
+  function cellAt(radN, ang, sec, scale) {
+    const x = Math.round(CX + radN * r * Math.cos(ang));
+    const y = Math.round(CY + (radN * r * Math.sin(ang)) / 2);
+    return Planet.smokeCellAt(x, y, r, radN, smoke, sec, seed, null, scale);
+  }
+  let farFull = 0, farHalf = 0, nearHalf = 0;
+  for (const p of smoke) {
+    for (let sec = 0; sec <= 4; sec += 0.05) {
+      if (cellAt(1.6, p.ang, sec, 1.0)) farFull++;
+      if (cellAt(1.6, p.ang, sec, 0.5)) farHalf++;
+      if (cellAt(1.2, p.ang, sec, 0.5)) nearHalf++;
+    }
+  }
+  check('smoke: at full scale the haze reaches 1.6x radius (the old look)',
+    farFull > 0, farFull + ' hits at radN 1.6, scale 1.0');
+  check('smoke: at the solar-system scale nothing reaches 1.6x radius',
+    farHalf === 0, farHalf + ' hits at radN 1.6, scale 0.5');
+  check('smoke: the haze still exists close in at the solar-system scale',
+    nearHalf > 0, nearHalf + ' hits at radN 1.2, scale 0.5');
+  check('ext: solar-system renders pass the reduced smoke scale (orrery, detail, archive, tick)',
+    extSrc.includes('P.renderCozy(d.planet.planet, d.planet.stageIdx, 10, sec, 1.0, 46, 24, undefined, 0.5)')
+    && extSrc.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5)')
+    && extSrc.includes('P.renderCozy(p.planet, p.stageIdx, 10, 5, 1.0, 34, 19, undefined, 0.5)'));
+  check('ext: sidebar pet and prestige renders keep the full smoke (default scale)',
+    extSrc.includes('P.render(state.planet, state.stageIdx, t, sec), cellW, cellH)')
+    && extSrc.includes('P.renderCozy(p.planet, p.stageIdx, 10, 5, 1.0, 34, 19), 3.4, 6.12)'));
+})();
 
 // 13j. No overlap (Devon, Nov 11 — he takes back the overlap note:
 // the v2 overlap looked like a mess). The geometry keeps discs clear:
