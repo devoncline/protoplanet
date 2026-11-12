@@ -504,6 +504,13 @@ class ProtoplanetApp {
     Logic.startFirstPlanet(this.state, Logic.randomSeed(), pick ? pick.id : undefined);
     this.saveNow();
     this.pushState();
+    // First run: actually SHOW the planet. The sidebar view is only
+    // created when the user opens it — without this the pick looks
+    // like it did nothing: the state is saved, but postState() drops
+    // the message because the webview doesn't exist yet. Focusing the
+    // view resolves it, the webview sends 'ready', and the provider
+    // posts the fresh state, so the hatch is visible right away.
+    await this.showPet();
   }
 
   // -- pushing state to the UI ------------------------------------------------
@@ -603,9 +610,13 @@ class ProtoplanetApp {
     letter-spacing: .12em; text-transform: uppercase; color: #ffd75f;
     background: rgba(255, 215, 95, .12); border: 1px solid rgba(255, 215, 95, .55);
     border-radius: 3px; padding: 2px 7px; margin: 0 0 8px; }
-  #xpbar { height: 6px; background: var(--vscode-progressBar-background, #333);
-    border-radius: 3px; overflow: hidden; }
+  /* The XP bar has to READ as a bar, not a black strip (Devon, Nov 11):
+     at 0 XP the fill is empty, so the track itself needs a visible
+     border — plus a label with the numbers, so there's no guessing. */
+  #xpbar { height: 10px; background: #1a1a1a; border: 1px solid rgba(232, 182, 76, 0.5);
+    border-radius: 5px; overflow: hidden; }
   #xpfill { height: 100%; background: #e8b64c; width: 0%; }
+  #xplabel { font-size: 11px; color: #e8b64c; opacity: .9; margin: 4px 0 6px; }
   #meta { font-size: 11px; opacity: .7; margin-top: 6px; line-height: 1.5; }
 </style>
 </head>
@@ -615,6 +626,7 @@ class ProtoplanetApp {
 <div id="mutationLabel" style="display:none"></div>
 <p id="stageDesc">Pick a starter and start typing &mdash; every character grows it.</p>
 <div id="xpbar"><div id="xpfill"></div></div>
+<div id="xplabel">XP 0 / 100</div>
 <div id="meta"></div>
 <script nonce="${nonce}" src="${planetJsUri}"></script>
 <script nonce="${nonce}">
@@ -635,7 +647,7 @@ class ProtoplanetApp {
   // colors, rings and motion still read. (A full-size view is piece 4.)
   function layout() {
     const avail = Math.max(50, wrapEl.clientWidth - 12);
-    const scale = avail / (Planet.CONFIG.W * Planet.CONFIG.CELL_W); // full scale = grid width in px
+    const scale = avail / (P.CONFIG.W * P.CONFIG.CELL_W); // full scale = grid width in px
     const newW = Math.max(1, +(10 * scale).toFixed(2));
     const newH = Math.max(1.8, +(18 * scale).toFixed(2));
     if (newW === cellW && newH === cellH && root.style.getPropertyValue('--pp-fs')) return;
@@ -668,17 +680,17 @@ class ProtoplanetApp {
     const mutEl = document.getElementById('mutationLabel');
     if (msg.mutationLabel) { mutEl.textContent = msg.mutationLabel; mutEl.style.display = 'inline-block'; }
     else { mutEl.style.display = 'none'; }
-    document.getElementById('stageDesc').textContent = msg.stageDesc;
+    // No flavor text in the sidebar (Devon, Nov 11): the stage
+    // description and the world details (terrain, ring, moons, seed,
+    // minerals) live in the detail panel / Pokedex. The sidebar keeps
+    // the stage line, the grown-from line, and the XP bar only. The
+    // pre-hatch guidance above stays until the first state arrives.
+    document.getElementById('stageDesc').style.display = 'none';
     const span = Math.max(1, msg.nextXp - msg.stageStart);
     const pct = Math.max(0, Math.min(100, (msg.xp - msg.stageStart) / span * 100));
     document.getElementById('xpfill').style.width = pct.toFixed(1) + '%';
-    let meta = 'Grown from ' + msg.chars + ' characters \\u00b7 ' + msg.summary +
-      ' \\u00b7 Seed ' + msg.planet.seed;
-    if (msg.minerals && msg.minerals.total > 0) {
-      meta += ' \\u00b7 \\u25c6 ' + msg.minerals.total + ' mineral' + (msg.minerals.total === 1 ? '' : 's');
-    }
-    if (msg.minerals && msg.minerals.fed) meta += ' \\u00b7 Fed: ' + msg.minerals.fed;
-    document.getElementById('meta').textContent = meta;
+    document.getElementById('xplabel').textContent = 'XP ' + msg.xp + ' / ' + msg.nextXp;
+    document.getElementById('meta').textContent = 'Grown from ' + msg.chars + ' characters';
   });
 
   // Animate: ~7 fps is plenty for the flicker/drift illusion.
@@ -884,6 +896,7 @@ class ProtoplanetApp {
   var selected = null; // { seed, generation } of the planet in the detail panel
   var searchText = '', sortMode = 'newest';
   var lastSig = '', discs = []; // [{ el, planet, ring }]
+  var starGridEl = null; // the star's .pp-grid — re-rendered on the tick so the sun churns + flares
   var orreryEl = document.getElementById('orrery');
   var worldEl = document.getElementById('world');
   var detailEl = document.getElementById('detail');
@@ -953,45 +966,239 @@ class ProtoplanetApp {
 
   // --- star (same ASCII look as the planets: a shaded mini sphere) ------
   // A hero, not a dot (Devon, Nov 11): a big bright sphere, clearly
-  // dominating the center. NO stamped white-hot core — the old 3x3
-  // block of '@' in color 231 read as a confusing little white
-  // RECTANGLE in the middle (Devon, Nov 11). Instead the star gets
-  // real surface detail: granulation (bright cells and dark lanes,
-  // seeded value noise, so the texture is stable), a bright core that
-  // is TEXTURED (its brightest glyphs vary granule by granule — never
-  // a solid block), and a faint warm halo just outside the limb.
-  function starHtml() {
-    var W = 56, H = 28, mx = 28, my = 14, mr = 14;
+  // THE SUN, dominating the center — granulated, warm halo, and ALIVE:
+  // it was frozen while the planets orbited. Now the granulation CHURNS —
+  // each granule brightens as hot plasma rises and dims as it cools
+  // and sinks, on its own lifecycle, so the surface visibly turns
+  // over instead of pulsing as one — plus SOLAR FLARES erupting from
+  // the limb on a long deterministic cycle, and little limb flames
+  // that FIZZLE — each one flickers on its own fast phase, so the
+  // outline is alive too (Devon, Nov 11: the fringe was frozen in
+  // every clip).
+  // Rotation is deliberately NOT forced: the churn + flares are the
+  // motion, and they read more like a real star than a spinning
+  // painted ball. Finer grid (84x42, 3.67px cells) at the same display
+  // size, so the granulation reads detailed.
+  // BRIGHT, not burnt orange (Devon, Nov 11 — v2 read dark and flat):
+  // lifted value floor + gamma lift, so the disc reads bright yellow
+  // with white-ish yellow (229) peaks on the granules. The brightness
+  // lives in the granulation highlights — NO separate bright core at
+  // all (the old inner-disc branch painted a big bright disc that
+  // read as a confusing white circle in the middle, Devon, Nov 11),
+  // and NO stamped white-hot core either: brightest color anywhere
+  // on the sun is 229, never 231.
+  // THREE-DIMENSIONAL, not a flat disc (Devon, Nov 11 — v2 read like
+  // three flat colors): strong radial limb darkening — bright center
+  // falling off to a darker limb — plus an extra fade in the outermost
+  // rim, so the disc reads as a sphere with faded edges, like the
+  // planets. The shading is a graded warm ramp in small steps, not
+  // bright-yellow / dark-red jumps — the old patchy camo look.
+  // RARE flares (Devon, Nov 11 — three in 6s read as constant): each
+  // big flare erupts for ~2.2s on a long period (47/63/89s), so the
+  // sites erupt roughly once every 20s between them — a short look
+  // usually catches none, a longer watch catches one.
+  function starHtml(sec) {
+    if (sec === undefined) sec = 0;
+    var W = 84, H = 42, mx = 42, my = 21, mr = 21;
     var grid = [];
     for (var y = 0; y < H; y++) { var row = []; for (var x = 0; x < W; x++) row.push([' ', null]); grid.push(row); }
-    P.drawMiniSphere(grid, mx, my, mr, 226, 7, false, 1, 0.30);
+    // Smooth granule field: bilinear interpolation of the sin-hash
+    // noise, so granules have soft edges instead of hard 2-cell
+    // blocks (part of the old camo look).
+    function smoothGn(u, v) {
+      var ix = Math.floor(u), iy = Math.floor(v);
+      var fx = u - ix, fy = v - iy;
+      var sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+      var a = P.noise2(ix, iy, 7), b = P.noise2(ix + 1, iy, 7);
+      var c = P.noise2(ix, iy + 1, 7), d = P.noise2(ix + 1, iy + 1, 7);
+      return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+    }
+    // FLAME TONGUES on the disc edge itself (Devon, Nov 11 — batch
+    // #7): the disc's silhouette bumps were frozen — the old edge was
+    // a slow +/-1-cell sin wobble (invisible at this scale) and the
+    // bright rim pattern is pinned to the static granulation field,
+    // so the same bumps (left, top-left, bottom-left, bottom-right)
+    // sat in the same spots in every clip. Now the edge carries a
+    // population of little flames: each flame is a tongue of the disc
+    // edge that grows out and dies back on its own few-second
+    // lifecycle, at an angle that DRIFTS while it lives — so new
+    // flames pop out at different places around the rim, like the
+    // ball is on fire. Every flame is DIFFERENT (Devon, Nov 11
+    // refinement — not one bump shape stamped around the rim): each
+    // has its own height (taller/shorter), width (wider/narrower),
+    // tip profile (needle vs broad) and lifecycle, so the silhouette
+    // shows varied teardrop tongues, not identical copies. All
+    // shading below is measured against the LOCAL edge (d2rel), so
+    // the rim fade and the halo fringe hug the moving flames. Same
+    // style/colors/granulation as before — only the silhouette
+    // changes. Big flares are untouched (still rare).
+    // a0: base angle (screen space, y down — same as the flares).
+    // drift: rad/s the flame travels around the rim while it lives.
+    // period/phase: its grow-die lifecycle. h: max height in rho
+    // (0.26 ≈ 5 cells out sideways). w: half-width in radians.
+    // p: tip profile exponent (1.0 = straight triangle, 2.0 = needle).
+    // CALMED DOWN (Devon, Nov 11 — batch #8): v7 was "a little too
+    // violent — too many flames happening at once and too quick".
+    // 7 flames -> 4, lifecycles roughly doubled (5.4-9.8s), drift
+    // halved, so fewer flames are up at once and each one grows,
+    // peaks and dies slowly. They still vary in shape and still pop
+    // out at different places — just calmer. Phases are staggered
+    // so the peaks don't bunch up.
+    var FLAMES = [
+      { a0: 0.4, drift: 0.05, period: 6.2, phase: 0.18, h: 0.24, w: 0.20, p: 1.0 },
+      { a0: 1.9, drift: -0.04, period: 8.6, phase: 0.12, h: 0.14, w: 0.12, p: 2.0 },
+      { a0: 3.6, drift: 0.06, period: 5.4, phase: 0.94, h: 0.32, w: 0.24, p: 1.3 },
+      { a0: 5.3, drift: -0.03, period: 9.8, phase: 0.34, h: 0.38, w: 0.30, p: 1.8 },
+    ];
+    function edgeRadius(th) {
+      var r = 1;
+      for (var k = 0; k < FLAMES.length; k++) {
+        var fl = FLAMES[k];
+        var u = ((sec / fl.period + fl.phase) % 1 + 1) % 1;
+        var env = Math.pow(Math.sin(Math.PI * u), 1.5); // grow -> peak -> die
+        if (env < 0.02) continue;
+        var fa = fl.a0 + fl.drift * sec;
+        var dth = th - fa;
+        while (dth > Math.PI) dth -= 2 * Math.PI;
+        while (dth < -Math.PI) dth += 2 * Math.PI;
+        var ad = Math.abs(dth);
+        if (ad >= fl.w) continue;
+        var shape = 1 - ad / fl.w; // triangular: pointed tip, wide base
+        var tongue = fl.h * env * Math.pow(shape, fl.p);
+        if (1 + tongue > r) r = 1 + tongue;
+      }
+      return r;
+    }
     for (var y = 0; y < H; y++) {
       for (var x = 0; x < W; x++) {
         var sx = (x - mx) / mr, sy = (y - my) / mr;
         var d2 = sx * sx + (2 * sy) * (2 * sy);
-        if (d2 <= 1) {
-          // Granulation: 2-cell granules, bright cells vs dark lanes.
-          var gn = P.noise2(Math.floor(x / 2), Math.floor(y / 2), 7);
-          if (d2 < 0.25) {
-            // Bright core — textured, never a solid block: the glyph
-            // and color vary per granule, so no rectangle ever forms.
-            grid[y][x] = gn > 0.66 ? ['@', 229] : (gn > 0.33 ? ['#', 230] : ['*', 226]);
-          } else if (gn > 0.72) {
-            grid[y][x] = ['*', 229];
-          } else if (gn < 0.28) {
-            grid[y][x] = ['.', 202];
+        var d2rel = d2 / Math.pow(edgeRadius(Math.atan2(2 * sy, sx)), 2);
+        if (d2rel <= 1) {
+          // Granulation: one treatment across the whole disc, no
+          // separate core. Churn: each granule's lifecycle phase
+          // comes from its own noise value, so neighbours are out of
+          // phase — the surface turns over granule by granule (~7s
+          // cycle). A fine detail layer keeps granules from reading
+          // as flat blocks.
+          var gn = smoothGn(x / 2.5, y / 2.5);
+          var dn = smoothGn(x / 1.15 + 47, y / 1.15 + 31);
+          // Lifecycle phase from its OWN noise field — NOT from gn:
+          // coupling life to gn made the brightest granules
+          // systematically dim (measured: zero 229 cells at sec=6,
+          // 18% at sec=3). Decoupled, the bright peaks are reliably
+          // present at every moment.
+          var ph = smoothGn(x / 2.5 + 31, y / 2.5 + 17);
+          var life = 0.5 + 0.5 * Math.sin(sec * 0.9 + ph * 6.283);
+          var sz = Math.sqrt(Math.max(0, 1 - d2rel));
+          // Bright + dimensional (Devon, Nov 11 — v2 was too dark and
+          // too flat): lifted granule floor (g) and gamma lift keep
+          // the disc bright yellow with 229 peaks; strong radial limb
+          // darkening (r) plus an extra fade in the outermost rim
+          // (edge) make it read as a sphere with faded edges, not a
+          // flat disc. The brightest peaks are white-ish yellow
+          // (229) — but the brightness lives in the granulation,
+          // never a stamped core.
+          var g = 0.30 + 0.70 * gn;
+          var l = 0.60 + 0.40 * life;
+          var r = 0.50 + 0.50 * sz;
+          var edge = d2rel > 0.8 ? 1 - (d2rel - 0.8) * 2.5 : 1;
+          var v = Math.pow(g * l * r * edge * (0.94 + 0.12 * dn), 0.7);
+          // Graded warm ramp, small steps — neighbours blend instead
+          // of jumping. Bright bands use DENSE glyphs ('#', '@') so
+          // the sun reads solid and blazing, not a field of dots;
+          // dark lanes bottom out at 208 (not 202) except in the
+          // darkest rim lanes, and 229 '@' crowns the brightest
+          // granule peaks.
+          grid[y][x] = v < 0.18 ? ['.', 202]
+            : v < 0.32 ? [':', 208]
+            : v < 0.46 ? ['+', 214]
+            : v < 0.60 ? ['*', 220]
+            : v < 0.74 ? ['#', 226]
+            : v < 0.84 ? ['#', 229]
+            : ['@', 229];
+        } else if (d2rel <= 1.3) {
+          // LIMB FLAMES — tongues of flame that TRAVEL around the
+          // rim (Devon, Nov 11 — batch #6): flickering in place
+          // (batch #4) and a +/-1-cell wobble (batch #5) both left
+          // the same bumps sitting in the same spots — left,
+          // bottom-left, top-left, bottom-right — in every clip.
+          // The flame sites were a fixed spatial noise field, so
+          // the bumps could only blink, never move: measured
+          // before the fix, the top bump angles (165deg, 205deg,
+          // 335deg) were identical at sec=0/2/6/12/14 and the
+          // lit-angle sets overlapped 0.60-0.75 (Jaccard). Now the
+          // tongue field is sampled on a circle in noise space
+          // that drifts with time, so new tongues pop out at
+          // different angles while old ones die away — like the
+          // ball is on fire. Same look as before — small warm
+          // specks just outside the limb, one cell, '.'-dominant
+          // — only the positions travel. The big flares are
+          // untouched (still rare), as is the granulation churn.
+          var ang = Math.atan2(2 * sy, sx);
+          var tu = Math.cos(ang) * 11.5 + sec * 0.55;
+          var tv = Math.sin(ang) * 11.5 + sec * 0.35;
+          var fn = smoothGn(tu, tv);
+          if (fn > 0.60) {
+            var fph = smoothGn(tu + 31, tv + 17);
+            var ff = 0.5 + 0.5 * Math.sin(sec * 3.1 + fph * 6.283);
+            var fd = 1 - (d2rel - 1) / 0.3 * 0.35; // outer fringe slightly dimmer — stays tight to the limb
+            var fv = ff * fd;
+            if (fv > 0.95) grid[y][x] = ['*', 226];
+            else if (fv > 0.85) grid[y][x] = ['+', 220];
+            else if (fv > 0.45) grid[y][x] = ['.', 214];
+            else if (fv > 0.25) grid[y][x] = ['.', 202];
           }
-        } else if (d2 <= 1.3) {
-          // Faint warm halo just outside the limb.
-          var hn = P.noise2(Math.floor(x / 2), Math.floor(y / 2), 77);
-          if (hn > 0.72) grid[y][x] = ['.', hn > 0.88 ? 214 : 202];
         }
       }
     }
-    grid[3][8] = ['*', 255]; grid[4][49] = ['+', 226];
-    grid[24][7] = ['.', 250]; grid[25][50] = ['*', 226];
-    grid[2][39] = ['.', 255]; grid[26][20] = ['+', 250];
-    return P.gridToHtml(grid, 5.5, 9.9);
+    // Solar flares: three fixed limb sites, each erupting on its own
+    // LONG deterministic cycle (angle in screen space, y down). A big
+    // flare is a RARE event (Devon, Nov 11): each eruption lasts
+    // ~2.2s and each site erupts only once per 47/63/89s, so across
+    // the three sites a flare shows up roughly once every 20s — a
+    // short look usually catches none. Timed so a 15s clip catches
+    // the left-limb flare ~9s in.
+    var FLARES = [
+      { a: 3.5, period: 47, start: 9 },
+      { a: -1.1, period: 63, start: 35 },
+      { a: 2.2, period: 89, start: 63 }
+    ];
+    var FLARE_DUR = 2.2;
+    for (var f = 0; f < FLARES.length; f++) {
+      var fl = FLARES[f];
+      var ft = (sec - fl.start) % fl.period;
+      if (ft < 0) ft += fl.period;
+      if (ft > FLARE_DUR) continue;
+      var fe = Math.sin(Math.PI * ft / FLARE_DUR); // 0 -> 1 -> 0 across the eruption
+      if (fe < 0.08) continue;
+      var fh = 0.38 * fe; // arch height in rho units (~4 grid cells at the tip — tall enough to read as a loop, not a bump)
+      var fw = 0.26; // arch half-width in radians
+      var ca = Math.cos(fl.a), sa = Math.sin(fl.a);
+      // Footpoint sits on the WOBBLING edge (same edgeRadius), so a
+      // flare never detaches from the moving outline.
+      var fR = edgeRadius(fl.a);
+      var fx = Math.round(mx + mr * fR * ca), fy = Math.round(my + (mr / 2) * fR * sa);
+      if (grid[fy] && grid[fy][fx]) grid[fy][fx] = ['*', 229];
+      for (var d = -fw; d <= fw; d += 0.03) {
+        var rho = fR * (1.02 + fh * (1 - (d / fw) * (d / fw)));
+        var ax = Math.round(mx + mr * rho * Math.cos(fl.a + d));
+        var ay = Math.round(my + (mr / 2) * rho * Math.sin(fl.a + d));
+        if (ay < 0 || ay >= H || ax < 0 || ax >= W) continue;
+        // Cooler at the base, hottest at the tip. Two cells thick so
+        // the loop reads at the panel's fitted scale.
+        var fch = rho < 1.08 ? ['#', 220] : (rho < 1.16 ? ['*', 226] : ['@', 229]);
+        grid[ay][ax] = fch;
+        var rho2 = rho - 0.05;
+        var ax2 = Math.round(mx + mr * rho2 * Math.cos(fl.a + d));
+        var ay2 = Math.round(my + (mr / 2) * rho2 * Math.sin(fl.a + d));
+        if (ay2 >= 0 && ay2 < H && ax2 >= 0 && ax2 < W) grid[ay2][ax2] = fch;
+      }
+    }
+    grid[4][12] = ['*', 255]; grid[6][73] = ['+', 226];
+    grid[36][10] = ['.', 250]; grid[37][75] = ['*', 226];
+    grid[3][58] = ['.', 255]; grid[39][30] = ['+', 250];
+    return P.gridToHtml(grid, 3.67, 6.6);
   }
 
   // --- orrery ------------------------------------------------------------
@@ -1009,9 +1216,15 @@ class ProtoplanetApp {
     star.style.left = CX + 'px';
     star.style.top = CY + 'px';
     star.style.zIndex = '1';
-    star.innerHTML = '<div class="pp-grid" style="--pp-fs:9.9px;--pp-ch:9.9px">' + starHtml() + '</div><div class="starName">Sol</div>';
+    star.innerHTML = '<div class="pp-grid" style="--pp-fs:6.6px;--pp-ch:6.6px">' + starHtml(sec) + '</div><div class="starName">Sol</div>';
+    starGridEl = star.querySelector('.pp-grid');
     worldEl.appendChild(star);
     // Rings + planets.
+    // lockSeen counts the locked-ring labels drawn so far (at most two):
+    // adjacent ring tops are only (spacing * TILT) apart — under one
+    // label height when many rings exist — so each later label sits
+    // 26px higher and the two can never collide.
+    var lockSeen = 0;
     for (var i = 0; i < total; i++) {
       var slot = state.slots[i];
       var R = ringRadius(i, total);
@@ -1028,10 +1241,11 @@ class ProtoplanetApp {
         var lab = document.createElement('div');
         lab.className = 'lockLabel';
         lab.style.left = CX + 'px';
-        lab.style.top = (CY - R * TILT - 16) + 'px';
+        lab.style.top = (CY - R * TILT - 16 - lockSeen * 26) + 'px';
         lab.style.zIndex = '3';
         lab.textContent = slot.unlockLabel || ('Ring ' + (i + 1) + ' — locked');
         worldEl.appendChild(lab);
+        lockSeen++;
         continue;
       }
       if (slot.planet) {
@@ -1076,6 +1290,12 @@ class ProtoplanetApp {
     }
     layoutPlanets();
     renderDiscs();
+  }
+
+  // Re-render just the star's art (the orrery itself only rebuilds on
+  // state changes). Called on the tick so the sun stays alive.
+  function renderStar() {
+    if (starGridEl) starGridEl.innerHTML = starHtml(sec);
   }
 
   function layoutPlanets() {
@@ -1414,6 +1634,7 @@ class ProtoplanetApp {
       layoutPlanets();
     }
     if (tick % 3 === 0) renderDiscs(); // discs shimmer ~2x/sec; full re-render every tick is wasteful
+    if (tick % 2 === 0) renderStar(); // the sun churns + flares ~3x/sec — never frozen while the planets orbit. Outside the hover/detail guard on purpose: hovering a planet shouldn't freeze the sun.
     if (detailOpen && selected) {
       var artEl = document.getElementById('detailArt');
       if (artEl) {

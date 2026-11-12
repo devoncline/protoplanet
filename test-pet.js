@@ -139,12 +139,12 @@ res = L.applyXp(st, 3600, seedSeq());
 eq('rebirth: exactly 3600 rebirths', res.rebirthed, true);
 eq('rebirth: exactly 3600 leaves 0 XP', st.current.xp, 0);
 
-// --- 7. Starter bias (same rule as piece 1: 75% starter) ---------------------
+// --- 7. Starter pick guarantees the terrain (Devon, Nov 11) ------------------
 let icy = 0;
 for (let seed = 1; seed <= 200; seed++) {
   if (Planet.generatePlanet(seed, 'icy').terrain === 'icy') icy++;
 }
-check('starter: ~75% icy over 200 seeds', icy >= 130 && icy <= 180, icy + '/200 icy');
+check('starter: pick guarantees the terrain (200/200 icy)', icy === 200, icy + '/200 icy');
 check('starter: every starter terrain exists', L.CONFIG.STARTER_TERRAINS.every((id) =>
   Planet.CONFIG.TERRAINS.some((t) => t.id === id)), L.CONFIG.STARTER_TERRAINS.join(','));
 
@@ -195,17 +195,19 @@ eq('pkg: displayName', pkg.displayName, 'Protoplanet');
 eq('pkg: main is extension.js', pkg.main, './extension.js');
 check('pkg: activates onStartupFinished', (pkg.activationEvents || []).includes('onStartupFinished'));
 check('pkg: engines.vscode present', typeof pkg.engines === 'object' && typeof pkg.engines.vscode === 'string');
-const containers = (pkg.contributes && pkg.contributes.viewsContainers && pkg.contributes.viewsContainers.activitybar) || [];
-check('pkg: activity bar container', containers.some((c) => c.id === 'protoplanet'));
-const views = (pkg.contributes && pkg.contributes.views && pkg.contributes.views.protoplanet) || [];
-check('pkg: sidebar webview view', views.some((v) => v.id === 'protoplanet.petView' && v.type === 'webview'));
+// The pet lives in the Explorer (Devon, Nov 11) — a collapsible section,
+// not its own Activity Bar icon. No viewsContainers.activitybar at all.
+check('pkg: no activity bar container',
+  !(pkg.contributes && pkg.contributes.viewsContainers && pkg.contributes.viewsContainers.activitybar));
+const views = (pkg.contributes && pkg.contributes.views && pkg.contributes.views.explorer) || [];
+check('pkg: pet view lives in the Explorer', views.some((v) => v.id === 'protoplanet.petView' && v.type === 'webview'));
 const cmds = (pkg.contributes && pkg.contributes.commands) || [];
 check('pkg: showPet command', cmds.some((c) => c.command === 'protoplanet.showPet'));
 check('pkg: newPlanet command', cmds.some((c) => c.command === 'protoplanet.newPlanet'));
 check('pkg: feedMineral command', cmds.some((c) => c.command === 'protoplanet.feedMineral'));
 check('pkg: salvagePlanet command', cmds.some((c) => c.command === 'protoplanet.salvagePlanet'));
 check('pkg: prestige command', cmds.some((c) => c.command === 'protoplanet.prestige'));
-check('pkg: icon file exists', fs.existsSync(path.join(__dirname, 'media', 'planet.svg')));
+check('pkg: no activity bar icon reference', !JSON.stringify(pkg.contributes).includes('media/planet.svg'));
 check('pkg: planet.js exists for the webview', fs.existsSync(path.join(__dirname, 'planet.js')));
 
 const extSrc = fs.readFileSync(path.join(__dirname, 'extension.js'), 'utf8');
@@ -221,6 +223,18 @@ check('ext: no bare <pre> grid rendering', !/\.grid.*innerHTML\s*=\s*[^P]/.test(
 check('ext: webview uses nonce CSP', extSrc.includes('Content-Security-Policy') && extSrc.includes('nonce-'));
 check('ext: no notification popups on typing', !extSrc.includes('showInformationMessage'));
 check('ext: uses petLogic for XP', extSrc.includes('Logic.applyXp'));
+// The sidebar webview runs planet.js as window.Protoplanet only — a bare
+// `Planet` global does not exist there. (Nov 11: layout() threw
+// ReferenceError: Planet is not defined at load, so 'ready' never fired
+// and the pet art never rendered — placeholder text + black strip.)
+// The webview script must use the P alias throughout.
+check('ext: sidebar webview never uses a bare Planet global', !extSrc.includes('Planet.CONFIG.W'));
+check('ext: sidebar webview uses the Protoplanet alias', extSrc.includes('P.CONFIG.W'));
+// The two locked-ring labels sit above adjacent ring tops, which are
+// only (spacing * TILT) apart — under one label height when many rings
+// exist. The second label is staggered 26px higher so they can never
+// collide (Devon, Nov 11: Ring 5 / Ring 6 overlapped).
+check('ext: lock labels stagger so they never overlap', extSrc.includes('lockSeen * 26'));
 
 // --- 12. Minerals, feeding, salvage/recycle, prestige (step 2) ------------
 // Helper: first seed whose ONLY mutation is the target (same idea as
@@ -665,11 +679,226 @@ check('display stage: true stage is untouched (3600 is still End)', L.stageForXp
 check('ext: panel caps the display stage', extSrc.includes('displayStageForXp'));
 check('ext: orrery is a little more tilted (TILT 0.34)',
   extSrc.includes('TILT = 0.34') && !extSrc.includes('TILT = 0.42'));
-check('ext: star is bigger and more detailed (larger sphere, granulation, textured bright core)',
-  extSrc.includes('drawMiniSphere(grid, mx, my, mr, 226, 7, false, 1, 0.30)')
-  && extSrc.includes('Granulation'));
+check('ext: sun has no separate bright core disc (core blends with the granulation)',
+  !extSrc.includes('d2 < 0.25'));
+check('ext: sun shading is a graded warm ramp (smooth granulation, small steps)',
+  extSrc.includes('Granulation') && extSrc.includes("['+', 214]")
+  && extSrc.includes('smoothGn'));
 check('ext: star has no stamped white-rectangle core',
   !extSrc.includes("['@', 231]"));
+check('ext: sun renders finer (84x42 grid, smaller cells, same display size)',
+  extSrc.includes('var W = 84, H = 42') && extSrc.includes('P.gridToHtml(grid, 3.67, 6.6)'));
+check('ext: sun granulation churns over time (sec-dependent)',
+  extSrc.includes('function starHtml(sec)') && extSrc.includes('Math.sin(sec * 0.9'));
+check('ext: sun has solar flares',
+  extSrc.includes('FLARES') && extSrc.includes('Solar flares'));
+check('ext: sun is bright (lifted floor + gamma lift, 229 peaks, no white core)',
+  extSrc.includes('0.30 + 0.70 * gn') && extSrc.includes('Math.pow(g * l * r * edge')
+  && extSrc.includes("['@', 229]") && !extSrc.includes('d2 < 0.25'));
+check('ext: sun reads 3D (strong limb darkening + rim fade)',
+  extSrc.includes('0.50 + 0.50 * sz') && extSrc.includes('d2rel > 0.8'));
+check('ext: sun peaks are stable (churn phase decoupled from granule value)',
+  extSrc.includes('var ph = smoothGn'));
+check('ext: big flares are rare (long periods, ~2.2s eruptions)',
+  extSrc.includes('period: 47') && extSrc.includes('period: 63') && extSrc.includes('period: 89')
+  && extSrc.includes('FLARE_DUR = 2.2')
+  && !extSrc.includes('period: 13') && !extSrc.includes('period: 7') && !extSrc.includes('period: 11'));
+check('ext: limb flames fizzle on their own fast phase (not the old slow halo wink)',
+  extSrc.includes('LIMB FLAMES') && extSrc.includes('Math.sin(sec * 3.1'));
+// Limb flames fizzle (Devon, Nov 11 — the fringe was frozen in every
+// clip: measured only 17% of halo cells ever changed, 1.4% per tick).
+// Run the real starHtml and measure the fringe band (d2rel in 1..1.3,
+// i.e. just outside the DISC EDGE) directly: a visible share must
+// change within a second, while the look stays the same (same lit
+// count, '.'-dominant). The band is measured against the moving edge
+// (d2rel with the real edgeRadius), not the fixed geometric radius —
+// flame-tongue disc cells would otherwise pollute the band.
+(function () {
+  const starSrc = extSrc.slice(extSrc.indexOf('function starHtml(sec) {'), extSrc.indexOf('// --- orrery'));
+  const starHtml = new Function('P', starSrc + '\nreturn starHtml;')({
+    noise2: Planet.noise2,
+    gridToHtml: (grid) => grid,
+  });
+  const W = 84, H = 42;
+  const flStart = starSrc.indexOf('var FLAMES = [');
+  const edgeSrc = starSrc.slice(flStart, starSrc.indexOf('for (var y = 0; y < H; y++) {', flStart));
+  const edgeRadiusFor = (sec) => new Function('sec', edgeSrc + '\nreturn edgeRadius;')(sec);
+  const e0 = edgeRadiusFor(0), e1 = edgeRadiusFor(1);
+  function band(x, y, edgeRadius) {
+    const sx = (x - 42) / 21, sy = (y - 21) / 21;
+    const d2 = sx * sx + (2 * sy) * (2 * sy);
+    const th = Math.atan2(2 * sy, sx);
+    const d2rel = d2 / Math.pow(edgeRadius(th), 2);
+    return d2rel <= 1 ? 'disc' : (d2rel <= 1.3 ? 'halo' : 'out');
+  }
+  const g0 = starHtml(0), g1 = starHtml(1);
+  let haloN = 0, haloChanged = 0, haloLit = 0, haloDots = 0;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (band(x, y, e0) !== 'halo' && band(x, y, e1) !== 'halo') continue;
+    haloN++;
+    const a = g0[y][x], b = g1[y][x];
+    if (a[0] !== ' ') { haloLit++; if (a[0] === '.') haloDots++; }
+    if (a[0] !== b[0] || a[1] !== b[1]) haloChanged++;
+  }
+  check('limb flames fizzle: a visible share of the fringe changes in 1s',
+    haloChanged / haloN > 0.10, haloChanged + ' of ' + haloN + ' fringe cells changed in 1s');
+  check('limb flames keep the old look: about as many lit as before (~49)',
+    haloLit >= 35 && haloLit <= 65, haloLit + ' lit at sec=0');
+  check('limb flames are mostly dots (same style, "."-dominant)',
+    haloLit > 0 && haloDots / haloLit > 0.6, haloDots + ' of ' + haloLit + ' lit fringe cells are dots');
+})();
+// The sun's SILHOUETTE flames (Devon, Nov 11 — batch #7 + the
+// varied-flames refinement): the disc's silhouette bumps (left,
+// top-left, bottom-left, bottom, right) never moved in any clip —
+// batches #4/#5/#6 measured the wrong thing (fringe specks, a
+// +/-1-cell wobble, fringe-tongue angles) and the clips were rendered
+// from a stale copy of the page. The old lit-angle Jaccard on the
+// fringe is NOT the right metric. Run the real starHtml and measure
+// the SOLID mass edge (visible cells with >= 2 visible neighbours —
+// isolated specks don't count): tall flames (>= 3 cells past the
+// base disc) must stick out at sec=2, be at different places a few
+// seconds later, and vary in shape (taller/shorter, wider/narrower),
+// not one bump shape stamped around the rim.
+(function () {
+  const starSrc = extSrc.slice(extSrc.indexOf('function starHtml(sec) {'), extSrc.indexOf('// --- orrery'));
+  const starHtml = new Function('P', starSrc + '\nreturn starHtml;')({
+    noise2: Planet.noise2,
+    gridToHtml: (grid) => grid,
+  });
+  const W = 84, H = 42;
+  function isMassCell(grid, x, y) {
+    const c = grid[y][x];
+    if (c[0] === ' ' || c[1] < 208) return false;
+    let n = 0;
+    if (y > 0 && grid[y - 1][x][0] !== ' ' && grid[y - 1][x][1] >= 208) n++;
+    if (y < H - 1 && grid[y + 1][x][0] !== ' ' && grid[y + 1][x][1] >= 208) n++;
+    if (x > 0 && grid[y][x - 1][0] !== ' ' && grid[y][x - 1][1] >= 208) n++;
+    if (x < W - 1 && grid[y][x + 1][0] !== ' ' && grid[y][x + 1][1] >= 208) n++;
+    return n >= 2;
+  }
+  function massExtent(grid, deg) {
+    const th = deg * Math.PI / 180;
+    let maxR = 0;
+    for (let r = 0; r <= 1.4; r += 0.005) {
+      const x = Math.round(42 + 21 * r * Math.cos(th));
+      const y = Math.round(21 + 10.5 * r * Math.sin(th));
+      if (y < 0 || y >= H || x < 0 || x >= W) continue;
+      if (isMassCell(grid, x, y)) maxR = r;
+    }
+    return maxR;
+  }
+  function smoothProfile(sec) {
+    const g = starHtml(sec);
+    const raw = [];
+    for (let deg = 0; deg < 360; deg += 5) raw.push(massExtent(g, deg));
+    const n = raw.length;
+    return raw.map((_, i) => (raw[(i - 1 + n) % n] + raw[i] + raw[(i + 1) % n]) / 3);
+  }
+  function flameSegments(ext) {
+    const segs = [];
+    let cur = null;
+    for (let i = 0; i <= ext.length; i++) {
+      const e = i < ext.length ? ext[i] : 0;
+      if (e > 1.03) {
+        if (!cur) cur = { start: i * 5, bins: 0, maxE: 0 };
+        cur.bins++;
+        cur.maxE = Math.max(cur.maxE, e);
+      } else if (cur) { segs.push(cur); cur = null; }
+    }
+    return segs.map((s) => ({
+      at: Math.round(s.start + (s.bins * 5) / 2),
+      hCells: (s.maxE - 1) * 21,
+      wDeg: s.bins * 5,
+    }));
+  }
+  const f2 = flameSegments(smoothProfile(2));
+  const f6 = flameSegments(smoothProfile(6));
+  const tall2 = f2.filter((f) => f.hCells >= 3);
+  const tall6 = f6.filter((f) => f.hCells >= 3);
+  const angDiff = (a, b) => Math.abs(((a - b + 540) % 360) - 180);
+  const tallest2 = f2.reduce((m, f) => (f.hCells > m.hCells ? f : m), { hCells: 0, at: 0 });
+  const tallest6 = f6.reduce((m, f) => (f.hCells > m.hCells ? f : m), { hCells: 0, at: 0 });
+  check('sun silhouette flames: tall flames (>=3 cells) stick out at sec=2',
+    tall2.length >= 2, tall2.length + ' tall flames at sec=2: ' + JSON.stringify(tall2.map((f) => f.at + 'deg/' + f.hCells.toFixed(1) + 'c')));
+  check('sun silhouette flames: the tall flames are at different places a few seconds later',
+    !tall6.some((f) => tall2.some((t) => angDiff(f.at, t.at) <= 20)) &&
+    (Math.abs(tallest2.hCells - tallest6.hCells) >= 2 || angDiff(tallest2.at, tallest6.at) > 20),
+    'tallest sec=2: ' + tallest2.at + 'deg/' + tallest2.hCells.toFixed(1) + 'c | tallest sec=6: ' + tallest6.at + 'deg/' + tallest6.hCells.toFixed(1) + 'c');
+  const heights = f2.map((f) => f.hCells);
+  const widths = [...new Set(f2.map((f) => f.wDeg))];
+  check('sun silhouette flames vary in shape (taller/shorter, wider/narrower — not one repeated bump)',
+    heights.length >= 3 && Math.max(...heights) - Math.min(...heights) >= 3 && widths.length >= 3,
+    'sec=2 flame heights ' + heights.map((h) => h.toFixed(1)).join(',') + ' cells | widths ' + widths.join(',') + ' deg');
+  const A = smoothProfile(2), B = smoothProfile(6);
+  let maxMove = 0;
+  for (let i = 0; i < A.length; i++) maxMove = Math.max(maxMove, Math.abs(B[i] - A[i]) * 21);
+  check('sun silhouette moves: the outline shifts by several cells between sec=2 and sec=6',
+    maxMove >= 4, 'max outline move ' + maxMove.toFixed(1) + ' cells');
+})();
+check('ext: sun edge carries flames (tongues grow/die at different angles, not a frozen ellipse)',
+  extSrc.includes('FLAMES') && extSrc.includes('function edgeRadius(th)') && extSrc.includes('d2rel')
+  && extSrc.includes('Math.pow(Math.sin(Math.PI * u), 1.5)'));
+// The sun's EDGE moves (Devon, Nov 11 — the little points sticking out
+// around the outline were completely still; the silhouette never
+// changed. Batch #4's fizzling halo specks were the wrong thing — the
+// disc boundary itself was a frozen ellipse: measured 0.0% of disc
+// cells ever changing blank/lit state, and the lit radius at 90deg
+// stuck at 0.99 for all 14s). Run the real starHtml: the outline band
+// must flip lit/blank as the edge passes over it, while the disc
+// interior stays solid.
+(function () {
+  const starSrc = extSrc.slice(extSrc.indexOf('function starHtml(sec) {'), extSrc.indexOf('// --- orrery'));
+  const starHtml = new Function('P', starSrc + '\nreturn starHtml;')({
+    noise2: Planet.noise2,
+    gridToHtml: (grid) => grid,
+  });
+  const W = 84, H = 42;
+  function rad(x, y) {
+    const sx = (x - 42) / 21, sy = (y - 21) / 21;
+    return Math.sqrt(sx * sx + (2 * sy) * (2 * sy));
+  }
+  const secs = [];
+  for (let s = 0; s <= 14.001; s += 0.5) secs.push(+s.toFixed(2));
+  const grids = secs.map((s) => starHtml(s));
+  const isLit = (c) => c[0] !== ' ';
+  let edgeN = 0, edgeEverChanged = 0, discEverChanged = 0;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const r = rad(x, y);
+    const litStates = grids.map((g) => isLit(g[y][x]));
+    const changed = new Set(litStates).size > 1;
+    if (r <= 0.90) { if (changed) discEverChanged++; }
+    else if (r <= 1.15) { edgeN++; if (changed) edgeEverChanged++; }
+  }
+  // Silhouette extent straight down (90deg) — frozen at 0.99 before.
+  function maxLitRadiusDown(grid) {
+    let maxR = 0;
+    for (let r = 0; r <= 1.35; r += 0.01) {
+      const y = Math.round(21 + 10.5 * r);
+      if (y >= 0 && y < H && isLit(grid[y][42])) maxR = r;
+    }
+    return maxR;
+  }
+  const ext0 = maxLitRadiusDown(grids[0]);
+  const extMax = Math.max(...grids.map(maxLitRadiusDown));
+  check('sun edge moves: a visible share of the outline band flips lit/blank over 14s',
+    edgeEverChanged / edgeN > 0.30, edgeEverChanged + ' of ' + edgeN + ' outline cells flipped');
+  check('sun edge moves: the disc interior stays solid (only the outline wobbles)',
+    discEverChanged === 0, discEverChanged + ' interior cells flipped');
+  check('sun edge moves: the silhouette extent drifts (was frozen at 0.99 straight down)',
+    extMax - ext0 > 0.03, 'extent ' + ext0.toFixed(2) + ' -> ' + extMax.toFixed(2));
+})();
+check('ext: sun re-renders on the tick (never frozen)',
+  extSrc.includes('renderStar()') && extSrc.includes('tick % 2 === 0'));
+// Sidebar (Devon, Nov 11): trimmed to the stage line, the grown-from
+// line, and the XP bar. No flavor description, no world details —
+// those live in the detail panel / Pokedex, which still shows them.
+check('sidebar: no flavor description after hatching',
+  !extSrc.includes('textContent = msg.stageDesc'));
+check('sidebar: meta is only the grown-from line',
+  extSrc.includes("'Grown from ' + msg.chars + ' characters'")
+  && !extSrc.includes('msg.summary'));
+check('sidebar: XP bar has a visible track and a numbers label',
+  extSrc.includes('#xplabel') && extSrc.includes("getElementById('xplabel')"));
 check('ext: orrery discs are small again (46x24 cozy, not 68x38)',
   extSrc.includes('P.renderCozy(d.planet.planet, d.planet.stageIdx, 10, sec, 1.0, 46, 24), 2.6, 6.12')
   && !extSrc.includes('68, 38), 3.4, 6.12'));

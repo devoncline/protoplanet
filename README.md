@@ -65,8 +65,8 @@ The actual VS Code extension. Open the folder in VS Code and press **F5**
 then **Install from VSIX**. Nothing is published to the Marketplace.
 
 - **`package.json`** — publisher `devoncline`, name `protoplanet`, activates
-  on startup. Contributes a sidebar view (own activity-bar icon,
-  hand-drawn `media/planet.svg`), plus commands **Protoplanet: Show pet**
+  on startup. Contributes a pet view as a collapsible section in the
+  Explorer (no separate Activity Bar icon), plus commands **Protoplanet: Show pet**
   and **Protoplanet: New planet** (asks first; the old planet is kept in
   the collection record). A "New planet" button also sits in the view's
   title bar.

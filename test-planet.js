@@ -47,12 +47,14 @@ check('same seed+stage+time -> identical grid', gridsEqual(g1, g2));
 const p3 = P.generatePlanet(4822);
 check('different seed -> different planet', JSON.stringify(p1) !== JSON.stringify(p3));
 
-// Starter bias: 200 rolls with starter 'icy' should be mostly icy.
+// Starter pick guarantees the terrain (Devon, Nov 11): 200 rolls with
+// starter 'icy' are all icy. The rng draw is still consumed, so the
+// other traits stay identical for a seed.
 let icyCount = 0;
 for (let s = 0; s < 200; s++) {
   if (P.generatePlanet(s, 'icy').terrain === 'icy') icyCount++;
 }
-check('starter bias works (~75% icy)', icyCount >= 130 && icyCount <= 175, `${icyCount}/200 icy`);
+check('starter pick guarantees the terrain (200/200 icy)', icyCount === 200, `${icyCount}/200 icy`);
 
 // --- 2. Variety ------------------------------------------------------------
 const seenTerrain = new Set(), seenRing = new Set(), seenMoons = new Set();
@@ -1098,17 +1100,16 @@ function onDisc14(pl, stageIdx, x, y) {
   check('Devon archived jungle keeps jungle / shattered / 2 moons',
     old.terrain === 'jungle' && old.ringType === 'shattered' && old.moons.length === 2,
     `${old.terrain} / ${old.ringType} / ${old.moons.length} moons`);
-  // The starter bias is a 75% lottery, not a guarantee: seed 719571762
-  // (Devon's archived Gen 1) draws 0.9533 on the first roll, so it lands
-  // in the 25% surprise branch and rolls rocky/toxic in planet.js — the
-  // Space shows it as icy because that record carries forcedTerrain
-  // 'icy' (look lab), not because the starter roll gave icy. What
-  // planet.js must preserve is the RATE: ~75% + the 1-in-10 chance the
-  // surprise branch rolls icy anyway ≈ 77%.
+  // The starter pick guarantees the terrain (Devon, Nov 11): seed
+  // 719571762 (Devon's archived Gen 1) draws 0.9533 on the first roll,
+  // which under the old 75% lottery landed in the 25% surprise branch
+  // and rolled rocky/toxic in planet.js — the Space shows it as icy
+  // because that record carries forcedTerrain 'icy' (look lab). With
+  // the guarantee the pick always wins, whatever the roll draws.
   let icyCount = 0;
   for (let s = 0; s < 2000; s++) if (P.generatePlanet(s, 'icy').terrain === 'icy') icyCount++;
-  check('starter pick biases terrain to the pick (~70-85% icy)',
-    icyCount / 2000 > 0.70 && icyCount / 2000 < 0.85, `${(100 * icyCount / 2000).toFixed(1)}% icy`);
+  check('starter pick guarantees the terrain (2000/2000 icy)',
+    icyCount === 2000, `${(100 * icyCount / 2000).toFixed(1)}% icy`);
 }
 
 // 14d. Labels: "MUTATION · Name" — the name with a MUTATION tag, no

@@ -1,7 +1,7 @@
 # Files that are part of developing the extension, not part of shipping it.
 # Without this file vsce packages everything (including the 1.1 MB samples/),
 # so the .vsix balloons. The shipped extension is only: package.json,
-# extension.js, petLogic.js, planet.js, media/planet.svg, README.md.
+# extension.js, petLogic.js, planet.js, README.md.
 samples/**
 test-fixtures/**
 test-planet.js

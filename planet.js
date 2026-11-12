@@ -447,11 +447,12 @@ function generatePlanet(seed, starterTerrain, tilt) {
   const rng = mulberry32(seed);
   let terrain;
   if (starterTerrain) {
-    // First planet: the starter pick biases the terrain (Devon's choice).
-    // 75% it IS the starter terrain, 25% the algorithm surprises you.
-    terrain = rng() < 0.75
-      ? CONFIG.TERRAINS.find(t => t.id === starterTerrain) || weightedPick(rng, CONFIG.TERRAINS)
-      : weightedPick(rng, CONFIG.TERRAINS);
+    // First planet: the starter pick IS the terrain (Devon's decision,
+    // Nov 11 — the pick guarantees it, no 25% surprise). One rng()
+    // draw is still consumed, so every trait after this stays identical
+    // for a seed (the 75% majority of planets are byte-identical).
+    rng();
+    terrain = CONFIG.TERRAINS.find(t => t.id === starterTerrain) || weightedPick(rng, CONFIG.TERRAINS);
   } else {
     terrain = weightedPick(rng, CONFIG.TERRAINS);
   }
