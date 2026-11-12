@@ -40,6 +40,8 @@ class ProtoplanetApp {
     this.statusBar.show();
     this.viewProvider = new PetViewProvider(this);
     this.systemPanel = null; // the Solar System panel (step 4), or null
+    this.prestigePanel = null; // the Prestige / fusion panel (step 4b), or null
+    this.prestigeResult = null; // the last fusion result, shown until dismissed
     this.saveTimer = null;
     context.subscriptions.push(this.statusBar);
     context.subscriptions.push(
@@ -50,6 +52,9 @@ class ProtoplanetApp {
     );
     context.subscriptions.push(
       vscode.commands.registerCommand('protoplanet.openSolarSystem', () => this.openSolarSystem())
+    );
+    context.subscriptions.push(
+      vscode.commands.registerCommand('protoplanet.openPrestige', () => this.openPrestige())
     );
     context.subscriptions.push(
       vscode.commands.registerCommand('protoplanet.newPlanet', () => this.newPlanet())
@@ -233,6 +238,7 @@ class ProtoplanetApp {
       { kind: b.kind, index: b.index },
       Logic.randomSeed);
     if (!res.ok) return; // state changed between picks (shouldn't happen)
+    this.recordPrestigeResult(res);
     this.saveNow();
     this.pushState();
   }
@@ -267,44 +273,51 @@ class ProtoplanetApp {
   // carries its full traits (`planet`) so the webview can render it
   // with planet.js — archived records store the full snapshot (step
   // 4), so a tilted birth roll renders exactly as it was born.
+  // One planet, ready for a panel to render: full traits (`planet`)
+  // so the webview can draw it with planet.js, plus the flat fields
+  // the cards and detail views show. Shared by the Solar System and
+  // Prestige panels. Archived records store the full snapshot (step
+  // 4), so a tilted birth roll renders exactly as it was born.
+  renderablePlanet(record, kind) {
+    let traits = record.planet;
+    if (!traits) {
+      // Pre-step-4 record (no snapshot): re-roll from the seed and
+      // apply the stored mutations. Best effort — a tilted birth
+      // roll's mutation-granted traits (e.g. a green moon's tint)
+      // can't be fully rebuilt from the seed alone.
+      traits = Planet.generatePlanet(record.seed);
+      traits.mutations = (record.mutations || []).slice();
+    }
+    // Display stage: CAPPED at Civilization (never End) — archived
+    // planets sit at 3600 chars = End, which renders as dispersing
+    // noise, so the panels show them at their best stage instead
+    // (Devon, Nov 11). The lifecycle still has End; this is only
+    // what the panels show.
+    const dStage = Logic.displayStageForXp(record.chars || 0);
+    return {
+      seed: record.seed,
+      name: Logic.nameForPlanet(record),
+      terrain: record.terrain,
+      terrainLabel: record.terrainLabel,
+      summary: record.summary,
+      chars: record.chars || 0,
+      generation: kind === 'current' ? this.state.generation : record.generation,
+      archivedAt: record.archivedAt || null,
+      mutations: (record.mutations || []).slice(),
+      mutationLabel: Planet.mutationLabel({ mutations: record.mutations || [] }),
+      parents: record.parents || null,
+      usedAsParent: !!record.usedAsParent,
+      kind,
+      stageIdx: dStage,
+      stageName: Planet.STAGES[dStage].name,
+      planet: traits,
+    };
+  }
+
   solarSystemViewModel() {
     Logic.normalizeSystem(this.state);
     const rank = Logic.systemRank(this.state);
-    const renderable = (record, kind) => {
-      let traits = record.planet;
-      if (!traits) {
-        // Pre-step-4 record (no snapshot): re-roll from the seed and
-        // apply the stored mutations. Best effort — a tilted birth
-        // roll's mutation-granted traits (e.g. a green moon's tint)
-        // can't be fully rebuilt from the seed alone.
-        traits = Planet.generatePlanet(record.seed);
-        traits.mutations = (record.mutations || []).slice();
-      }
-      // Display stage: CAPPED at Civilization (never End) — archived
-      // planets sit at 3600 chars = End, which renders as dispersing
-      // noise, so the system shows them at their best stage instead
-      // (Devon, Nov 11). The lifecycle still has End; this is only
-      // what the panel shows (orrery discs, detail art, thumbnails).
-      const dStage = Logic.displayStageForXp(record.chars || 0);
-      return {
-        seed: record.seed,
-        name: Logic.nameForPlanet(record),
-        terrain: record.terrain,
-        terrainLabel: record.terrainLabel,
-        summary: record.summary,
-        chars: record.chars || 0,
-        generation: kind === 'current' ? this.state.generation : record.generation,
-        archivedAt: record.archivedAt || null,
-        mutations: (record.mutations || []).slice(),
-        mutationLabel: Planet.mutationLabel({ mutations: record.mutations || [] }),
-        parents: record.parents || null,
-        usedAsParent: !!record.usedAsParent,
-        kind,
-        stageIdx: dStage,
-        stageName: Planet.STAGES[dStage].name,
-        planet: traits,
-      };
-    };
+    const renderable = (record, kind) => this.renderablePlanet(record, kind);
     const slots = [];
     let ringsUsed = 0;
     for (let i = 0; i < rank.totalSlots; i++) {
@@ -361,6 +374,119 @@ class ProtoplanetApp {
     } else if (msg.type === 'remove' && Number.isInteger(msg.ring)) {
       const res = Logic.removeFromSystem(this.state, msg.ring);
       if (res.ok) { this.saveNow(); this.pushState(); }
+    }
+  }
+
+  // -- step 4b: the Prestige / fusion panel --------------------------------
+  // A dedicated full-screen webview (like the Solar System panel): pick
+  // two eligible parents, see what the offspring stands to inherit,
+  // fuse them — a violent ASCII collision, not a gentle fade (Devon,
+  // Nov 11) — and watch the offspring hatch with its lineage. The
+  // panel is a dumb view — every decision (eligibility, the fusion
+  // itself) lives in petLogic.js; this class only builds the view
+  // model and applies the webview's messages.
+  //
+  // Parent fate (Devon's call): parents STAY in the collection, each
+  // usable as a parent only ONCE (retire, not destroy). The flag
+  // PRESTIGE_CONSUMES_PARENTS flips that later, only if he says so —
+  // nothing in this panel assumes either fate; it shows what the
+  // logic did.
+
+  openPrestige() {
+    if (this.prestigePanel) { this.prestigePanel.reveal(); return; }
+    const panel = vscode.window.createWebviewPanel(
+      'protoplanet.prestige',
+      'Protoplanet — Prestige',
+      vscode.ViewColumn.One,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true, // picks survive tab switches
+        localResourceRoots: [this.context.extensionUri],
+      }
+    );
+    this.prestigePanel = panel;
+    panel.webview.html = this.getPrestigeHtml(panel.webview);
+    panel.webview.onDidReceiveMessage((msg) => this.onPrestigeMessage(msg));
+    panel.onDidDispose(() => { this.prestigePanel = null; this.prestigeResult = null; });
+    this.postPrestigeState();
+  }
+
+  // Everything the panel needs: every planet in the collection with
+  // its eligibility, the fed mineral (consumed by the offspring), the
+  // inheritance multipliers, and the last fusion result (if any).
+  prestigeViewModel() {
+    const eligible = Logic.eligiblePrestigeParents(this.state);
+    const planets = [];
+    const pushEntry = (record, kind, index) => {
+      const r = this.renderablePlanet(record, kind);
+      r.index = index;
+      r.eligible = Logic.prestigeEligible(record);
+      r.eligibilityReason = r.eligible
+        ? null
+        : (record.usedAsParent ? 'already-parent' : 'too-young');
+      r.progressToCiv = Math.min(1, (record.chars || 0) / Logic.CONFIG.PRESTIGE_MIN_CHARS);
+      planets.push(r);
+    };
+    if (this.state.current) pushEntry(this.state.current, 'current', -1);
+    this.state.past.forEach((p, i) => pushEntry(p, 'past', i));
+    // Growing planet first, then newest archived first.
+    planets.sort((a, b) => {
+      if (a.kind === 'current') return -1;
+      if (b.kind === 'current') return 1;
+      return (b.archivedAt || 0) - (a.archivedAt || 0);
+    });
+    return {
+      type: 'prestige',
+      eligibleCount: eligible.length,
+      canFuse: eligible.length >= 2,
+      minChars: Logic.CONFIG.PRESTIGE_MIN_CHARS,
+      inheritOne: Logic.CONFIG.PRESTIGE_INHERIT_MULT_ONE,
+      inheritBoth: Logic.CONFIG.PRESTIGE_INHERIT_MULT_BOTH,
+      consumesParents: Logic.CONFIG.PRESTIGE_CONSUMES_PARENTS,
+      fedMineral: this.state.fedMineral ? Logic.mineralName(this.state.fedMineral) : null,
+      planets,
+      result: this.prestigeResult,
+    };
+  }
+
+  postPrestigeState() {
+    if (this.prestigePanel) this.prestigePanel.webview.postMessage(this.prestigeViewModel());
+  }
+
+  // The shape the panel shows after a fusion: the offspring (renderable),
+  // its parents' lineage records, and which of its mutations it actually
+  // inherited vs rolled fresh. Shared by the panel and the QuickPick
+  // command — both paths land in the same place.
+  recordPrestigeResult(res) {
+    const parentMuts = new Set();
+    for (const p of res.parents) for (const id of (p.mutations || [])) parentMuts.add(id);
+    this.prestigeResult = {
+      offspring: this.renderablePlanet(res.planet, 'current'),
+      parents: res.parents,
+      inherited: (res.planet.mutations || []).filter((id) => parentMuts.has(id)),
+      fresh: (res.planet.mutations || []).filter((id) => !parentMuts.has(id)),
+    };
+  }
+
+  // Messages from the panel: fuse two parents, dismiss the result, or
+  // jump to the Solar System. The panel never mutates state itself.
+  onPrestigeMessage(msg) {
+    if (!msg || typeof msg !== 'object') return;
+    if (msg.type === 'prestige' && msg.a && msg.b) {
+      const res = Logic.prestige(this.state,
+        { kind: msg.a.kind, index: msg.a.index },
+        { kind: msg.b.kind, index: msg.b.index },
+        Logic.randomSeed);
+      if (res.ok) {
+        this.recordPrestigeResult(res);
+        this.saveNow();
+        this.pushState();
+      }
+    } else if (msg.type === 'dismissResult') {
+      this.prestigeResult = null;
+      this.postPrestigeState();
+    } else if (msg.type === 'openSystem') {
+      this.openSolarSystem();
     }
   }
 
@@ -429,6 +555,10 @@ class ProtoplanetApp {
     // — typing never opens it, but a rebirth while it is open must
     // show the new planet in the Archive right away.
     this.postSystemState();
+    // Same for the Prestige panel — typing can make the current
+    // planet eligible, and a fusion from the palette must show up
+    // there too.
+    this.postPrestigeState();
   }
 
   // -- webview HTML ----------------------------------------------------------
@@ -586,6 +716,10 @@ class ProtoplanetApp {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' ${webview.cspSource};">
 <style>
+  /* The panel toggles sections with .hidden — but #slotsRow and
+  #confirmBar set their own display, which beats the browser's
+  built-in [hidden] rule. This line makes hidden actually hide. */
+  [hidden] { display: none !important; }
   html, body { -webkit-text-size-adjust: none; text-size-adjust: none; }
   body { margin: 0; background: #050505; color: var(--vscode-editor-foreground);
     font-family: var(--vscode-font-family); }
@@ -606,6 +740,8 @@ class ProtoplanetApp {
     color: var(--vscode-editor-foreground); }
   #topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px;
     padding: 10px 16px; border-bottom: 1px solid var(--vscode-widget-border, #222);
+    background: #080808; position: sticky; top: 0; z-index: 10; }
+  #topbar h1 { font-size: 15px; margin: 0 0 2px; }
     background: #080808; position: sticky; top: 0; z-index: 10; }
   #topbar h1 { font-size: 15px; margin: 0 0 2px; }
   #rankLine { font-size: 12px; opacity: .75; }
@@ -1309,6 +1445,508 @@ class ProtoplanetApp {
   });
 
   fitView();
+  vscodeApi.postMessage({ type: 'ready' });
+})();
+</script>
+</body>
+</html>`;
+  }
+
+  // -- step 4b: the Prestige / fusion panel HTML ------------------------------
+  // Full-screen panel, same visual language as the Solar System panel
+  // (fixed-cell ASCII renders, amber accents, VS Code theme vars).
+  // Top: the two parent slots with the fusion between them. Below: the
+  // parent picker (the whole collection, with eligibility). When a
+  // fusion is confirmed, the slots give way to the collision stage —
+  // a violent ASCII smash (planet.js collisionFrame), with phase
+  // captions — and only when the mess has coalesced does the offspring
+  // show, with its lineage. The panel never pops anything up; it only
+  // posts fuse / dismiss / openSystem messages, and the extension
+  // decides.
+  getPrestigeHtml(webview) {
+    const nonce = getNonce();
+    const planetJsUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.context.extensionUri, 'planet.js')
+    );
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' ${webview.cspSource};">
+<style>
+  /* The panel toggles sections with .hidden — but #slotsRow and
+  #confirmBar set their own display, which beats the browser's
+  built-in [hidden] rule. This line makes hidden actually hide. */
+  [hidden] { display: none !important; }
+  html, body { -webkit-text-size-adjust: none; text-size-adjust: none; }
+  body { margin: 0; background: #050505; color: var(--vscode-editor-foreground);
+    font-family: var(--vscode-font-family); }
+  .pp-grid { margin: 0;
+    font-family: ${FONT_STACK};
+    font-size: var(--pp-fs, 10px); line-height: var(--pp-ch, 18px);
+    letter-spacing: 0; white-space: pre;
+    -webkit-text-size-adjust: none; text-size-adjust: none; }
+  .pp-run { display: inline-block; height: var(--pp-ch, 18px);
+    line-height: var(--pp-ch, 18px); vertical-align: top; overflow: hidden;
+    white-space: pre; font-kerning: none; }
+  button { background: var(--vscode-button-background); color: var(--vscode-button-foreground);
+    border: none; border-radius: 4px; padding: 5px 11px; cursor: pointer; font-size: 12px; }
+  button:hover { background: var(--vscode-button-hoverBackground); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.ghost { background: transparent; border: 1px solid var(--vscode-widget-border, #444);
+    color: var(--vscode-editor-foreground); }
+  button.big { font-size: 14px; padding: 9px 20px; font-weight: 600; }
+  #topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 10px 16px; border-bottom: 1px solid var(--vscode-widget-border, #222);
+    background: #080808; position: sticky; top: 0; z-index: 10; }
+  #topbar h1 { font-size: 15px; margin: 0 0 2px; }
+  #subLine { font-size: 12px; opacity: .75; }
+  #counts { font-size: 12px; opacity: .75; white-space: nowrap; }
+  #banner { background: #1a1405; border-bottom: 1px solid #e8b64c; color: #ffd75f;
+    padding: 9px 16px; font-size: 12px; line-height: 1.5; }
+  main { padding: 18px 22px 48px; max-width: 1100px; margin: 0 auto; }
+  /* The fusion stage: two parent slots with the collision between them. */
+  #slotsRow { display: flex; gap: 14px; align-items: stretch; flex-wrap: wrap; }
+  .parentSlot { flex: 1 1 300px; min-width: 280px; background: #0b0b0b;
+    border: 1px solid #262626; border-radius: 8px; padding: 12px; }
+  .parentSlot.picked { border-color: #e8b64c; }
+  .parentSlot.empty { border-style: dashed; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; min-height: 320px; color: rgba(255,255,255,.55);
+    font-size: 13px; text-align: center; line-height: 1.6; }
+  .parentSlot h3 { font-size: 14px; margin: 0 0 2px; }
+  .parentSlot .sub { font-size: 12px; opacity: .75; margin: 0 0 8px; line-height: 1.5; }
+  .slotArt { background: #050505; border: 1px solid #1c1c1c; padding: 4px; overflow-x: auto; margin-bottom: 8px; }
+  .slotTag { font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
+    color: #ffd75f; margin-bottom: 8px; }
+  .mut { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .12em;
+    text-transform: uppercase; color: #ffd75f; background: rgba(255, 215, 95, .12);
+    border: 1px solid rgba(255, 215, 95, 0.55); border-radius: 3px; padding: 2px 7px; margin: 0 0 8px; }
+  #fusionMid { flex: 0 0 170px; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 8px; text-align: center; }
+  #fusionGlyph { font-size: 44px; color: #e8b64c; line-height: 1; }
+  #fusionMid .hint { font-size: 12px; opacity: .65; line-height: 1.5; }
+  /* The collision stage: the smash itself, full width. */
+  #collisionWrap { background: #050505; border: 1px solid #3a3a3a; border-radius: 8px;
+    padding: 14px; text-align: center; }
+  #collisionCaption { font-size: 14px; font-weight: 600; color: #ffd75f; margin: 0 0 10px; }
+  #collisionArt { background: #050505; overflow-x: auto; display: inline-block; }
+  #collisionWrap .skipRow { margin-top: 10px; }
+  /* Inheritance preview + confirm. */
+  #inheritBar { margin: 14px 0 0; font-size: 12px; line-height: 1.7; }
+  #inheritBar .row { margin: 2px 0; }
+  #inheritBar .boost { color: #ffd75f; font-weight: 700; }
+  #inheritBar .fed { opacity: .75; }
+  #confirmBar { margin: 16px 0 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  #confirmBar .warn { font-size: 12px; opacity: .8; line-height: 1.5; }
+  #errorNote { margin: 12px 0 0; font-size: 12px; color: #ff9d9d; line-height: 1.5; }
+  /* The result: the offspring, hatched. */
+  #result { background: #0b0b0b; border: 1px solid #e8b64c; border-radius: 8px; padding: 16px; }
+  #result h2 { font-size: 18px; margin: 0 0 2px; }
+  #result .sub { font-size: 12px; opacity: .75; margin: 0 0 10px; line-height: 1.5; }
+  #resultArt { background: #050505; border: 1px solid #222; padding: 4px; overflow-x: auto;
+    margin-bottom: 12px; display: inline-block; }
+  #result .lineage { font-size: 13px; margin: 0 0 8px; line-height: 1.6; }
+  #result .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  /* The parent picker. */
+  #parents { margin-top: 26px; }
+  #parents h2 { font-size: 15px; margin: 0 0 4px; }
+  #parentsCount { font-size: 12px; opacity: .75; margin: 0 0 12px; }
+  #cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(158px, 1fr)); gap: 12px; }
+  .card { background: #0b0b0b; border: 1px solid #262626; border-radius: 8px; padding: 10px;
+    cursor: pointer; }
+  .card:hover { border-color: #555; }
+  .card.dim { opacity: .55; cursor: default; }
+  .card.dim:hover { border-color: #262626; }
+  .card.pickedA, .card.pickedB { border-color: #e8b64c; }
+  .card .thumb { background: #050505; border: 1px solid #1c1c1c; margin-bottom: 8px; overflow: hidden; }
+  .card .cname { font-size: 13px; font-weight: 600; }
+  .card .cmeta { font-size: 11px; opacity: .7; line-height: 1.5; margin-top: 2px; }
+  .badge { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase; border-radius: 3px; padding: 1px 6px; margin: 4px 4px 0 0; }
+  .badge.ok { color: #7ee2a8; background: rgba(126, 226, 168, 0.12); border: 1px solid rgba(126, 226, 168, 0.5); }
+  .badge.pick { color: #ffd75f; background: rgba(255, 215, 95, 0.14); border: 1px solid rgba(255, 215, 95, 0.5); }
+  .badge.mut { color: #ffd75f; background: rgba(255, 215, 95, 0.12); border: 1px solid rgba(255, 215, 95, 0.55); }
+  .badge.off { color: rgba(255,255,255,.6); background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.25); }
+  .empty { font-size: 13px; opacity: .65; padding: 18px 0; }
+</style>
+</head>
+<body>
+<header id="topbar">
+  <div>
+    <h1>Prestige — Fusion</h1>
+    <div id="subLine">Two planets that reached Civilization make an offspring. Parents stay in your collection — each can only be a parent once.</div>
+  </div>
+  <div id="counts"></div>
+</header>
+<div id="banner" hidden></div>
+<main>
+  <section id="fusion">
+    <div id="slotsRow">
+      <div class="parentSlot empty" id="slotA"></div>
+      <div id="fusionMid">
+        <div id="fusionGlyph">✦</div>
+        <div class="hint" id="fusionHint">Pick two parents below —<br>then fuse them.</div>
+      </div>
+      <div class="parentSlot empty" id="slotB"></div>
+    </div>
+    <div id="collisionWrap" hidden>
+      <p id="collisionCaption"></p>
+      <div id="collisionArt"><div class="pp-grid" style="--pp-fs:8.46px;--pp-ch:8.46px"></div></div>
+      <div class="skipRow"><button id="skipBtn" class="ghost">Skip the collision</button></div>
+    </div>
+    <div id="inheritBar"></div>
+    <div id="confirmBar" hidden></div>
+    <div id="errorNote" hidden></div>
+    <div id="result" hidden></div>
+  </section>
+  <section id="parents">
+    <h2>Choose your parents</h2>
+    <p id="parentsCount"></p>
+    <div id="cards"></div>
+  </section>
+</main>
+<script nonce="${nonce}" src="${planetJsUri}"></script>
+<script nonce="${nonce}">
+(function () {
+  var vscodeApi = acquireVsCodeApi();
+  var P = window.Protoplanet;
+  var state = null, sec = 0, tick = 0;
+  var pickA = null, pickB = null; // planet entries from state.planets
+  var confirmOpen = false, fusing = false, fusionT0 = 0, lastError = '';
+  var fuseA = null, fuseB = null; // the parents mid-collision (kept
+  // separate from the picks: the picks clear when the result lands,
+  // but the animation still needs the two planets until it ends)
+  var slotAEl = document.getElementById('slotA');
+  var slotBEl = document.getElementById('slotB');
+  var slotsRowEl = document.getElementById('slotsRow');
+  var collisionWrapEl = document.getElementById('collisionWrap');
+  var collisionCaptionEl = document.getElementById('collisionCaption');
+  var collisionArtEl = document.getElementById('collisionArt');
+  var inheritBarEl = document.getElementById('inheritBar');
+  var confirmBarEl = document.getElementById('confirmBar');
+  var errorNoteEl = document.getElementById('errorNote');
+  var resultEl = document.getElementById('result');
+  var bannerEl = document.getElementById('banner');
+  var countsEl = document.getElementById('counts');
+  var parentsCountEl = document.getElementById('parentsCount');
+  var cardsEl = document.getElementById('cards');
+
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function pickKey(p) { return p.kind + ':' + p.index; }
+  function findPlanet(seed, generation) {
+    if (!state) return null;
+    for (var i = 0; i < state.planets.length; i++) {
+      var p = state.planets[i];
+      if (p.seed === seed && p.generation === generation) return p;
+    }
+    return null;
+  }
+  function isPicked(p) {
+    var k = pickKey(p);
+    return (pickA && pickKey(pickA) === k) || (pickB && pickKey(pickB) === k);
+  }
+  function slotHtml(p, tag) {
+    var art = P.gridToHtml(P.render(p.planet, p.stageIdx, 10, sec, 1.0), 2.2, 3.96);
+    return '<div class="slotTag">' + esc(tag) + '</div>'
+      + '<h3>' + esc(p.name) + '</h3>'
+      + '<p class="sub">' + esc(p.summary) + ' &middot; Seed ' + p.seed + '</p>'
+      + (p.mutationLabel ? '<div class="mut">' + esc(p.mutationLabel) + '</div>' : '')
+      + '<div class="slotArt"><div class="pp-grid" style="--pp-fs:3.96px;--pp-ch:3.96px">' + art + '</div></div>'
+      + '<div class="sub">' + esc(p.terrainLabel) + ' &middot; ' + esc(p.stageName)
+      + ' &middot; ' + p.chars + ' characters &middot; Gen ' + p.generation + '</div>';
+  }
+  function renderSlots() {
+    if (pickA) {
+      slotAEl.className = 'parentSlot picked';
+      slotAEl.innerHTML = slotHtml(pickA, 'Parent A');
+    } else {
+      slotAEl.className = 'parentSlot empty';
+      slotAEl.innerHTML = '<div><b>Parent A</b><br>Pick a planet below.</div>';
+    }
+    if (pickB) {
+      slotBEl.className = 'parentSlot picked';
+      slotBEl.innerHTML = slotHtml(pickB, 'Parent B');
+    } else {
+      slotBEl.className = 'parentSlot empty';
+      slotBEl.innerHTML = '<div><b>Parent B</b><br>Pick a planet below.</div>';
+    }
+    document.getElementById('fusionHint').innerHTML =
+      (pickA && pickB) ? 'Two worlds, ready.<br>One of them will not survive the meeting.'
+      : 'Pick two parents below —<br>then fuse them.';
+  }
+  function refreshSlotArt() {
+    var grids = slotAEl.querySelectorAll('.pp-grid');
+    if (pickA && grids.length) grids[0].innerHTML = P.gridToHtml(
+      P.render(pickA.planet, pickA.stageIdx, 10, sec, 1.0), 2.2, 3.96);
+    var gridsB = slotBEl.querySelectorAll('.pp-grid');
+    if (pickB && gridsB.length) gridsB[0].innerHTML = P.gridToHtml(
+      P.render(pickB.planet, pickB.stageIdx, 10, sec, 1.0), 2.2, 3.96);
+  }
+  function renderInherit() {
+    if (!pickA || !pickB) { inheritBarEl.innerHTML = ''; return; }
+    var counts = {};
+    var order = [];
+    [pickA, pickB].forEach(function (p) {
+      (p.mutations || []).forEach(function (id) {
+        if (!counts[id]) { counts[id] = 0; order.push(id); }
+        counts[id]++;
+      });
+    });
+    var html = '';
+    if (order.length === 0) {
+      html += '<div class="row">Neither parent carries a mutation — the offspring rolls a fresh one at the usual rare odds.</div>';
+    } else {
+      order.forEach(function (id) {
+        var def = P.mutationDef(id);
+        var name = def ? def.name : id;
+        var both = counts[id] >= 2;
+        html += '<div class="row">◆ ' + esc(name) + ' — '
+          + (both ? 'both parents carry it' : 'one parent carries it')
+          + ' &middot; <span class="boost">~' + (both ? state.inheritBoth : state.inheritOne) + '× odds</span></div>';
+      });
+      html += '<div class="row" style="opacity:.65">Anything else can still appear at its usual rare odds.</div>';
+    }
+    if (state.fedMineral) {
+      html += '<div class="row fed">Fed: ' + esc(state.fedMineral)
+        + ' — it will tilt the offspring’s birth roll too, then it’s consumed.</div>';
+    }
+    inheritBarEl.innerHTML = html;
+  }
+  function renderConfirm() {
+    if (!pickA || !pickB || fusing || (state && state.result)) { confirmBarEl.hidden = true; return; }
+    confirmBarEl.hidden = false;
+    if (!confirmOpen) {
+      confirmBarEl.innerHTML = '<button id="fuseBtn" class="big">Fuse ' + esc(pickA.name) + ' + ' + esc(pickB.name) + '</button>'
+        + '<span class="warn">The offspring starts as dust. The parents stay in your collection, but they can’t be parents again.</span>';
+      document.getElementById('fuseBtn').addEventListener('click', function () {
+        confirmOpen = true;
+        renderConfirm();
+      });
+    } else {
+      confirmBarEl.innerHTML = '<span class="warn"><b>Fuse ' + esc(pickA.name) + ' and ' + esc(pickB.name)
+        + '?</b> This is permanent — the offspring hatches right away, and both parents retire from ever being parents again.</span>'
+        + '<button id="confirmFuseBtn" class="big">Yes, fuse them</button>'
+        + '<button id="cancelFuseBtn" class="ghost">Cancel</button>';
+      document.getElementById('confirmFuseBtn').addEventListener('click', startFusion);
+      document.getElementById('cancelFuseBtn').addEventListener('click', function () {
+        confirmOpen = false;
+        renderConfirm();
+      });
+    }
+  }
+  function startFusion() {
+    if (!pickA || !pickB) return;
+    confirmOpen = false;
+    fuseA = pickA; fuseB = pickB;
+    fusing = true;
+    fusionT0 = sec;
+    slotsRowEl.hidden = true;
+    inheritBarEl.hidden = true;
+    confirmBarEl.hidden = true;
+    errorNoteEl.hidden = true;
+    resultEl.hidden = true;
+    collisionWrapEl.hidden = false;
+    vscodeApi.postMessage({ type: 'prestige', a: { kind: pickA.kind, index: pickA.index }, b: { kind: pickB.kind, index: pickB.index } });
+  }
+  function collisionCaption(phase) {
+    return {
+      approach: 'Two worlds spiral in, circling closer…',
+      impact: 'IMPACT — the crusts shatter.',
+      explosion: 'Material sprays into space — rock, dust, and fire.',
+      swirl: 'The debris falls into orbit, circling the wreck.',
+      coalesce: 'Something new is gathering out of the mess…',
+      done: 'The offspring hatches.',
+    }[phase] || '';
+  }
+  function renderCollision() {
+    if (!state || !state.result || !fuseA || !fuseB) return;
+    var t = sec - fusionT0;
+    var phase = P.collisionPhase(t);
+    collisionCaptionEl.textContent = collisionCaption(phase);
+    var artEl = collisionArtEl.querySelector('.pp-grid');
+    if (artEl) artEl.innerHTML = P.gridToHtml(
+      P.collisionFrame(fuseA.planet, fuseB.planet, state.result.offspring.planet, t, sec), 4.7, 8.46);
+    if (t >= P.COLLISION_END) {
+      fusing = false;
+      fuseA = null; fuseB = null;
+      collisionWrapEl.hidden = true;
+      renderAll();
+    }
+  }
+  function renderResult() {
+    if (!state || !state.result) { resultEl.hidden = true; return; }
+    var r = state.result;
+    var off = r.offspring;
+    var art = P.gridToHtml(P.render(off.planet, off.stageIdx, 10, sec, 1.2), 2.35, 4.23);
+    var parentNames = r.parents.map(function (p) { return esc(p.name || ('Seed ' + p.seed)); }).join(' + ');
+    var mutName = function (id) { var d = P.mutationDef(id); return d ? d.name : id; };
+    var html = '<h2>' + esc(off.name) + ' hatches</h2>'
+      + '<p class="sub">' + esc(off.summary) + ' &middot; Seed ' + off.seed + ' &middot; Gen ' + off.generation + '</p>'
+      + (off.mutationLabel ? '<div class="mut">' + esc(off.mutationLabel) + '</div>' : '')
+      + '<div id="resultArt"><div class="pp-grid" style="--pp-fs:4.23px;--pp-ch:4.23px">' + art + '</div></div>'
+      + '<p class="lineage">Born from <b>' + parentNames + '</b>.</p>';
+    if (r.inherited.length > 0) {
+      html += '<p class="lineage">Inherited: <b>' + r.inherited.map(mutName).map(esc).join(', ') + '</b></p>';
+    } else {
+      html += '<p class="lineage">It inherited no mutation — a fresh roll.</p>';
+    }
+    if (r.fresh.length > 0) {
+      html += '<p class="lineage">New roll: <b>' + r.fresh.map(mutName).map(esc).join(', ') + '</b></p>';
+    }
+    html += '<p class="lineage" style="opacity:.7">The parents stay in your collection, retired — each can only be a parent once.</p>'
+      + '<div class="actions"><button id="openSystemBtn">Open Solar System</button>'
+      + '<button id="fuseAgainBtn" class="ghost">Fuse again</button></div>';
+    resultEl.innerHTML = html;
+    resultEl.hidden = false;
+    document.getElementById('openSystemBtn').addEventListener('click', function () {
+      vscodeApi.postMessage({ type: 'openSystem' });
+    });
+    document.getElementById('fuseAgainBtn').addEventListener('click', function () {
+      vscodeApi.postMessage({ type: 'dismissResult' });
+    });
+  }
+  function refreshResultArt() {
+    if (!state || !state.result) return;
+    var off = state.result.offspring;
+    var gridEl = resultEl.querySelector('.pp-grid');
+    if (gridEl) gridEl.innerHTML = P.gridToHtml(
+      P.render(off.planet, off.stageIdx, 10, sec, 1.2), 2.35, 4.23);
+  }
+  function renderCards() {
+    if (!state) return;
+    var list = state.planets;
+    parentsCountEl.textContent = state.planets.length + ' planet' + (state.planets.length === 1 ? '' : 's')
+      + ' in your collection — ' + state.eligibleCount + ' eligible to be parents';
+    if (list.length === 0) {
+      cardsEl.innerHTML = '<div class="empty">No planets yet — type to grow your first one, and it will show up here when it reaches Civilization.</div>';
+      return;
+    }
+    var html = '';
+    for (var i = 0; i < list.length; i++) {
+      var p = list[i];
+      var picked = isPicked(p);
+      var tag = picked ? (pickA && pickKey(pickA) === pickKey(p) ? 'Parent A' : 'Parent B') : null;
+      var thumb = P.gridToHtml(P.renderCozy(p.planet, p.stageIdx, 10, 5, 1.0, 34, 19), 3.4, 6.12);
+      html += '<div class="card' + (!p.eligible ? ' dim' : '') + (picked ? (tag === 'Parent A' ? ' pickedA' : ' pickedB') : '') + '"'
+        + ' data-seed="' + p.seed + '" data-gen="' + p.generation + '">'
+        + '<div class="thumb"><div class="pp-grid" style="--pp-fs:6.12px;--pp-ch:6.12px">' + thumb + '</div></div>'
+        + '<div class="cname">' + esc(p.name) + '</div>'
+        + '<div class="cmeta">' + esc(p.terrainLabel) + ' &middot; ' + esc(p.stageName) + ' &middot; ' + p.chars + ' chars &middot; Gen ' + p.generation + '</div>'
+        + (p.kind === 'current' ? '<span class="badge ok">Growing now</span>' : '')
+        + (tag ? '<span class="badge pick">' + esc(tag) + '</span>' : '')
+        + (!p.eligible && p.eligibilityReason === 'already-parent' ? '<span class="badge off">Already a parent</span>' : '')
+        + (p.mutationLabel ? '<span class="badge mut">' + esc(p.mutationLabel) + '</span>' : '')
+        + (!p.eligible && p.eligibilityReason === 'too-young'
+          ? '<div class="cmeta">' + p.chars + ' / ' + state.minChars + ' characters to Civilization</div>' : '')
+        + '</div>';
+    }
+    cardsEl.innerHTML = html;
+  }
+  function renderBanner() {
+    if (!state) return;
+    countsEl.textContent = state.eligibleCount + ' eligible · ' + state.planets.length + ' planets';
+    if (state.canFuse) {
+      bannerEl.hidden = true;
+    } else {
+      bannerEl.hidden = false;
+      bannerEl.textContent = 'Prestige needs two planets that reached Civilization (' + state.minChars
+        + '+ characters). You have ' + state.eligibleCount + ' eligible so far — keep typing, and the ones close to Civilization show their progress below.';
+    }
+  }
+  function renderAll() {
+    if (!state) return;
+    renderBanner();
+    if (state.result) {
+      slotsRowEl.hidden = true;
+      inheritBarEl.hidden = true;
+      confirmBarEl.hidden = true;
+      collisionWrapEl.hidden = true;
+      renderResult();
+    } else {
+      slotsRowEl.hidden = false;
+      inheritBarEl.hidden = false;
+      resultEl.hidden = true;
+      renderSlots();
+      renderInherit();
+      renderConfirm();
+    }
+    if (lastError) {
+      errorNoteEl.hidden = false;
+      errorNoteEl.textContent = lastError;
+    } else {
+      errorNoteEl.hidden = true;
+    }
+    renderCards();
+  }
+  function togglePick(p) {
+    if (!p.eligible) return;
+    var k = pickKey(p);
+    if (pickA && pickKey(pickA) === k) pickA = null;
+    else if (pickB && pickKey(pickB) === k) pickB = null;
+    else if (!pickA) pickA = p;
+    else if (!pickB) pickB = p;
+    else pickB = p; // both full: replace B
+    confirmOpen = false;
+    lastError = '';
+    renderAll();
+  }
+
+  cardsEl.addEventListener('click', function (e) {
+    var card = e.target.closest ? e.target.closest('.card') : null;
+    if (!card) return;
+    var p = findPlanet(+card.getAttribute('data-seed'), +card.getAttribute('data-gen'));
+    if (p) togglePick(p);
+  });
+  document.getElementById('skipBtn').addEventListener('click', function () {
+    if (!fusing) return;
+    fusing = false;
+    fuseA = null; fuseB = null;
+    collisionWrapEl.hidden = true;
+    renderAll();
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    if (confirmOpen) { confirmOpen = false; renderConfirm(); }
+  });
+
+  // --- animation loop (150ms tick) -------------------------------------------
+  setInterval(function () {
+    sec += 0.15;
+    tick++;
+    if (document.hidden) return;
+    if (fusing) { renderCollision(); return; }
+    if (tick % 3 === 0) {
+      refreshSlotArt();
+      refreshResultArt();
+    }
+  }, 150);
+
+  // --- state from the extension --------------------------------------------------
+  window.addEventListener('message', function (e) {
+    var msg = e.data;
+    if (!msg || msg.type !== 'prestige') return;
+    var hadResult = !!(state && state.result);
+    state = msg;
+    if (state.result && !hadResult) {
+      // A fusion just landed: the parents retire, so the picks clear.
+      // The collision plays first (fusing stays on until it ends);
+      // if the fusion came from somewhere else, the result shows now.
+      pickA = null; pickB = null; confirmOpen = false;
+      if (!fusing) renderAll();
+    } else if (fusing && !state.result) {
+      // The fusion didn't go through (a parent changed mid-flight).
+      fusing = false;
+      collisionWrapEl.hidden = true;
+      lastError = 'That fusion didn’t go through — a parent may have changed. Pick again.';
+      renderAll();
+    } else {
+      renderAll();
+    }
+  });
+
   vscodeApi.postMessage({ type: 'ready' });
 })();
 </script>

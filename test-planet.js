@@ -1433,5 +1433,176 @@ check('name: generatePlanet carries the seed name',
     P.parseCatalogName('Kelmor') === null && P.parseCatalogName('Kepler-999999b') === null);
 }
 
+// --- 16. Collision / fusion animation (prestige, Nov 11) --------------------
+// A violent, realistic ASCII collision — not a gentle fade. Two planets
+// spiral in (orbital inspiral — wide loops that tighten into the blow),
+// smash (squash + white-hot flash + shockwave) and SHATTER into
+// spiraling shards (Devon, Nov 11: the planets stopped dead at the
+// impact — they have to break apart in pieces, spiraling as they fly
+// apart, not freeze and then spray), spray debris and dust, the debris
+// orbits, then the mess coalesces into the offspring. Pure function of
+// (planets, t): deterministic, and the timeline has the phases the
+// panel captions.
+{
+  const colA = P.generatePlanet(1234);
+  const colB = P.generatePlanet(5678);
+  const colO = P.generatePlanet(9999);
+  const nonBlank = (g) => {
+    let n = 0;
+    for (const row of g) for (const c of row) if (c[1] !== null) n++;
+    return n;
+  };
+  const inRegion = (g, x0, x1) => {
+    let n = 0;
+    for (const row of g) for (let x = x0; x <= x1; x++) if (row[x][1] !== null) n++;
+    return n;
+  };
+  const bboxWidth = (g) => {
+    let lo = 1e9, hi = -1e9;
+    for (const row of g) for (let x = 0; x < row.length; x++) {
+      if (row[x][1] !== null) { if (x < lo) lo = x; if (x > hi) hi = x; }
+    }
+    return hi - lo;
+  };
+  const nearCenter = (g, R) => {
+    let n = 0;
+    for (let y = 0; y < g.length; y++) for (let x = 0; x < g[y].length; x++) {
+      if (g[y][x][1] === null) continue;
+      const dx = x - 68, dy = (y - 38) * 2;
+      if (Math.sqrt(dx * dx + dy * dy) <= R) n++;
+    }
+    return n;
+  };
+
+  check('collision: timeline phases',
+    P.collisionPhase(0) === 'approach' && P.collisionPhase(1.2) === 'impact'
+    && P.collisionPhase(2.0) === 'explosion' && P.collisionPhase(3.5) === 'swirl'
+    && P.collisionPhase(4.7) === 'coalesce' && P.collisionPhase(5.2) === 'done'
+    && P.collisionPhase(9) === 'done');
+  check('collision: END is 5.2s', P.COLLISION_END === 5.2);
+  check('collision: timeline constants match the phases',
+    P.COLLISION_TIMELINE.approach === 1.0 && P.COLLISION_TIMELINE.impact === 1.5
+    && P.COLLISION_TIMELINE.explosion === 3.0 && P.COLLISION_TIMELINE.swirl === 4.2
+    && P.COLLISION_TIMELINE.coalesce === 5.2);
+  const f0 = P.collisionFrame(colA, colB, colO, 0.1);
+  check('collision: frame is 136x76', f0.length === 76 && f0.every((r) => r.length === 136));
+  check('collision: deterministic (same inputs + t = same frame)',
+    gridsEqual(P.collisionFrame(colA, colB, colO, 2.0), P.collisionFrame(colA, colB, colO, 2.0)));
+  check('collision: approach has a disc on the left and one on the right, center clear',
+    inRegion(f0, 0, 45) > 100 && inRegion(f0, 90, 135) > 100 && inRegion(f0, 58, 78) < 40,
+    `left ${inRegion(f0, 0, 45)} right ${inRegion(f0, 90, 135)} center ${inRegion(f0, 58, 78)}`);
+  // The approach is an orbital inspiral, not a straight slide: the discs
+  // swing around their common center as the orbit decays. Early in the
+  // approach the left-side cluster sits above the center line; a moment
+  // later it has swung below it (the old slide kept it pinned at one
+  // height the whole way in). And the orbit itself shrinks: the
+  // cluster separation (measured in orbit space, where rows count
+  // double, as on screen) is much smaller late in the approach.
+  const centroid = (g, x0, x1) => {
+    let sx = 0, sy = 0, n = 0;
+    for (let y = 0; y < g.length; y++) for (let x = x0; x <= x1; x++) {
+      if (g[y][x][1] !== null) { sx += x; sy += y; n++; }
+    }
+    return n ? { x: sx / n, y: sy / n, n } : null;
+  };
+  const orbitSep = (g) => {
+    const L = centroid(g, 0, 67), R = centroid(g, 68, 135);
+    if (!L || !R) return 0;
+    return Math.hypot(L.x - R.x, 2 * (L.y - R.y));
+  };
+  const fA04 = P.collisionFrame(colA, colB, colO, 0.4);
+  const fA09 = P.collisionFrame(colA, colB, colO, 0.9);
+  check('collision: approach swings the discs around the center (inspiral, not a slide)',
+    centroid(f0, 0, 67).y < 34 && centroid(fA04, 0, 67).y > 45,
+    `left y at 0.1s ${centroid(f0, 0, 67).y.toFixed(1)}, at 0.4s ${centroid(fA04, 0, 67).y.toFixed(1)}`);
+  check('collision: approach closes in — the orbit shrinks as it spirals',
+    orbitSep(fA09) < orbitSep(f0) * 0.6,
+    `orbit sep 0.1s ${orbitSep(f0).toFixed(1)} vs 0.9s ${orbitSep(fA09).toFixed(1)}`);
+  const fFlash = P.collisionFrame(colA, colB, colO, 1.25);
+  let flashCells = 0;
+  for (let y = 0; y < fFlash.length; y++) for (let x = 0; x < fFlash[y].length; x++) {
+    const c = fFlash[y][x][1];
+    if ((c === 231 || c === 229) && Math.hypot(x - 68, (y - 38) * 2) < 15) flashCells++;
+  }
+  check('collision: impact flash is white-hot at the contact point', flashCells > 20, flashCells + ' hot cells');
+  // The impact shatters the discs into shards that keep spiraling
+  // (Devon, Nov 11: the planets stopped dead at the impact — they
+  // have to break apart in pieces, spiraling as they fly apart, not
+  // freeze and then spray). The shard motion law is a pure function:
+  // radius grows and angle advances in the same direction as the
+  // approach inspiral, and a shard has already travelled by 0.5s in.
+  const sh0 = P.collisionShardAt(30, -1.0, 0.6, 10, 0);
+  const sh05 = P.collisionShardAt(30, -1.0, 0.6, 10, 0.5);
+  const sh1 = P.collisionShardAt(30, -1.0, 0.6, 10, 1.0);
+  check('collision: shards spiral outward (radius grows)',
+    sh05.rho > sh0.rho && sh1.rho > sh05.rho, `rho ${sh0.rho} -> ${sh05.rho} -> ${sh1.rho}`);
+  check('collision: shards keep the inspiral direction (angle advances)',
+    sh05.th > sh0.th && sh1.th > sh05.th,
+    `th ${sh0.th.toFixed(2)} -> ${sh05.th.toFixed(2)} -> ${sh1.th.toFixed(2)}`);
+  check('collision: shards move from the first instant (no frozen hold)',
+    Math.hypot(sh05.x - sh0.x, 2 * (sh05.y - sh0.y)) > 1,
+    `travel in 0.5s ${Math.hypot(sh05.x - sh0.x, 2 * (sh05.y - sh0.y)).toFixed(1)}`);
+  // Frame-level: the disc mass itself shears at the impact — the top
+  // half (planet A, moving +x at contact) shifts right and the bottom
+  // half (planet B, moving -x) shifts left between 1.05s and 1.45s.
+  // Disc-colored cells only (the test planets' terrain colors, derived
+  // from the t=1.0 frame minus the star/dust/particle/flash palette),
+  // so the flash, dust and spray can't fake the signal.
+  const NON_DISC = new Set([250, 244, 242, 240, 231, 229, 226, 214, 208, 202, 196, 216, 180, 137]);
+  const fDisc0 = P.collisionFrame(colA, colB, colO, 1.0);
+  const discColors = new Set();
+  for (let y = 10; y <= 56; y++) for (let x = 26; x <= 110; x++) {
+    const c = fDisc0[y][x][1];
+    if (c !== null && !NON_DISC.has(c)) discColors.add(c);
+  }
+  const discHalfCentroid = (g, y0, y1) => {
+    let sx = 0, n = 0;
+    for (let y = y0; y < y1; y++) for (let x = 0; x < g[y].length; x++) {
+      if (discColors.has(g[y][x][1])) { sx += x; n++; }
+    }
+    return n ? sx / n : null;
+  };
+  const fI05 = P.collisionFrame(colA, colB, colO, 1.05);
+  const fI145 = P.collisionFrame(colA, colB, colO, 1.45);
+  check('collision: the discs shear apart at impact (top mass moves right, bottom mass left)',
+    discHalfCentroid(fI145, 0, 38) - discHalfCentroid(fI05, 0, 38) > 1.5
+    && discHalfCentroid(fI05, 38, 76) - discHalfCentroid(fI145, 38, 76) > 1.5,
+    `top ${discHalfCentroid(fI05, 0, 38).toFixed(2)} -> ${discHalfCentroid(fI145, 0, 38).toFixed(2)}, ` +
+    `bottom ${discHalfCentroid(fI05, 38, 76).toFixed(2)} -> ${discHalfCentroid(fI145, 38, 76).toFixed(2)}`);
+  const fBoom = P.collisionFrame(colA, colB, colO, 2.2);
+  check('collision: explosion sprays material across the frame',
+    bboxWidth(fBoom) > 95 && nonBlank(fBoom) > 300,
+    `bbox ${bboxWidth(fBoom)} cells ${nonBlank(fBoom)}`);
+  const fSwirl = P.collisionFrame(colA, colB, colO, 3.6);
+  check('collision: swirl still has debris far from the center',
+    inRegion(fSwirl, 0, 37) + inRegion(fSwirl, 99, 135) > 50,
+    `far cells ${inRegion(fSwirl, 0, 37) + inRegion(fSwirl, 99, 135)}`);
+  const fCoal = P.collisionFrame(colA, colB, colO, 4.8);
+  check('collision: coalescence pulls the mess back to the center',
+    nearCenter(fCoal, 30) / Math.max(1, nonBlank(fCoal)) > 0.5,
+    `${nearCenter(fCoal, 30)}/${nonBlank(fCoal)} near center`);
+  const fEnd = P.collisionFrame(colA, colB, colO, 6.0);
+  check('collision: finale is the offspring, whole, at the center',
+    nearCenter(fEnd, 20) > 100, nearCenter(fEnd, 20) + ' cells near center');
+  check('collision: the mess has settled by the finale (fewer cells than the explosion)',
+    nonBlank(fEnd) < nonBlank(fBoom), `${nonBlank(fEnd)} vs ${nonBlank(fBoom)}`);
+  let threw = null;
+  try {
+    for (const t of [0, 0.5, 1, 1.25, 1.5, 2, 2.5, 3, 3.5, 4, 4.2, 4.5, 5, 5.2, 6, 10, -1]) {
+      P.collisionFrame(colA, colB, colO, t);
+    }
+  } catch (e) { threw = e; }
+  check('collision: no crash across the whole timeline (incl. t < 0 and t >> end)', threw === null, threw && threw.message);
+  // Mutated parents collide fine too (their traits ride along).
+  let mutA = null;
+  for (let s = 0; s < 4000 && !mutA; s++) {
+    const pl = P.generatePlanet(s);
+    if (pl.mutations.length === 1 && pl.mutations[0] === 'green-moon') mutA = pl;
+  }
+  check('collision: a mutated parent renders and stays deterministic',
+    mutA && gridsEqual(P.collisionFrame(mutA, colB, colO, 2.0), P.collisionFrame(mutA, colB, colO, 2.0)),
+    mutA ? 'seed ' + mutA.seed : 'no green-moon carrier found');
+}
+
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

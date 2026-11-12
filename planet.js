@@ -1839,6 +1839,435 @@ function renderCozy(planet, stageIdx, t, sec, zoom, outW, outH, stage0Style) {
 }
 
 // ---------------------------------------------------------------------------
+// COLLISION / FUSION ANIMATION — two planets smashing together (prestige).
+// A real collision, not a gentle fade (Devon, Nov 11): dust clouds,
+// swirling debris, the two worlds smashing together with material
+// spraying out, then the mess coalescing into the offspring. Everything
+// here is ASCII, on the same 136x76 grid as the planet renders, and a
+// pure function of time — collisionFrame(a, b, offspring, t) returns
+// the frame t seconds into the sequence, so the panel just calls it
+// every tick and the animation is deterministic (same three seeds =
+// same collision, forever). Timeline:
+//   0.0-1.0  approach: the two discs spiral in around their common
+//            center — an orbital inspiral (Devon, Nov 11): wide lazy
+//            loops that tighten and speed up as the orbit decays,
+//            until the glancing blow at t = 1.0 (slightly offset, so
+//            the impact is messy, not dead-center)
+//   1.0-1.5  impact: the discs squash into each other and SHATTER —
+//            the pieces keep the inspiral's spin and spiral outward
+//            as they fly apart (Devon, Nov 11: the planets stopped
+//            dead at the impact, then a spray — they have to break
+//            apart in pieces, spiraling, not freeze and then spray).
+//            A white-hot flash blooms at the contact point, a
+//            shockwave starts out
+//   1.5-3.0  explosion: the shards spiral outward and crumble cell by
+//            cell, debris sprays out in all directions, dust clouds
+//            billow, the shockwave runs
+//   3.0-4.2  swirl: the debris orbits the center (faster when closer,
+//            Kepler-ish), the dust contracts
+//   4.2-5.2  coalescence: the mess spirals in and the offspring
+//            condenses out of it, with a hot accretion rim
+//   5.2+     the offspring, whole, with a few embers still drifting
+// The parents render WITHOUT rings — the rings are the first thing a
+// real collision shreds. Moons stay (they become debris with the rest).
+// ---------------------------------------------------------------------------
+const COLLISION_TIMELINE = { approach: 1.0, impact: 1.5, explosion: 3.0, swirl: 4.2, coalesce: 5.2 };
+const COLLISION_END = 5.2;
+const COLLISION_DISC_W = 84, COLLISION_DISC_H = 46;
+// Approach inspiral geometry: A starts at orbit-space offset (-46, -10)
+// from the center (68, 38) — the same starting spots as the old slide —
+// and B opposite. Orbit space is (dx, 2*dy), so a circle in orbit space
+// is a circle on screen (cells are 10x18). The orbit decays from R0 to
+// R1 (the glancing offset at contact) while the angle sweeps SWEEP
+// radians — the short way to the contact angle, plus one full orbit
+// (1.22 turns total). At t = 1.0 the discs land exactly where the old
+// slide put them (A above the center, B below), so the impact and
+// everything after it are untouched.
+const COLLISION_R0 = Math.hypot(46, 10);
+const COLLISION_R1 = 10;
+const COLLISION_TH0 = Math.atan2(-10, -46);
+const COLLISION_SWEEP = (-Math.PI / 2 - COLLISION_TH0) + Math.PI * 2;
+
+function collisionPhase(t) {
+  if (t < COLLISION_TIMELINE.approach) return 'approach';
+  if (t < COLLISION_TIMELINE.impact) return 'impact';
+  if (t < COLLISION_TIMELINE.explosion) return 'explosion';
+  if (t < COLLISION_TIMELINE.swirl) return 'swirl';
+  if (t < COLLISION_TIMELINE.coalesce) return 'coalesce';
+  return 'done';
+}
+
+// The collision discs: the planet drawn (disc + moons, no rings, no
+// starfield) and downsampled to a small grid, so the stage can slide
+// them around and smash them together. Rendered once per planet and
+// cached — the frame function runs every tick, and re-rendering three
+// full planets per frame would be wasteful. The cache is keyed on
+// everything that changes the picture; same inputs, same grid.
+const _collisionDiscCache = new Map();
+function collisionDisc(planet, stageIdx) {
+  const key = (planet.seed || 0) + '|' + stageIdx + '|' + (planet.mutations || []).join('+')
+    + '|' + (planet.size || 1) + '|' + planet.terrain;
+  let g = _collisionDiscCache.get(key);
+  if (!g) {
+    const st = STAGES[stageIdx];
+    const radius = st.radius * (planet.size || 1);
+    const muts = activeMutations(planet);
+    const full = makeGrid();
+    drawPlanet(full, st, radius, 3, planet, 1.0, 'exploded', muts);
+    drawMoons(full, radius, 3, planet, muts);
+    g = downsampleGrid(full, COLLISION_DISC_W, COLLISION_DISC_H);
+    if (_collisionDiscCache.size > 12) _collisionDiscCache.delete(_collisionDiscCache.keys().next().value);
+    _collisionDiscCache.set(key, g);
+  }
+  return g;
+}
+
+// The debris: 260 particles, all derived from one seeded stream, so
+// the spray is the same every replay. Each particle has a birth angle
+// and radius, a radial spray speed, a tangential curve, and an orbit
+// direction. Its position is a pure function of t (see
+// collisionParticleAt) — no per-frame state, so the panel can scrub
+// the timeline freely.
+function collisionParticles(seed) {
+  const rng = mulberry32(seed >>> 0);
+  const HOT = [231, 229, 226, 214, 202, 196];
+  const parts = [];
+  for (let i = 0; i < 260; i++) {
+    parts.push({
+      idx: i,
+      angle: rng() * Math.PI * 2,
+      r0: 6 + rng() * 24,
+      speed: 10 + rng() * 30,
+      curve: (rng() - 0.5) * 0.7,
+      spin: rng() < 0.5 ? -1 : 1,
+      hot: HOT[Math.trunc(rng() * HOT.length)],
+      big: rng() < 0.18,
+    });
+  }
+  return parts;
+}
+
+// Where one particle is at time t (stage coords, y already squashed
+// for the cell ellipse), and what it looks like then — or null when it
+// is still inside its planet or has been absorbed into the offspring.
+// The spray is radial first, then the debris falls into orbit (faster
+// when closer), then it spirals in and vanishes into the newborn disc.
+// Particles cool as they go: white-hot at the impact, dim embers by
+// the end.
+function collisionParticleAt(p, t) {
+  // Radius / angle at the end of the explosion (t = 3.0) — every later
+  // phase continues from here, so the path is continuous.
+  const r3 = p.r0 + p.speed * 0.825;
+  const th3 = p.angle + p.curve * 1.5;
+  const omega = p.spin * clamp(2.4 * Math.pow(14 / Math.max(8, r3), 1.5), 0.4, 3.0);
+  let r, th, heat;
+  if (t < 1.0) return null;
+  if (t < 1.5) {
+    const u = (t - 1.0) / 0.5;
+    r = p.r0 * 0.35 * Math.pow(u, 0.7);
+    th = p.angle + p.curve * u * 0.5;
+    heat = 1.0;
+  } else if (t < 3.0) {
+    const u = (t - 1.5) / 1.5;
+    r = p.r0 * (0.35 + 0.65 * u) + p.speed * (t - 1.5) * 0.55;
+    th = p.angle + p.curve * (0.5 + u);
+    heat = 1.0 - u * 0.4;
+  } else if (t < 4.2) {
+    const u = (t - 3.0) / 1.2;
+    r = r3 * (1 - 0.12 * u);
+    th = th3 + omega * (t - 3.0);
+    heat = 0.55;
+  } else if (t < 5.2) {
+    const u = (t - 4.2) / 1.0;
+    const r42 = r3 * 0.88;
+    const th42 = th3 + omega * 1.2;
+    r = lerp(r42, 20, u * u);
+    th = th42 + omega * (t - 4.2) * 1.5;
+    if (r <= 21) return null; // absorbed into the offspring
+    heat = 0.3;
+  } else {
+    // Finale: only a few slow embers linger.
+    if (p.idx % 4 !== 0) return null;
+    r = Math.max(24, r3 * 0.7);
+    th = th3 + omega * 2.4;
+    heat = 0.2;
+  }
+  const x = 68 + r * Math.cos(th);
+  const y = 38 + r * Math.sin(th) * 0.5;
+  let ch, col;
+  if (heat > 0.8) { ch = p.big ? '#' : (p.speed > 28 ? '@' : '*'); col = p.hot; }
+  else if (heat > 0.45) { ch = p.big ? '#' : '*'; col = 214; }
+  else if (heat > 0.25) { ch = '+'; col = 208; }
+  else { ch = '.'; col = 242; }
+  return { x, y, ch, col };
+}
+
+// Dust clouds: seven billowing clouds that blow out from the impact,
+// drift around the center, then get pulled back in as the offspring
+// gathers itself. Drawn as sparse dim glyphs (noise-gated, so they
+// read as soft clouds, not solid blobs), behind everything else.
+function drawCollisionDust(grid, seed, t) {
+  if (t < 1.0) return;
+  const rng = mulberry32((seed ^ 0xD057) >>> 0);
+  for (let i = 0; i < 7; i++) {
+    const angle = rng() * Math.PI * 2;
+    const dist = 8 + rng() * 18;
+    const maxR = 12 + rng() * 14;
+    const cseed = 1000 + i * 77 + Math.trunc(rng() * 500);
+    const color = [240, 242, 244, 216, 180, 137][Math.trunc(rng() * 6)];
+    const spin = rng() < 0.5 ? -1 : 1;
+    const ang = angle + spin * 0.22 * Math.max(0, t - 1.0);
+    let ccx = 68 + dist * Math.cos(ang);
+    let ccy = 38 + dist * Math.sin(ang) * 0.5;
+    let cr;
+    if (t < 3.0) cr = lerp(4, maxR, (t - 1.0) / 2.0);
+    else if (t < 4.2) cr = maxR;
+    else {
+      const u = (t - 4.2) / 1.0;
+      cr = lerp(maxR, 5, u);
+      ccx = lerp(ccx, 68, u);
+      ccy = lerp(ccy, 38, u);
+    }
+    if (t >= 5.2) cr = 5;
+    const x0 = Math.max(0, Math.floor(ccx - cr)), x1 = Math.min(CONFIG.W - 1, Math.ceil(ccx + cr));
+    const y0 = Math.max(0, Math.floor(ccy - cr / 2)), y1 = Math.min(CONFIG.H - 1, Math.ceil(ccy + cr / 2));
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const dx = x - ccx, dy = (y - ccy) * 2;
+        if (Math.sqrt(dx * dx + dy * dy) > cr) continue;
+        if (grid[y][x][1] !== null) continue; // dust stays behind everything
+        const n = noise2(x * 0.45, y * 0.45, cseed);
+        if (n < 0.60) continue;
+        grid[y][x] = [n > 0.82 ? ':' : '.', color];
+      }
+    }
+  }
+}
+
+// The shockwave: a sparse expanding ellipse, brightest just after the
+// impact, gone by the time the spray peaks.
+function drawCollisionShockwave(grid, t) {
+  const u = (t - 1.1) / 1.0;
+  const R = 10 + 52 * u;
+  const fade = 1 - u;
+  for (let a = 0; a < Math.PI * 2; a += 0.02) {
+    const x = Math.round(68 + R * Math.cos(a));
+    const y = Math.round(38 + R * Math.sin(a) * 0.5);
+    if (x < 0 || x >= CONFIG.W || y < 0 || y >= CONFIG.H) continue;
+    if (noise2(x, y, 7) < 0.55 + (1 - fade) * 0.3) continue;
+    grid[y][x] = [noise2(x, y, 8) > 0.7 ? '*' : '.', 214];
+  }
+}
+
+// SHARDS — at the moment of contact the discs shatter into chunks
+// (Devon, Nov 11: the planets stopped dead at the impact, then a
+// particle spray — they have to break apart in pieces, spiraling as
+// they fly apart). Each disc is cut into 16 chunks (8 angular sectors
+// x inner/outer band); every chunk is a rigid piece of the disc that
+// keeps the approach inspiral's rotational motion — it spirals
+// outward around the collision center (radius grows, angle advances
+// in the same direction as the inspiral) while it crumbles cell by
+// cell, so the explosion reads as the planets breaking apart, not as
+// the discs stopping and a spray starting. All deterministic: chunk
+// params come from the disc seed + chunk id, positions are a pure
+// function of t.
+const COLLISION_SHARD_SECTORS = 8;
+
+function collisionShardId(sx, sy, Wd, H) {
+  const dx = sx - Wd / 2, dy = (sy - H / 2) * 2;
+  const ang = Math.atan2(dy, dx);
+  const sector = Math.floor(((ang + Math.PI) / (Math.PI * 2)) * COLLISION_SHARD_SECTORS) % COLLISION_SHARD_SECTORS;
+  const band = Math.hypot(dx, dy) > 24 ? 1 : 0;
+  return band * COLLISION_SHARD_SECTORS + sector;
+}
+
+// Deterministic per-chunk motion params from the disc seed + chunk id.
+function collisionShardParams(discSeed, chunkId) {
+  const rng = mulberry32(((discSeed >>> 0) ^ Math.imul(chunkId + 1, 2654435761)) >>> 0);
+  return {
+    omegaBase: 0.5 + rng() * 0.6,   // rad/s scale (Kepler-scaled by radius)
+    v: 5 + rng() * 12,              // orbit-space units/s outward
+    breakT: 1.5 + rng() * 0.7,      // when the chunk starts crumbling
+    dissolveDur: 0.4 + rng() * 0.3, // how long the crumble takes
+  };
+}
+
+// Where a shard at orbit-space polar (rho0, th0) around the collision
+// center is dt seconds after contact. Pure motion law — exported for
+// tests. Angle advances in the same direction as the approach inspiral
+// (positive sweep), radius grows: the pieces spiral outward as they
+// fly apart.
+function collisionShardAt(rho0, th0, omega, v, dt) {
+  const rho = rho0 + v * dt;
+  const th = th0 + omega * dt;
+  return { x: 68 + rho * Math.cos(th), y: (76 + rho * Math.sin(th)) / 2, rho, th };
+}
+
+// One parent disc, composited onto the stage at (cx, cy) — squashed
+// horizontally during the impact. Before contact the whole disc is
+// drawn as one; from contact on it is shards: each chunk's cells are
+// collected, the chunk's centroid is worked out in orbit space, and
+// the whole chunk is translated along its outward spiral, crumbling
+// cell by cell after its break time. Only non-blank cells land, so
+// the disc's transparent background never paints over the stage.
+function drawCollisionDisc(grid, disc, cx, cy, squash, t, discSeed) {
+  const H = disc.length, Wd = disc[0].length;
+  if (t < 1.0) {
+    for (let sy = 0; sy < H; sy++) {
+      for (let sx = 0; sx < Wd; sx++) {
+        const cell = disc[sy][sx];
+        if (cell[1] === null) continue;
+        const dx = Math.round(cx + (sx - Wd / 2) * squash);
+        const dy = Math.round(cy + (sy - H / 2));
+        if (dx < 0 || dx >= CONFIG.W || dy < 0 || dy >= CONFIG.H) continue;
+        grid[dy][dx] = cell;
+      }
+    }
+    return;
+  }
+  const dt = t - 1.0;
+  const chunks = new Map(); // id -> {cells, sumX, sumY, n}
+  for (let sy = 0; sy < H; sy++) {
+    for (let sx = 0; sx < Wd; sx++) {
+      const cell = disc[sy][sx];
+      if (cell[1] === null) continue;
+      const id = collisionShardId(sx, sy, Wd, H);
+      let c = chunks.get(id);
+      if (!c) { c = { cells: [], sumX: 0, sumY: 0, n: 0 }; chunks.set(id, c); }
+      c.cells.push([sx, sy, cell]);
+      c.sumX += (sx - Wd / 2) * squash;
+      c.sumY += sy - H / 2;
+      c.n++;
+    }
+  }
+  for (const [id, c] of chunks) {
+    const params = collisionShardParams(discSeed, id);
+    // Chunk centroid at contact, in orbit space relative to the
+    // collision center (68, 76).
+    const ccx = c.sumX / c.n, ccy = c.sumY / c.n;
+    const X0 = cx + ccx - 68;
+    const Y0 = 2 * (cy + ccy) - 76;
+    const rho0 = Math.hypot(X0, Y0);
+    const th0 = Math.atan2(Y0, X0);
+    const omega = params.omegaBase * Math.pow(14 / Math.max(8, rho0), 0.5);
+    const at = collisionShardAt(rho0, th0, omega, params.v, dt);
+    // Displacement of the chunk's centroid since contact (stage coords).
+    const ddx = at.x - (cx + ccx);
+    const ddy = at.y - (cy + ccy);
+    let gone = 0;
+    if (t >= params.breakT) gone = clamp((t - params.breakT) / params.dissolveDur, 0, 1);
+    for (const [sx, sy, cell] of c.cells) {
+      if (gone > 0 && hash2(sx, sy, discSeed) < gone) continue;
+      const dx = Math.round(cx + (sx - Wd / 2) * squash + ddx);
+      const dy = Math.round(cy + (sy - H / 2) + ddy);
+      if (dx < 0 || dx >= CONFIG.W || dy < 0 || dy >= CONFIG.H) continue;
+      grid[dy][dx] = cell;
+    }
+  }
+}
+
+// The impact flash: a white-hot bloom at the contact point, peaking
+// just after the discs meet and gone by the time the spray is out.
+// (The white here is a transient explosion — the old stamped white
+// sun-core rule doesn't apply to a momentary flash.)
+function drawCollisionFlash(grid, t) {
+  const u = (t - 1.0) / 0.7;
+  const R = 15 * Math.sin(Math.PI * u);
+  if (R <= 0.5) return;
+  for (let y = Math.max(0, Math.floor(38 - R / 2)); y <= Math.min(CONFIG.H - 1, Math.ceil(38 + R / 2)); y++) {
+    for (let x = Math.max(0, Math.floor(68 - R)); x <= Math.min(CONFIG.W - 1, Math.ceil(68 + R)); x++) {
+      const dx = x - 68, dy = (y - 38) * 2;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d > R) continue;
+      const n = noise2(x, y, 99);
+      if (n < 0.3) continue;
+      const f = d / R;
+      grid[y][x] = [
+        n > 0.85 ? '@' : (n > 0.6 ? '#' : '*'),
+        f < 0.35 ? 231 : (f < 0.65 ? 229 : (f < 0.85 ? 226 : 202)),
+      ];
+    }
+  }
+}
+
+// The offspring condenses: its cells appear inside a growing radius,
+// with a hot accretion rim at the leading edge.
+function drawCollisionOffspring(grid, disc, R) {
+  const H = disc.length, Wd = disc[0].length;
+  for (let sy = 0; sy < H; sy++) {
+    for (let sx = 0; sx < Wd; sx++) {
+      const cell = disc[sy][sx];
+      if (cell[1] === null) continue;
+      const dx = Math.round(68 + (sx - Wd / 2));
+      const dy = Math.round(38 + (sy - H / 2));
+      if (dx < 0 || dx >= CONFIG.W || dy < 0 || dy >= CONFIG.H) continue;
+      const ddx = dx - 68, ddy = (dy - 38) * 2;
+      const d = Math.sqrt(ddx * ddx + ddy * ddy);
+      if (d > R) continue;
+      grid[dy][dx] = (d > R - 3) ? [cell[0], 226] : cell;
+    }
+  }
+}
+
+// One frame of the fusion collision. Pure function of (planets, t) —
+// the panel calls it every tick with the seconds since the fusion
+// started. `sec` only drives the starfield twinkle.
+function collisionFrame(planetA, planetB, offspring, t, sec) {
+  if (sec === undefined) sec = 0;
+  t = Math.max(0, t);
+  const grid = makeGrid();
+  for (const [sx, sy, , ch] of STARS) {
+    if (sx < CONFIG.W && sy < CONFIG.H) {
+      grid[sy][sx] = [ch, (hash2(sx, sy, 3) + sec * 0.1) % 1 > 0.6 ? 250 : 244];
+    }
+  }
+  const seed = ((planetA.seed || 0) ^ (planetB.seed || 0) ^ (offspring.seed || 0)) >>> 0;
+  drawCollisionDust(grid, seed, t);
+  if (t >= 1.1 && t < 2.1) drawCollisionShockwave(grid, t);
+  const discA = collisionDisc(planetA, 6);
+  const discB = collisionDisc(planetB, 6);
+  const squash = (t >= 1.0 && t < 1.5) ? 1 - 0.45 * Math.sin(Math.PI * (t - 1.0) / 0.5) : 1;
+  // Where the two discs sit. During the approach they orbit their
+  // common center on a decaying orbit — slow wide loops first, then a
+  // fast plunge as the orbit tightens (radius falls as 1 - p^2, angle
+  // advances as p^1.5, so both the closing and the circling accelerate
+  // into the blow). From t = 1.0 on, both discs sit at the contact
+  // spots — but they don't stay there: drawCollisionDisc shatters
+  // them into shards that spiral outward from the contact, so the
+  // rotational motion carries straight through the impact.
+  let ax, ay, bx, by;
+  if (t < 1.0) {
+    const p = clamp(t / 1.0, 0, 1);
+    const r = COLLISION_R1 + (COLLISION_R0 - COLLISION_R1) * (1 - p * p);
+    const th = COLLISION_TH0 + COLLISION_SWEEP * Math.pow(p, 1.5);
+    ax = 68 + r * Math.cos(th);
+    ay = 38 + r * Math.sin(th) * 0.5;
+    bx = 68 - r * Math.cos(th);
+    by = 38 - r * Math.sin(th) * 0.5;
+  } else {
+    ax = 68; ay = 33; bx = 68; by = 43;
+  }
+  if (t < 3.0) {
+    drawCollisionDisc(grid, discA, ax, ay, squash, t, ((planetA.seed || 0) ^ 0xA11CE) >>> 0);
+    drawCollisionDisc(grid, discB, bx, by, squash, t, ((planetB.seed || 0) ^ 0xB11CE) >>> 0);
+  }
+  if (t >= 1.0 && t < 1.7) drawCollisionFlash(grid, t);
+  const parts = collisionParticles(seed);
+  for (const pt of parts) {
+    const at = collisionParticleAt(pt, t);
+    if (!at) continue;
+    const x = Math.round(at.x), y = Math.round(at.y);
+    if (x < 0 || x >= CONFIG.W || y < 0 || y >= CONFIG.H) continue;
+    grid[y][x] = [at.ch, at.col];
+  }
+  if (t >= 4.2) {
+    const discO = collisionDisc(offspring, 0);
+    drawCollisionOffspring(grid, discO, lerp(0, 26, clamp((t - 4.2) / 1.0)));
+  }
+  return grid;
+}
+
+// ---------------------------------------------------------------------------
 // ANSI-256 -> hex (for HTML rendering), ported from capture_frames.py.
 // ---------------------------------------------------------------------------
 const STD16 = [
@@ -1965,6 +2394,7 @@ const API = {
   CONFIG, STAGES, STARS, STAGE0_STYLES,
   mulberry32, generatePlanet, generatePlanetName, formatCatalogName, parseCatalogName, buildFragments, buildSmoke, buildSparkles, buildCoreMarkers, coreMarkerAt, smokeCellAt,
   mutationDef, activeMutations, hasMutation, mutationLabel,
+  collisionFrame, collisionPhase, collisionShardAt, COLLISION_TIMELINE, COLLISION_END,
   drawComet, drawMeteorShower, applyGlitch,
   makeGrid, render, renderCozy, downsampleGrid, drawPlanet, drawRings, drawMoons, drawMiniSphere, starGrid,
   ansi256ToHex, ansi256ToRgb, shadeColor, blendHue, gridToHtml, gridToText,

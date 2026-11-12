@@ -706,7 +706,10 @@ check('ext: drift is uniform — same step on every ring, so the separation hold
   extSrc.includes('angles[i] += 0.0078;') && !extSrc.includes('0.0078 / (1 + (+i) * 0.35)'));
 check('ext: no differential (Kepler) drift left', !extSrc.includes('Kepler'));
 check('ext: panel has no collision-avoidance or hiding logic',
-  !extSrc.includes('collision') && !extSrc.includes('hideOverlapping'));
+  !extSrc.includes('hideOverlapping') && !extSrc.includes('collisionAvoidance'));
+// (Nov 11, prestige panel: the word "collision" itself is allowed now —
+// it names the fusion animation, planet.js collisionFrame. This check
+// is about the orrery hiding overlapping discs, not the word.)
 
 // 13k. Geometry, numerically: the slot scheme puts ring i at a
 // cumulative angle, where the gap after ring i is SLOT_C / SLOT_R[i]
@@ -773,6 +776,74 @@ check('ext: panel has no collision-avoidance or hiding logic',
       worst >= 0, `worst margin ${worst.toFixed(1)}px`);
   }
 }
+
+// --- 14. Prestige panel (step 4b): the fusion screen ----------------------
+// The panel is a dumb view of petLogic: eligibility, the fusion, the
+// lineage all live here. The panel itself (extension.js) only builds
+// the view model and applies its messages — and the fusion plays as a
+// violent ASCII collision (planet.js collisionFrame), not a fade.
+
+// 14a. Logic the panel leans on: eligibility after a fusion, lineage
+// that survives a save, and the retire-not-destroy parent fate.
+st = prestigeReadyState();
+const pr2 = L.prestige(st, { kind: 'current' }, { kind: 'past', index: 0 }, seedSeq(9600));
+eq('panel-logic: fusion ok', pr2.ok, true);
+eq('panel-logic: after a fusion, no parent is eligible anymore',
+  L.eligiblePrestigeParents(st).length, 0);
+eq('panel-logic: the old current planet was archived (retired, not destroyed)',
+  st.past.some((p) => p.seed === 42), true);
+check('panel-logic: the retired parent is marked used',
+  st.past.find((p) => p.seed === 42).usedAsParent === true);
+check('panel-logic: lineage records carry the parents’ names',
+  pr2.planet.parents.every((p) => typeof p.name === 'string' && p.name.length >= 4),
+  pr2.planet.parents.map((p) => p.name).join(' + '));
+eq('panel-logic: lineage records carry the parents’ generations',
+  pr2.planet.parents.map((p) => p.generation).sort().join(','), '1,2');
+const loaded4 = L.deserializeState(L.serializeState(st));
+eq('panel-logic: the offspring’s lineage survives a round-trip',
+  loaded4.current.parents.length, 2);
+eq('panel-logic: the lineage names survive a round-trip',
+  loaded4.current.parents.map((p) => p.name).sort().join(','),
+  pr2.planet.parents.map((p) => p.name).sort().join(','));
+eq('panel-logic: parents are RETIRED, not destroyed (Devon’s call — flag stays false)',
+  L.CONFIG.PRESTIGE_CONSUMES_PARENTS, false);
+// The eligible list names the current planet when it qualifies.
+st = prestigeReadyState();
+const elig = L.eligiblePrestigeParents(st);
+check('panel-logic: the eligible list includes the current planet',
+  elig.some((p) => p.kind === 'current' && p.index === -1));
+check('panel-logic: the eligible list includes archived planets',
+  elig.some((p) => p.kind === 'past' && p.index === 0));
+
+// 14b. package.json + extension.js wiring for the Prestige panel.
+check('pkg: openPrestige command', cmds.some((c) => c.command === 'protoplanet.openPrestige'));
+check('ext: registers openPrestige', extSrc.includes("'protoplanet.openPrestige'"));
+check('ext: prestige panel HTML exists', extSrc.includes('getPrestigeHtml'));
+check('ext: builds a prestige view model', extSrc.includes('prestigeViewModel'));
+check('ext: handles prestige messages', extSrc.includes('onPrestigeMessage'));
+check('ext: panel fuses through petLogic', extSrc.includes('Logic.prestige('));
+check('ext: panel reuses the shared renderable helper', extSrc.includes('renderablePlanet'));
+check('ext: panel posts the fusion result for the result view', extSrc.includes('recordPrestigeResult'));
+check('ext: panel has a dedicated webview panel (not a QuickPick)', extSrc.includes("'protoplanet.prestige'"));
+check('ext: panel keeps context when hidden', extSrc.includes('retainContextWhenHidden'));
+check('ext: panel uses the fixed-cell renderer', extSrc.includes('gridToHtml'));
+// 14c. The fusion itself: a violent ASCII collision, not a gentle
+// fade. The panel drives planet.js collisionFrame per tick, captions
+// the phases, and only shows the offspring once the mess coalesces.
+check('ext: panel plays the collision (collisionFrame per tick)', extSrc.includes('P.collisionFrame('));
+check('ext: panel captions the collision phases', extSrc.includes('collisionPhase'));
+check('ext: panel ends the collision at COLLISION_END', extSrc.includes('P.COLLISION_END'));
+check('ext: panel has a collision stage', extSrc.includes('collisionWrap'));
+check('ext: panel lets you skip the collision', extSrc.includes('Skip the collision'));
+check('ext: panel asks for confirmation before fusing', extSrc.includes('confirmFuseBtn'));
+check('ext: panel shows the offspring’s lineage', extSrc.includes('Born from'));
+check('ext: panel shows what the offspring inherited', extSrc.includes('Inherited:'));
+check('ext: panel shows the fed mineral tilting the offspring', extSrc.includes('Fed:'));
+// The panel hides sections with .hidden, but #slotsRow and
+// #confirmBar set their own display — without this rule the
+// browser's [hidden] is overridden and the slots stay visible
+// mid-collision and on the result screen (caught by stills).
+check('ext: prestige CSS makes [hidden] actually hide', extSrc.includes('[hidden] { display: none !important; }'));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) {
