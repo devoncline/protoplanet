@@ -733,16 +733,27 @@ class ProtoplanetApp {
      geometry, so the planet is a circle on any screen, any font. The
      cell ratio is 10:18, same as the PIL renderer and the v5 clip. */
   html, body { -webkit-text-size-adjust: none; text-size-adjust: none; }
-  body { margin: 0; padding: 10px; background: transparent;
+  body { margin: 0; padding: 10px; background: transparent; overflow: hidden;
     color: var(--vscode-editor-foreground);
     font-family: var(--vscode-font-family); }
-  /* No black box (Devon, Nov 12 — F5 feedback): the pet floats on the
-     VS Code sidebar gray, like the Pokechi pokeball above it. The
-     planet render is cropped to its own extent and star-free (see the
-     tick below), so there is no dark space background at all — just
-     the planet, the stage line, and the XP bar. */
-  #wrap { background: transparent; border: none; padding: 0; overflow: hidden; }
-  .pp-grid { margin: 0;
+  /* Dark card (Devon, Nov 12 — round 2): the round-1 guess was
+     transparent — the pet floating on the VS Code gray. Devon wants
+     Pokechi's card: a flat dark panel behind the planet so it stands
+     out on the gray. Square corners, 1px hairline, no glow —
+     Instrument. */
+  #wrap { background: #171717; border: 1px solid #2e2e2e; padding: 8px; overflow: hidden; }
+  /* Compact (collapsed sidebar): tighter margins so the XP bar stays
+     visible in a short view. */
+  body.compact #stageName { margin-top: 2px; }
+  body.compact #xplabel { margin: 2px 0 3px; }
+  body.compact #meta { margin-top: 2px; }
+  /* No scrollbar, ever (Devon, Nov 12 — round 2): the content fits
+     the view height by construction (see layout()); this is the
+     backstop so a mis-measure can clip, never scroll. */
+  /* The grid is centered in the card: at short heights the coarse
+     grid is narrower than the card (the height binds, not the width),
+     and a left-aligned smudge in a wide card looks like a bug. */
+  .pp-grid { margin: 0; text-align: center;
     font-family: ${FONT_STACK};
     font-size: var(--pp-fs, 10px); line-height: var(--pp-ch, 18px);
     letter-spacing: 0; white-space: pre;
@@ -791,7 +802,7 @@ class ProtoplanetApp {
   const wrapEl = document.getElementById('wrap');
   const root = document.documentElement;
   const FONT_STACK = ${JSON.stringify(FONT_STACK)};
-  let cellW = 3, cellH = 5.4, state = null, sec = 0, stageStartSec = 0, lastStage = -1, lastCrop = null;
+  let cellW = 3, cellH = 5.4, state = null, sec = 0, stageStartSec = 0, lastStage = -1, lastCrop = null, lastDims = null;
 
   // --- Fixed-cell layout (same approach as preview.html) ------------------
   // The sidebar is narrow, so cells scale down to fit the width — the
@@ -799,18 +810,10 @@ class ProtoplanetApp {
   // monospace font at runtime, so one glyph advance == one cell width.
   // At sidebar width the glyphs are tiny, but the planet's shape,
   // colors, rings and motion still read. (A full-size view is piece 4.)
-  function layout() {
-    const avail = Math.max(50, wrapEl.clientWidth - 12);
-    // The planet is cropped to its own extent (P.sidebarCrop), so the
-    // cells size from the crop's width — the planet fills the sidebar
-    // instead of sitting small in a big black grid. Before the first
-    // state arrives there is no crop yet, so fall back to the full grid.
-    const cols = lastCrop ? lastCrop.cols : P.CONFIG.W;
-    const scale = avail / (cols * P.CONFIG.CELL_W); // full scale = grid width in px
-    const newW = Math.max(1, +(10 * scale).toFixed(2));
-    const newH = Math.max(1.8, +(18 * scale).toFixed(2));
-    if (newW === cellW && newH === cellH && root.style.getPropertyValue('--pp-fs')) return;
-    cellW = newW; cellH = newH;
+  // Apply a cell size: the font is measured from the real monospace
+  // font at runtime, so one glyph advance == one cell width.
+  function applyCells(w, h) {
+    cellW = w; cellH = h;
     const probe = document.createElement('span');
     probe.style.cssText = 'position:absolute;visibility:hidden;font-family:' + FONT_STACK +
       ';font-size:16px;letter-spacing:0;white-space:pre;';
@@ -822,6 +825,85 @@ class ProtoplanetApp {
     if (fs > cellH) fs = cellH; // never taller than the cell
     root.style.setProperty('--pp-ch', cellH + 'px');
     root.style.setProperty('--pp-fs', fs.toFixed(2) + 'px');
+  }
+  function layout() {
+    const avail = Math.max(50, wrapEl.clientWidth - 24);
+    // The planet is cropped to its own extent (P.sidebarCrop), so the
+    // cells size from the crop's width — the planet fills the sidebar
+    // instead of sitting small in a big black grid. Before the first
+    // state arrives there is no crop yet, so fall back to the full grid.
+    const cropCols = lastCrop ? lastCrop.cols : P.CONFIG.W;
+    const cropRows = lastCrop ? lastCrop.rows : P.CONFIG.H;
+    // Height fit (Devon, Nov 12 — round 2): the collapsed sidebar
+    // showed a scrollbar — the grid + text were taller than the view.
+    // The grid shrinks to fit the view height, and the grown-from
+    // line hides first when space is tight; the stage line, XP bar
+    // and XP numbers always stay. Compact margins under 200px.
+    // Coarse fallback: if the fitted cells would drop below ~4px the
+    // glyphs are dots, so the crop renders downsampled (half, then
+    // quarter resolution) — a chunky mini planet with readable
+    // characters, the "cozier version" Devon asked for. The tick
+    // renders from lastDims, which layout() sets here.
+    const viewH = document.documentElement.clientHeight || 0;
+    let dims = { cols: cropCols, rows: cropRows };
+    let newW = 0, newH = 0;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const scale = avail / (dims.cols * P.CONFIG.CELL_W); // full scale = grid width in px
+      newW = Math.max(1, +(10 * scale).toFixed(2));
+      newH = Math.max(1.8, +(18 * scale).toFixed(2));
+      if (viewH <= 0) break;
+      document.body.classList.toggle('compact', viewH < 200);
+      let reserve = 24; // body padding top+bottom + 4px safety for rounding
+      // The dark card's own padding + border (16 + 2) — measured, not
+      // guessed: the first round-2 pass forgot it and still scrolled.
+      const gridEl0 = wrapEl.querySelector('.pp-grid');
+      reserve += wrapEl.offsetHeight - (gridEl0 ? gridEl0.offsetHeight : 0);
+      // Text heights are measured with their real margins — hardcoded
+      // guesses undercounted in compact mode (stageName's margin drops
+      // to 2px there) and shrank the grid below its readable floor.
+      const outerH = (el) => {
+        if (!el) return 0;
+        const cs = getComputedStyle(el);
+        return el.offsetHeight + parseFloat(cs.marginTop) + parseFloat(cs.marginBottom);
+      };
+      const sn = document.getElementById('stageName');
+      const ml = document.getElementById('mutationLabel');
+      const xb = document.getElementById('xpbar');
+      const xl = document.getElementById('xplabel');
+      const mt = document.getElementById('meta');
+      if (sn) reserve += outerH(sn);
+      if (ml && ml.style.display !== 'none') reserve += outerH(ml);
+      if (xb) reserve += outerH(xb);
+      if (xl) reserve += outerH(xl);
+      let metaH = (mt && mt.textContent) ? outerH(mt) : 0;
+      const fitH = viewH - reserve;
+      if (mt && mt.textContent && newH * dims.rows + metaH > fitH) {
+        mt.style.display = 'none';
+        metaH = 0;
+      } else if (mt) {
+        mt.style.display = '';
+      }
+      const maxCellH = Math.max(1.8, (fitH - metaH) / dims.rows);
+      if (newH > maxCellH) {
+        const k = maxCellH / newH;
+        newW = Math.max(1, +(newW * k).toFixed(2));
+        newH = maxCellH;
+      }
+      // Readable floor: below ~4px the glyphs are dots. Halve the
+      // grid (bigger cells, same planet) and try again — at most twice.
+      if (newH >= 4.2 || dims.cols <= 20 || dims.rows <= 10 || attempt === 2) break;
+      dims = { cols: Math.ceil(dims.cols / 2), rows: Math.ceil(dims.rows / 2) };
+    }
+    lastDims = dims;
+    if (newW === cellW && newH === cellH && root.style.getPropertyValue('--pp-fs')) return;
+    applyCells(newW, newH);
+    // No scrollHeight backstop here on purpose: when layout() runs,
+    // the grid still holds the PREVIOUS render's row count, so a
+    // scrollHeight read measures stale content and over-shrinks (the
+    // first round-2 pass shrank the 150px view to 2px cells this way).
+    // The fit is exact arithmetically — reserve is measured from real
+    // offsetHeights and the grid is exactly dims.rows * cellH — plus a
+    // 4px safety margin in the reserve for rounding.
   }
   layout();
   window.addEventListener('resize', layout);
@@ -861,6 +943,7 @@ class ProtoplanetApp {
       ? 'XP ' + msg.xp + ' \\u00b7 MAX \\u2014 fully evolved'
       : 'XP ' + msg.xp + ' / ' + msg.nextXp;
     document.getElementById('meta').textContent = 'Grown from ' + msg.chars + ' characters';
+    layout(); // text heights changed — re-fit the grid to the view height
   });
 
   // Animate: ~7 fps is plenty for the flicker/drift illusion.
@@ -879,7 +962,15 @@ class ProtoplanetApp {
       layout();
     }
     const full = P.render(state.planet, state.stageIdx, t, sec, 1.0, undefined, 1, true);
-    gridEl.innerHTML = P.gridToHtml(P.cropGrid(full, lastCrop), cellW, cellH);
+    // Coarse mode (see layout()): at short heights the crop renders
+    // downsampled so the cells stay readable — same planet, fewer,
+    // bigger characters. The tick re-renders every 150ms, so a resize
+    // picks the new resolution up on the next tick.
+    const cropped = P.cropGrid(full, lastCrop);
+    const shown = (lastDims && (lastDims.cols !== lastCrop.cols || lastDims.rows !== lastCrop.rows))
+      ? P.downsampleGrid(cropped, lastDims.cols, lastDims.rows)
+      : cropped;
+    gridEl.innerHTML = P.gridToHtml(shown, cellW, cellH);
   }, 150);
 
   vscodeApi.postMessage({ type: 'ready' });
@@ -1154,12 +1245,35 @@ class ProtoplanetApp {
     var rows = Math.max(1, Math.ceil(h / ch));
     starsEl.style.width = w + 'px';
     starsEl.style.height = h + 'px';
-    starsEl.innerHTML = '<div class="pp-grid" style="--pp-fs:' + ch + 'px;--pp-ch:' + ch + 'px">'
+    starsEl.innerHTML = '<div class="pp-grid" style="--pp-fs:' + cellFont(cw, ch) + 'px;--pp-ch:' + ch + 'px">'
       + P.starfieldHtml(cols, rows, sec, atmo, cw, ch) + '</div>';
   }
   function refreshStarfields() {
     var frames = document.querySelectorAll('.pp-frame');
     for (var i = 0; i < frames.length; i++) fillStars(frames[i], sec);
+  }
+  // Glyph font size (Devon, Nov 12 — round 2): the panel used to set
+  // every .pp-grid's font size from the CELL HEIGHT, but a monospace
+  // glyph's advance is ~0.6x its font size — so at 2.6px-wide cells
+  // with a 6.12px font the glyphs were painted 42% wider than their
+  // cells, overlapping each other and clipping at the end of each
+  // color run (measured in headless Chrome: a 3-char run set to 7.8px
+  // wide actually needs 11px). The font is now sized from the CELL
+  // WIDTH: the advance ratio is measured once from the real font, and
+  // the size is the smaller of cellW / ratio (glyphs fit their cells)
+  // and cellH (never taller than the cell). The sidebar already did
+  // this; the panel didn't — which is why the sidebar read best.
+  var _advRatio = null;
+  function cellFont(cellW, cellH) {
+    if (_advRatio === null) {
+      var probe = document.createElement('span');
+      probe.style.cssText = 'position:absolute;visibility:hidden;font-family:' + getComputedStyle(document.body).fontFamily + ';font-size:16px;letter-spacing:0;white-space:pre;';
+      probe.textContent = 'MMMMMMMMMMMMMMMMMMMM';
+      document.body.appendChild(probe);
+      _advRatio = (probe.offsetWidth / 20) / 16;
+      probe.remove();
+    }
+    return +Math.min(cellW / _advRatio, cellH).toFixed(2);
   }
   // --- modes: Orrery <-> Index ----------------------------------------------
   // Two full screens, not one crowded one (Devon, Nov 12 — the research's
@@ -1176,6 +1290,11 @@ class ProtoplanetApp {
       // so recompute the fit and re-apply the current view.
       computeFit();
       applyTransform();
+    }
+    if (m === 'index') {
+      // The tiles are in the DOM now, so their art width measures
+      // for real instead of falling back to the estimate.
+      renderIndex();
     }
   }
   document.getElementById('tabOrrery').addEventListener('click', function () { setMode('orrery'); });
@@ -1438,7 +1557,10 @@ class ProtoplanetApp {
           var fn = smoothGn(tu, tv);
           if (fn > 0.60) {
             var fph = smoothGn(tu + 31, tv + 17);
-            var ff = 0.5 + 0.5 * Math.sin(sec * 3.1 + fph * 6.283);
+            // Round 2: the flicker ran at 3.1 rad/s — at a 300ms
+            // frame that was a ~1 rad jump per frame, a strobe on
+            // the rim. 1.5 rad/s keeps the flames alive without it.
+            var ff = 0.5 + 0.5 * Math.sin(sec * 1.5 + fph * 6.283);
             var fd = 1 - (d2rel - 1) / 0.3 * 0.35; // outer fringe slightly dimmer — stays tight to the limb
             var fv = ff * fd;
             if (fv > 0.95) grid[y][x] = ['*', 226];
@@ -1514,7 +1636,8 @@ class ProtoplanetApp {
     star.style.left = CX + 'px';
     star.style.top = CY + 'px';
     star.style.zIndex = '1';
-    star.innerHTML = '<div class="pp-grid" style="--pp-fs:6.6px;--pp-ch:6.6px">' + starHtml(sec) + '</div>';
+    var sd0 = P.sunDetail(zoom);
+    star.innerHTML = '<div class="pp-grid" style="--pp-fs:' + cellFont(sd0.cellW, sd0.cellH) + 'px;--pp-ch:' + sd0.cellH + 'px">' + starHtml(sec, sd0.cols, sd0.rows, sd0.cellW, sd0.cellH) + '</div>';
     starGridEl = star.querySelector('.pp-grid');
     worldEl.appendChild(star);
     // Rings + planets.
@@ -1564,7 +1687,8 @@ class ProtoplanetApp {
         // No name label on the orrery itself (Devon, Nov 11 — they
         // made it messy). Names live in the detail sheet and the
         // Index tiles.
-        disc.innerHTML = '<div class="pp-grid" style="--pp-fs:6.12px;--pp-ch:6.12px"></div>';
+        var d0 = discDetailNow();
+        disc.innerHTML = '<div class="pp-grid" style="--pp-fs:' + cellFont(d0.cellW, d0.cellH) + 'px;--pp-ch:' + d0.cellH + 'px"></div>';
         worldEl.appendChild(disc);
         discs.push({ el: disc, planet: slot.planet, ring: i });
       } else {
@@ -1598,7 +1722,7 @@ class ProtoplanetApp {
   function renderStar() {
     if (!starGridEl) return;
     var sd = P.sunDetail(zoom);
-    starGridEl.style.setProperty('--pp-fs', sd.cellH + 'px');
+    starGridEl.style.setProperty('--pp-fs', cellFont(sd.cellW, sd.cellH) + 'px');
     starGridEl.style.setProperty('--pp-ch', sd.cellH + 'px');
     starGridEl.innerHTML = starHtml(sec, sd.cols, sd.rows, sd.cellW, sd.cellH);
   }
@@ -1627,9 +1751,9 @@ class ProtoplanetApp {
     // (stage scale + ring fit) is computed at the CURRENT grid size,
     // so the whole ring system still fits.
     // Small discs again (Devon, Nov 11 — the bigger ones made the
-    // orrery crowded and messy). 46x24 at 2.6px cells at fit zoom:
-    // the detail goes into the sun instead, and the detail panel
-    // still shows the full large render.
+    // orrery crowded and messy). 23x16 at 5.2px cells at fit zoom
+    // (round 2 — was 46x24 at 2.6px): the detail goes into the sun
+    // instead, and the detail panel still shows the full large render.
     // Stage-driven scale + full rings (Devon, Nov 12): the planet
     // grows with its stage, and the disc zoom shrinks just enough
     // that the whole ring system fits — no clipped rings in the
@@ -1641,12 +1765,29 @@ class ProtoplanetApp {
       var d = discs[k];
       var gridEl = d.el.querySelector('.pp-grid');
       if (gridEl) {
-        // The cell size is constant now (the counter-scale handles
-        // the zoom), but keep the font-size vars in sync anyway.
-        gridEl.style.setProperty('--pp-fs', detail.cellH + 'px');
-        gridEl.style.setProperty('--pp-ch', detail.cellH + 'px');
         var discZoom = Math.min(P.stageScale(d.planet.stageIdx),
           P.ringFitZoom(d.planet.planet, d.planet.stageIdx, detail.cols, detail.rows));
+        // The zoomed-in disc (Devon, Nov 12 — round 2): the full-grid
+        // disc keeps the planet small even at 3x — stage 0's body is
+        // 18% of the grid, ~66px in a 359px box. The selected disc,
+        // while zoomed into, renders CROPPED to the planet + its
+        // whole ring system and 1.4x bigger than its world footprint,
+        // so the zoomed planet fills the view with readable glyphs
+        // instead of sitting small in a big empty box.
+        if (zoomed && selected && selected.seed === d.planet.seed && selected.generation === d.planet.generation) {
+          var zcrop = P.sidebarCrop(d.planet.planet, d.planet.stageIdx, 10, 2.5);
+          var zCellW = (detail.cols * detail.cellW * 1.4) / zcrop.cols;
+          var zCellH = zCellW * 1.8;
+          gridEl.style.setProperty('--pp-fs', cellFont(zCellW, zCellH) + 'px');
+          gridEl.style.setProperty('--pp-ch', zCellH.toFixed(2) + 'px');
+          gridEl.innerHTML = P.gridToHtml(
+            P.cropGrid(P.render(d.planet.planet, d.planet.stageIdx, 10, sec, discZoom, undefined, 0.5, true), zcrop), zCellW, zCellH);
+          continue;
+        }
+        // The cell size is constant now (the counter-scale handles
+        // the zoom), but keep the font-size vars in sync anyway.
+        gridEl.style.setProperty('--pp-fs', cellFont(detail.cellW, detail.cellH) + 'px');
+        gridEl.style.setProperty('--pp-ch', detail.cellH + 'px');
         gridEl.innerHTML = P.gridToHtml(
           // smokeScale 0.5 (Devon, Nov 12): stage-0 smoke stays close
           // to the core in the system view instead of filling the frame.
@@ -1707,7 +1848,7 @@ class ProtoplanetApp {
     zoom = zoomT; panX = panTX; panY = panTY;
     worldEl.style.transition = 'transform 450ms cubic-bezier(.22,.61,.36,1)';
     applyTransform();
-    refreshDiscDetail();
+    scheduleZoomRefresh();
     setTimeout(function () { worldEl.style.transition = ''; }, 500);
     zoomed = true;
   }
@@ -1723,7 +1864,7 @@ class ProtoplanetApp {
     }
     worldEl.style.transition = 'transform 450ms cubic-bezier(.22,.61,.36,1)';
     applyTransform();
-    refreshDiscDetail();
+    scheduleZoomRefresh();
     setTimeout(function () { worldEl.style.transition = ''; }, 500);
   }
   function renderOrrerySel() {
@@ -1741,17 +1882,13 @@ class ProtoplanetApp {
     detailEl.hidden = false;
     var ring = slotOf(planet.seed, planet.generation);
     var emptyRing = firstEmptyRing();
-    // Full detail: the whole 136x76 render, not the cozy downsample —
-    // this is the big version of the planet (Devon, Nov 11). Zoom 1.2
-    // fills more of the frame; the cells fit the 360px panel.
-    // smokeScale 0.5 (Devon, Nov 12): stage-0 smoke stays close to
-    // the core instead of filling the frame.
-    var art = P.gridToHtml(P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5, true), 2.35, 4.23);
+    // The art is filled by fillDetailArt() below (cropped render,
+    // cells sized to the sheet) — the grid element starts empty.
     var html = '<button id="detailClose" class="ghost" data-action="close" title="Close">&times;</button>'
       + '<h2>' + esc(planet.name) + '</h2>'
       + '<p class="sub">' + esc(planet.summary) + ' &middot; Seed ' + planet.seed + '</p>'
       + (planet.mutationLabel ? '<div class="mut">' + esc(planet.mutationLabel) + '</div>' : '')
-      + '<div id="detailArt" class="pp-frame" data-cw="2.35" data-ch="4.23" data-atmo="' + planet.planet.atmosphere + '"><div class="pp-stars"></div><div class="pp-planet"><div class="pp-grid" style="--pp-fs:4.23px;--pp-ch:4.23px">' + art + '</div></div></div>'
+      + '<div id="detailArt" class="pp-frame" data-cw="4" data-ch="7.2" data-atmo="' + planet.planet.atmosphere + '"><div class="pp-stars"></div><div class="pp-planet"><div class="pp-grid"></div></div></div>'
       + '<table>'
       + '<tr><td class="k">Terrain</td><td>' + esc(planet.terrainLabel) + '</td></tr>'
       + '<tr><td class="k">Stage</td><td>' + esc(planet.stageName) + (planet.kind === 'current' ? ' &middot; growing now' : '') + '</td></tr>'
@@ -1777,8 +1914,39 @@ class ProtoplanetApp {
       html += '<p class="note">Removing a planet from the system never deletes it — it stays in the Index.</p>';
     }
     detailEl.innerHTML = html;
-    var da = document.getElementById('detailArt');
-    if (da) fillStars(da, sec);
+    fillDetailArt();
+  }
+
+  // Detail art (Devon, Nov 12 — round 2): the sheet used to show the
+  // whole 136x76 render at 2.35px cells — a 59px stage-0 body of
+  // unreadable glyphs next to the zoomed planet. Now it uses the same
+  // crop approach as the sidebar and the Index tiles: the full render
+  // cropped to the planet's extent (sidebarCrop), cells sized to the
+  // sheet's width, so the planet fills the sheet with readable
+  // characters. The render zoom is 1.0 (not 1.2) so the body matches
+  // the crop geometry exactly — nothing clips at the crop edge. The
+  // starfield layer's cell size follows the planet grid's (data-cw /
+  // data-ch), so the stars stay aligned with the art. Called on open
+  // and every tick while the sheet is open.
+  function fillDetailArt() {
+    if (!selected) return;
+    var planet = findPlanet(selected.seed, selected.generation);
+    if (!planet) return;
+    var artEl = document.getElementById('detailArt');
+    if (!artEl) return;
+    var gridEl = artEl.querySelector('.pp-planet .pp-grid');
+    if (!gridEl) return;
+    var crop = P.sidebarCrop(planet.planet, planet.stageIdx, 10);
+    var artW = Math.max(120, artEl.clientWidth - 10);
+    var cellW = artW / crop.cols;
+    var cellH = cellW * 1.8;
+    artEl.setAttribute('data-cw', cellW.toFixed(2));
+    artEl.setAttribute('data-ch', cellH.toFixed(2));
+    gridEl.style.setProperty('--pp-fs', cellFont(cellW, cellH) + 'px');
+    gridEl.style.setProperty('--pp-ch', cellH.toFixed(2) + 'px');
+    gridEl.innerHTML = P.gridToHtml(
+      P.cropGrid(P.render(planet.planet, planet.stageIdx, 10, sec, 1.0, undefined, 0.5, true), crop), cellW, cellH);
+    fillStars(artEl, sec);
   }
 
   // --- index -------------------------------------------------------------------
@@ -1815,6 +1983,16 @@ class ProtoplanetApp {
     });
     return list;
   }
+  // The tile art width: when the Index is visible, measure a tile;
+  // when hidden (state arrived while the orrery shows), estimate from
+  // the panel width and the grid's minmax(340px, 1fr) columns.
+  function tileArtWidth() {
+    var art = tilesEl.querySelector('.tile .art');
+    if (art && art.clientWidth > 0) return art.clientWidth;
+    var w = window.innerWidth - 56; // #index padding 28px each side
+    var cols = Math.max(1, Math.floor(w / 340));
+    return Math.max(200, w / cols - 28); // tile padding 14px each side
+  }
   function renderIndex() {
     if (!state) return;
     var list = filteredIndex();
@@ -1831,13 +2009,9 @@ class ProtoplanetApp {
     for (var i = 0; i < list.length; i++) {
       var p = list[i];
       var inSys = slotOf(p.seed, p.generation) >= 0;
-      // Stage-driven scale, no per-planet stars (Devon, Nov 12 — same
-      // rules as the orrery discs, minus the ring fit: rings may clip
-      // at a tile's edge, that stays as-is).
-      var art = P.gridToHtml(P.renderCozy(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx), 68, 38, undefined, 0.5, true), 4.4, 7.92);
       html += '<div class="tile' + (inSys ? ' inSystem' : '') + (pickerRing !== null ? ' picking' : '') + '"'
         + ' data-seed="' + p.seed + '" data-gen="' + p.generation + '">'
-        + '<div class="art"><div class="pp-grid" style="--pp-fs:4.4px;--pp-ch:7.92px">' + art + '</div></div>'
+        + '<div class="art"><div class="pp-grid"></div></div>'
         + '<div class="tname">' + esc(p.name) + '</div>'
         + '<div class="tmeta">' + esc(p.terrainLabel) + ' &middot; ' + esc(p.stageName) + ' &middot; ' + p.chars + ' chars &middot; Gen ' + p.generation + '</div>'
         + (inSys ? '<span class="badge sys">In system</span>' : '')
@@ -1850,6 +2024,37 @@ class ProtoplanetApp {
         + '</div>';
     }
     tilesEl.innerHTML = html;
+    fillTileArt(list);
+  }
+  // Tile art (Devon, Nov 12 — round 2): the tiles used to show a
+  // 68x38 cozy downsample at 4.4px cells — a 55px stage-0 body, dark
+  // and blobby, because the downsample averages the bright core with
+  // the dim smoke into a smudge, and the dark-space backgrounds in
+  // gridToHtml painted literal color blocks. Now the tiles use the
+  // same approach as the sidebar (full render, cropped to the
+  // planet's extent with sidebarCrop, cells sized to the tile's art
+  // width) — so the tile looks like a bigger sidebar, like Devon
+  // asked. Stage-driven scale stays: the render zoom is still
+  // stageScale, so a newborn reads smaller than a mature planet
+  // inside its tile — but both are ~2x bigger and brighter than
+  // before, with real characters instead of averaged blocks.
+  function fillTileArt(list) {
+    var artW = tileArtWidth();
+    var arts = tilesEl.querySelectorAll('.tile .art');
+    for (var i = 0; i < list.length; i++) {
+      var p = list[i];
+      var artEl = arts[i];
+      if (!artEl) continue;
+      var gridEl = artEl.querySelector('.pp-grid');
+      if (!gridEl) continue;
+      var crop = P.sidebarCrop(p.planet, p.stageIdx, 10);
+      var cellW = artW / crop.cols;
+      var cellH = cellW * 1.8;
+      gridEl.style.setProperty('--pp-fs', cellFont(cellW, cellH) + 'px');
+      gridEl.style.setProperty('--pp-ch', cellH.toFixed(2) + 'px');
+      gridEl.innerHTML = P.gridToHtml(
+        P.cropGrid(P.render(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx), undefined, 0.5, true), crop), cellW, cellH);
+    }
   }
 
   // --- picker mode (choosing a planet for a ring) ---------------------------
@@ -1886,6 +2091,23 @@ class ProtoplanetApp {
   }
 
   // --- pan / zoom --------------------------------------------------------------
+  // Zoom re-renders ride the animation frame (Devon, Nov 12 —
+  // round 2): the old wheel handler re-rendered the discs
+  // synchronously on every wheel event, and the sun only on the
+  // 300ms tick — so the camera moved instantly while the characters
+  // lagged behind it and then popped. Now a zoom change applies the
+  // transform immediately and schedules ONE re-render on the next
+  // frame, coalescing a whole pinch/wheel burst into a single
+  // re-render that lands within ~16ms of the gesture.
+  var zoomRaf = null;
+  function scheduleZoomRefresh() {
+    if (zoomRaf !== null) return;
+    zoomRaf = requestAnimationFrame(function () {
+      zoomRaf = null;
+      renderStar();
+      refreshDiscDetail();
+    });
+  }
   function applyTransform() {
     worldEl.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + zoom + ')';
     // Counter-scale the sprites (see the .disc / .star CSS): the
@@ -1902,7 +2124,7 @@ class ProtoplanetApp {
     zoom = fitZoom;
     panX = 0; panY = 0;
     applyTransform();
-    refreshDiscDetail();
+    scheduleZoomRefresh();
   }
   var panning = null, dragged = false, suppressClick = false;
   orreryEl.addEventListener('pointerdown', function (e) {
@@ -1940,7 +2162,7 @@ class ProtoplanetApp {
     e.preventDefault();
     zoom = Math.max(0.3, Math.min(3, zoom * Math.exp(-e.deltaY * 0.001)));
     applyTransform();
-    refreshDiscDetail();
+    scheduleZoomRefresh();
   }, { passive: false });
 
   // --- clicks (delegated; suppressed right after a drag-pan) ----------------
@@ -2020,10 +2242,10 @@ class ProtoplanetApp {
 
   // --- top bar -----------------------------------------------------------------
   document.getElementById('zoomIn').addEventListener('click', function () {
-    zoom = Math.min(3, zoom * 1.25); applyTransform(); refreshDiscDetail();
+    zoom = Math.min(3, zoom * 1.25); applyTransform(); scheduleZoomRefresh();
   });
   document.getElementById('zoomOut').addEventListener('click', function () {
-    zoom = Math.max(0.3, zoom / 1.25); applyTransform(); refreshDiscDetail();
+    zoom = Math.max(0.3, zoom / 1.25); applyTransform(); scheduleZoomRefresh();
   });
   document.getElementById('fitBtn').addEventListener('click', fitView);
   document.getElementById('search').addEventListener('input', function (e) {
@@ -2045,7 +2267,15 @@ class ProtoplanetApp {
       document.body.classList.toggle('hide-ui');
     }
   });
-  window.addEventListener('resize', function () { computeFit(); });
+  // A resize changes the tile widths, so the tile art re-renders
+  // when the Index is showing (rAF-gated — a drag fires many resizes).
+  var indexRaf = null;
+  window.addEventListener('resize', function () {
+    computeFit();
+    if (mode === 'index' && indexRaf === null) {
+      indexRaf = requestAnimationFrame(function () { indexRaf = null; renderIndex(); });
+    }
+  });
 
   // --- animation loop (150ms tick; early-returns while hidden) ------------------
   var tick = 0;
@@ -2068,22 +2298,17 @@ class ProtoplanetApp {
       }
       layoutPlanets();
     }
-    if (tick % 3 === 0) renderDiscs(); // discs shimmer ~2x/sec; full re-render every tick is wasteful
-    if (tick % 2 === 0) renderStar(); // the sun churns + flares ~3x/sec — never frozen while the planets orbit. Outside the hover/detail guard on purpose: hovering a planet shouldn't freeze the sun.
+    // Round 2 (Devon, Nov 12): the old cadence was discs every 3rd
+    // tick (2.2fps) and the sun every 2nd (3.3fps) — the frames were
+    // visibly low and the moon jumped 5-12 cells a frame. Discs and
+    // sun now re-render every 150ms tick (~7fps, the same cadence as
+    // the sidebar pet, which Devon said looks good). A disc render is
+    // ~3-6ms, so even a full 12-ring system stays inside the budget.
+    renderDiscs();
+    renderStar(); // the sun churns + flares ~7x/sec now — never frozen while the planets orbit. Outside the hover/detail guard on purpose: hovering a planet shouldn't freeze the sun.
     // The sheet's art re-renders every tick while it is open, so the
     // zoomed planet keeps shimmering — the drift itself is paused.
-    if (detailOpen && selected) {
-      var artEl = document.getElementById('detailArt');
-      if (artEl) {
-        var planet = findPlanet(selected.seed, selected.generation);
-        if (planet) {
-          var gridEl = artEl.querySelector('.pp-planet .pp-grid');
-          if (gridEl) gridEl.innerHTML = P.gridToHtml(
-            P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5, true), 2.35, 4.23);
-          fillStars(artEl, sec);
-        }
-      }
-    }
+    if (detailOpen && selected) fillDetailArt();
   }, 150);
 
   // --- state from the extension --------------------------------------------------

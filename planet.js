@@ -1670,6 +1670,9 @@ function drawMiniSphere(grid, mx, my, mr, tint, seed, farSide, r, minB) {
   }
 }
 
+// Moon orbit speed factor — see drawMoons (Devon, Nov 12, round 2).
+const MOON_SPEED = 0.3;
+
 function drawMoons(grid, r, sec, planet, muts) {
   const { CX, CY } = CONFIG;
   // Moons orbit in the planet's equatorial plane — the same plane the
@@ -1678,7 +1681,14 @@ function drawMoons(grid, r, sec, planet, muts) {
   const cosT = Math.cos(tilt), sinT = Math.sin(tilt);
   const active = muts || new Set(planet.mutations || []);
   for (const m of planet.moons) {
-    const ang = m.phase + sec * m.speed;
+    // MOON_SPEED (Devon, Nov 12 — round 2): the stored speeds
+    // (0.25–0.6 rad/s) move a moon 11–26 cells a second — at the old
+    // 450ms disc frame that was a 5–12 cell jump per frame, a
+    // teleport, not an orbit. The moons are slowed to 0.3x at render
+    // time (periods ~35–85s now), so at the 150ms tick a moon moves
+    // 0.5–1.2 cells a frame and visibly glides. Render-time only:
+    // the stored speeds never change, so no data migration.
+    const ang = m.phase + sec * m.speed * MOON_SPEED;
     // Orbit offset in cells, then rotated by the ring tilt.
     const ox = m.orbit * r * Math.cos(ang);
     const oy = 0.5 * m.orbit * r * Math.sin(ang);
@@ -1886,9 +1896,9 @@ function ringFitZoom(planet, stageIdx, outW, outH) {
   return clamp(fit, 0.35, 1.0);
 }
 
-// Continuous zoom detail (Devon, Nov 12 — F5 feedback): the orrery
-// planet was a pixelated blob while the detail sheet looked good,
-// because the disc only had THREE stepped tiers (46x24 / 92x48 /
+// Continuous zoom detail (Devon, Nov 12 — F5 feedback, round 2):
+// the orrery planet was a pixelated blob while the detail sheet looked
+// good, because the disc only had THREE stepped tiers (46x24 / 92x48 /
 // 136x76) and the glyphs were CSS-scaled between them. Devon's rule:
 // glyph size NEVER changes with zoom — zooming changes how many
 // characters there are (more detail in, cozier out), tracking the
@@ -1903,9 +1913,24 @@ function ringFitZoom(planet, stageIdx, outW, outH) {
 // counter-scaled (scale(1/zoom) in the panel) so the glyphs are
 // rasterized at their final on-screen size, never blown up from
 // sub-pixel letters.
-const DISC_DETAIL_BASE = { cols: 46, rows: 24, cellW: 2.6, cellH: 6.12 };
-const DISC_WORLD_W = DISC_DETAIL_BASE.cols * DISC_DETAIL_BASE.cellW; // 119.6
-const DISC_WORLD_H = DISC_DETAIL_BASE.rows * DISC_DETAIL_BASE.cellH; // 146.88
+//
+// ROUND 2 (Devon, Nov 12 — second F5 pass): the constant was the
+// problem, not the counter-scale. At 2.6px-wide cells the glyphs were
+// unreadable dots at every zoom — and worse, the panel set the font
+// size from the cell HEIGHT (6.12px), whose monospace advance (~3.7px)
+// is 42% wider than the 2.6px cell, so every glyph overlapped its
+// neighbour and clipped at the end of each color run (measured:
+// a 3-char run set to 7.8px wide actually needs 11px). The cells are
+// now 5.2x9.36px — the smallest size Devon called readable (his
+// approved max-zoom sun reads at 5.5px glyphs) — with the 10:18 ratio
+// kept, and the world footprint UNCHANGED (119.6x146.88px), so the
+// orrery layout and the non-overlap geometry are untouched. The cost
+// is coarser detail at fit zoom (23x16 instead of 46x24): the planet
+// is fewer, bigger, readable characters — exactly the cozy version
+// Devon asked for zoomed out.
+const DISC_DETAIL_BASE = { cols: 46, rows: 24, cellW: 5.2, cellH: 9.36 };
+const DISC_WORLD_W = 119.6; // 46 * 2.6 — the old footprint, kept so the orrery layout never moves
+const DISC_WORLD_H = 146.88; // 24 * 6.12
 function discDetail(zoom) {
   const z = (zoom && isFinite(zoom) && zoom > 0) ? zoom : 1;
   return {
@@ -1916,48 +1941,64 @@ function discDetail(zoom) {
   };
 }
 
-// Continuous sun resolution (Devon, Nov 12 — F5 feedback): the sun
-// was rendered once at a fixed 84x42 and CSS-scaled, so zoomed in
-// it was a giant pixel blob and zoomed out a tiny one. Same rule as
+// Continuous sun resolution (Devon, Nov 12 — F5 feedback, round 2):
+// the sun was rendered once at a fixed 84x42 and CSS-scaled, so zoomed
+// in it was a giant pixel blob and zoomed out a tiny one. Same rule as
 // the discs — the sun re-renders at a resolution matching its
 // on-screen size, glyph size constant. The sun's world footprint is
-// 84x42 cells at 3.67x6.6px (308x277px). Capped at 2x zoom (168x84):
-// beyond that the cells grow instead, so the DOM stays bounded while
-// the sun keeps its footprint — the sun is a soft ball, slightly
-// larger glyphs at max zoom still read.
-const SUN_BASE = { cols: 84, rows: 42, cellW: 3.67, cellH: 6.6 };
+// 84x42 cells at 3.67x6.6px (308x277px). Round 2: the base cells are
+// 5.5x9.9px (the size Devon approved at max zoom), footprint unchanged
+// — so the sun is 56x28 at 1x instead of 84x42: coarser granulation,
+// but every glyph readable. Capped at 168x84 (hit exactly at 3x zoom);
+// beyond the cap the cells grow instead, so the DOM stays bounded
+// while the sun keeps its footprint.
+const SUN_BASE = { cols: 84, rows: 42, cellW: 5.5, cellH: 9.9 };
+const SUN_WORLD_W = 308; // 84 * 3.67 — the old footprint, kept
+const SUN_WORLD_H = 277; // 42 * 6.6
 function sunDetail(zoom) {
   const z = (zoom && isFinite(zoom) && zoom > 0) ? zoom : 1;
-  const rz = Math.min(z, 2);
+  const rawCols = SUN_WORLD_W * z / SUN_BASE.cellW;
+  const rawRows = SUN_WORLD_H * z / SUN_BASE.cellH;
+  const cols = Math.max(12, Math.min(168, Math.round(rawCols)));
+  const rows = Math.max(6, Math.min(84, Math.round(rawRows)));
   return {
-    cols: Math.max(12, Math.round(SUN_BASE.cols * rz)),
-    rows: Math.max(6, Math.round(SUN_BASE.rows * rz)),
-    cellW: +(SUN_BASE.cellW * z / rz).toFixed(2),
-    cellH: +(SUN_BASE.cellH * z / rz).toFixed(2),
+    cols,
+    rows,
+    // Past the 168-col cap the cells grow so the sun keeps its
+    // footprint (308 * zoom) instead of shrinking. The cap is only
+    // hit past 3x zoom (168.0 exactly at 3x), so up to the panel's
+    // max zoom the glyphs stay at the 5.5x9.9 base.
+    cellW: rawCols > 168 ? +(SUN_WORLD_W * z / cols).toFixed(2) : SUN_BASE.cellW,
+    cellH: rawRows > 84 ? +(SUN_WORLD_H * z / rows).toFixed(2) : SUN_BASE.cellH,
   };
 }
 
-// Sidebar crop (Devon, Nov 12 — F5 feedback): the Explorer pet
-// renders the planet big in a narrow frame — the full 136x76 grid is
-// mostly empty sky around a small planet. sidebarCrop returns the
+// Sidebar crop (Devon, Nov 12 — F5 feedback, round 2): the Explorer
+// pet renders the planet big in a narrow frame — the full 136x76 grid
+// is mostly empty sky around a small planet. sidebarCrop returns the
 // grid box to show: the body + its moons and atmosphere, centered on
 // the planet's center. Rings are allowed to clip at the frame edge
 // (standalone frames, same rule as the Index tiles). Stage 0's
-// shattered smoke spreads ~2x the body radius, so it gets a wider
-// margin (2.2); later stages get 1.7, which covers the body + moon
-// orbits (~1.55x). The radius follows the stage morph (lerp from the
-// previous stage over 3s), so the box tracks the birth condensing
-// instead of clipping it. Geometry-based, not content-based, so the
-// box never jitters as smoke and sparks flicker — and quantized to
-// 4-cell steps, so it only moves in small steps during a morph.
-function sidebarCrop(planet, stageIdx, t) {
+// shattered smoke used to get a wider margin (2.2); round 2 tightens
+// it to 1.6 — the wispy outer fringe clips at the frame edge, but the
+// dense burst + core stay, and the crop shrinks from 80 to 60 cols,
+// so the glyphs grow from ~3.3px to ~4.5px at a 280px sidebar. Later
+// stages keep 1.7, which covers the body + moon orbits (~1.55x). The
+// radius follows the stage morph (lerp from the previous stage over
+// 3s), so the box tracks the birth condensing instead of clipping it.
+// Geometry-based, not content-based, so the box never jitters as smoke
+// and sparks flicker — and quantized to 4-cell steps, so it only moves
+// in small steps during a morph. marginOverride (round 2) lets the
+// zoomed disc ask for a wider box that keeps the whole ring system
+// (2.5 covers even double rings at 2.45x).
+function sidebarCrop(planet, stageIdx, t, marginOverride) {
   const { W, H, CX, CY } = CONFIG;
   const s = clamp(stageIdx, 0, STAGES.length - 1);
   const st = STAGES[s];
   const prev = STAGES[(s - 1 + STAGES.length) % STAGES.length];
   const m = clamp((t || 0) / 3.0, 0, 1);
   const r = lerp(prev.radius, st.radius, m) * (planet.size || 1);
-  const margin = s === 0 ? 2.2 : 1.7;
+  const margin = marginOverride !== undefined ? marginOverride : (s === 0 ? 1.6 : 1.7);
   const qW = Math.max(8, Math.ceil((r * margin * 2) / 4) * 4);
   const qH = Math.max(6, Math.ceil((r * margin) / 4) * 4);
   const x0 = Math.max(0, Math.round(CX - qW / 2));

@@ -742,8 +742,8 @@ check('ext: big flares are rare (long periods, ~2.2s eruptions)',
   extSrc.includes('period: 47') && extSrc.includes('period: 63') && extSrc.includes('period: 89')
   && extSrc.includes('FLARE_DUR = 2.2')
   && !extSrc.includes('period: 13') && !extSrc.includes('period: 7') && !extSrc.includes('period: 11'));
-check('ext: limb flames fizzle on their own fast phase (not the old slow halo wink)',
-  extSrc.includes('LIMB FLAMES') && extSrc.includes('Math.sin(sec * 3.1'));
+check('ext: limb flames fizzle on their own phase (slowed 3.1 -> 1.5 in round 2 — the old rate strobed at the frame rate)',
+  extSrc.includes('LIMB FLAMES') && extSrc.includes('Math.sin(sec * 1.5'));
 // Limb flames fizzle (Devon, Nov 11 — the fringe was frozen in every
 // clip: measured only 17% of halo cells ever changed, 1.4% per tick).
 // Run the real starHtml and measure the fringe band (d2rel in 1..1.3,
@@ -926,8 +926,11 @@ check('ext: sun edge carries flames (tongues grow/die at different angles, not a
   check('sun edge moves: the silhouette extent drifts (was frozen at 0.99 straight down)',
     extMax - ext0 > 0.03, 'extent ' + ext0.toFixed(2) + ' -> ' + extMax.toFixed(2));
 })();
-check('ext: sun re-renders on the tick (never frozen)',
-  extSrc.includes('renderStar()') && extSrc.includes('tick % 2 === 0'));
+(function () {
+  const sysHtml = extSrc.slice(extSrc.indexOf('  getSystemHtml(webview) {'), extSrc.indexOf('  getPrestigeHtml(webview) {'));
+  check('ext: sun and discs re-render every tick (never frozen, no more 2.2fps discs)',
+    sysHtml.includes('renderDiscs();\n    renderStar();') && !sysHtml.includes('tick % 2') && !sysHtml.includes('tick % 3'));
+})();
 // The sun re-renders at a resolution matching its on-screen size
 // (Devon, Nov 12 — continuous zoom detail): starHtml takes
 // cols/rows/cell size, defaulting to the old 84x42. Run the real
@@ -967,15 +970,20 @@ check('sidebar: XP bar has a visible track and a numbers label',
 check('ext: orrery discs render from the continuous detail grid (not tiers, not 68x38)',
   extSrc.includes('P.renderCozy(d.planet.planet, d.planet.stageIdx, 10, sec, discZoom, detail.cols, detail.rows, undefined, 0.5, true), detail.cellW, detail.cellH')
   && !extSrc.includes('68, 38), 3.4, 6.12') && !extSrc.includes('discTier'));
-check('ext: detail panel uses the full render, not the cozy downsample',
-  extSrc.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5, true), 2.35, 4.23'));
+check('ext: detail panel uses the cropped full render, not the cozy downsample',
+  extSrc.includes('function fillDetailArt()')
+  && extSrc.includes('P.cropGrid(P.render(planet.planet, planet.stageIdx, 10, sec, 1.0, undefined, 0.5, true), crop)')
+  && extSrc.includes('P.sidebarCrop(planet.planet, planet.stageIdx, 10)')
+  && extSrc.includes("gridEl.style.setProperty('--pp-fs', cellFont(cellW, cellH) + 'px')"));
 // The detail sheet uses the full render, not the cozy downsample —
 // the 4.4/7.92 cells now belong to the Index tiles, so this scopes
 // the check to renderDetail itself instead of the whole file.
 (function () {
   const detailSrc = extSrc.slice(extSrc.indexOf('function renderDetail() {'), extSrc.indexOf('function indexSignature() {'));
-  check('ext: detail sheet uses the full render, not the cozy downsample',
-    detailSrc.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5, true)')
+  check('ext: detail sheet uses the cropped full render, not the cozy downsample',
+    detailSrc.includes('fillDetailArt()')
+    && detailSrc.includes('P.cropGrid(P.render(planet.planet, planet.stageIdx, 10, sec, 1.0, undefined, 0.5, true), crop)')
+    && detailSrc.includes('P.sidebarCrop(planet.planet, planet.stageIdx, 10)')
     && !detailSrc.includes('renderCozy'), detailSrc.slice(0, 200));
 })();
 check('ext: card mutation badge keeps the full MUTATION label',
@@ -1001,8 +1009,29 @@ check('ext: hide-UI pill click brings the UI back',
   extSrc.includes("getElementById('showUiPill')") && extSrc.includes("classList.remove('hide-ui')"));
 check('ext: Index grid has no gray background (panel black, hairline tiles)',
   extSrc.includes('#tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 0; background: #050505; }'));
-check('ext: sidebar pet floats on the VS Code gray (transparent wrap, no black box)',
-  extSrc.includes('#wrap { background: transparent; border: none;'));
+check('ext: sidebar pet sits in a flat dark card (Devon, Nov 12 — round 2; the transparent wrap was the round-1 guess)',
+  extSrc.includes('#wrap { background: #171717; border: 1px solid #2e2e2e;')
+  && !extSrc.includes('#wrap { background: transparent; border: none;'));
+check('ext: sidebar never scrolls (height-aware layout, XP always visible)',
+  extSrc.includes('body.compact') && extSrc.includes("mt.style.display = 'none'")
+  && extSrc.includes('body { margin: 0; padding: 10px; background: transparent; overflow: hidden;'));
+// Round 2, second pass: the first height-fit forgot the dark card's
+// own padding+border (18px) and still scrolled 23px at 150px height,
+// and the fitted cells dropped to 1.7px dots. The reserve now
+// measures the card chrome, and short views render the crop
+// downsampled (half, then quarter) so the cells stay readable.
+check('ext: sidebar height reserve includes the dark-card chrome',
+  extSrc.includes('wrapEl.offsetHeight - (gridEl0 ? gridEl0.offsetHeight : 0)'));
+check('ext: sidebar reserve uses measured margins, not hardcoded guesses',
+  extSrc.includes('getComputedStyle(el)') && extSrc.includes('parseFloat(cs.marginTop)')
+  && extSrc.includes('parseFloat(cs.marginBottom)'));
+check('ext: sidebar renders a coarser grid at short heights (readable floor ~4px)',
+  extSrc.includes('lastDims') && extSrc.includes('P.downsampleGrid(cropped, lastDims.cols, lastDims.rows)')
+  && extSrc.includes('newH >= 4.2'));
+check('ext: sidebar grid is centered in the card (a narrow coarse grid must not hug the left edge)',
+  extSrc.includes('.pp-grid { margin: 0; text-align: center;'));
+check('ext: sidebar has no stale scrollHeight backstop (it over-shrinks on the old row count)',
+  !extSrc.includes('document.documentElement.scrollHeight') || !extSrc.includes('applyCells(Math.max(1, +(cellW * k)'));
 check('ext: sidebar pet renders cropped + star-free',
   extSrc.includes('P.sidebarCrop(state.planet, state.stageIdx, t)')
   && extSrc.includes('P.cropGrid(full, lastCrop)')
@@ -1077,8 +1106,8 @@ check('ext: no Sol label under the sun',
     nearHalf > 0, nearHalf + ' hits at radN 1.2, scale 0.5');
   check('ext: solar-system renders pass the reduced smoke scale (orrery, detail, index, tick)',
     extSrc.includes('P.renderCozy(d.planet.planet, d.planet.stageIdx, 10, sec, discZoom, detail.cols, detail.rows, undefined, 0.5, true)')
-    && extSrc.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5, true)')
-    && extSrc.includes('P.renderCozy(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx), 68, 38, undefined, 0.5, true)'));
+    && extSrc.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.0, undefined, 0.5, true)')
+    && extSrc.includes('P.render(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx), undefined, 0.5, true)'));
   check('ext: sidebar pet and prestige renders keep the full smoke (default scale)',
     extSrc.includes('P.render(state.planet, state.stageIdx, t, sec, 1.0, undefined, 1, true)')
     && extSrc.includes('P.renderCozy(p.planet, p.stageIdx, 10, 5, 1.0, 34, 19, undefined, 1, true), 3.4, 6.12)'));
@@ -1418,8 +1447,12 @@ check('ext: hatchFromSeed confirms with a modal warning', extSrc.includes('Yes, 
   check('ext: index is its own full-screen section', sysHtml.includes('id="index"') && sysHtml.includes('id="tiles"'));
   check('ext: index tiles are big (340px min, hairline-separated, no gray box)',
     sysHtml.includes('grid-template-columns: repeat(auto-fill, minmax(340px, 1fr))') && sysHtml.includes('gap: 0; background: #050505;'));
-  check('ext: index tiles use the big cozy art (68x38)',
-    sysHtml.includes('P.renderCozy(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx), 68, 38, undefined, 0.5, true)'));
+  check('ext: index tiles use the cropped full render like the sidebar (not the 68x38 cozy downsample)',
+    sysHtml.includes('function fillTileArt(')
+    && sysHtml.includes('P.render(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx), undefined, 0.5, true)')
+    && sysHtml.includes('P.sidebarCrop(p.planet, p.stageIdx, 10)')
+    && sysHtml.includes('P.cropGrid(P.render(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx), undefined, 0.5, true), crop)')
+    && !sysHtml.includes('P.renderCozy(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx), 68, 38'));
   check('ext: no card chrome in the system panel',
     !sysHtml.includes('class="card') && !sysHtml.includes('id="cards"') && !sysHtml.includes('border-radius: 8px'));
   check('ext: bottom strip holds the zoom controls + hint', sysHtml.includes('id="bottomStrip"') && !sysHtml.includes('orreryHint'));
@@ -1460,11 +1493,12 @@ check('ext: hatchFromSeed confirms with a modal warning', extSrc.includes('Yes, 
     && sysHtml.includes('P.ringFitZoom(d.planet.planet, d.planet.stageIdx, detail.cols, detail.rows)'));
   check('ext: index tiles scale with stage', sysHtml.includes('P.stageScale(p.stageIdx)'));
   check('ext: orrery discs and index tiles drop the per-planet stars',
-    sysHtml.includes(', 0.5, true), detail.cellW, detail.cellH') && sysHtml.includes(', 0.5, true), 4.4, 7.92'));
+    sysHtml.includes(', 0.5, true), detail.cellW, detail.cellH')
+    && sysHtml.includes('P.cropGrid(P.render(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx), undefined, 0.5, true), crop)'));
   // The detail sheet keeps its stars — as a layer of the frame now,
   // not baked into the planet render (Devon, Nov 12 — §21).
   check('ext: detail sheet renders star-free with the starfield layer behind it',
-    sysHtml.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5, true)')
+    sysHtml.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.0, undefined, 0.5, true)')
     && sysHtml.includes('id="detailArt" class="pp-frame"'));
   check('ext: sidebar pet is star-free (floats on the VS Code gray, no starfield box)',
     extSrc.includes('P.render(state.planet, state.stageIdx, t, sec, 1.0, undefined, 1, true)'));
@@ -1482,8 +1516,10 @@ check('ext: hatchFromSeed confirms with a modal warning', extSrc.includes('Yes, 
   const sysHtml = extSrc.slice(extSrc.indexOf('  getSystemHtml(webview) {'), extSrc.indexOf('  getPrestigeHtml(webview) {'));
   check('ext: discs use the continuous discDetail (no tiers)',
     sysHtml.includes('P.discDetail(') && sysHtml.includes('function discDetailNow()') && !sysHtml.includes('discTier'));
-  check('ext: zoom gestures refresh the disc detail',
-    (sysHtml.match(/refreshDiscDetail\(\)/g) || []).length >= 6);
+  check('ext: zoom gestures refresh the disc detail (rAF-gated, one re-render per frame)',
+    (sysHtml.match(/scheduleZoomRefresh\(\)/g) || []).length >= 7
+    && sysHtml.includes('function scheduleZoomRefresh()')
+    && sysHtml.includes('refreshDiscDetail();'));
   check('ext: index tiles have no amber border (hairline gaps only)',
     !sysHtml.includes('.tile.inSystem') && !sysHtml.includes('.tile.picking')
     && sysHtml.includes('gap: 0; background: #050505;'));
@@ -1579,7 +1615,7 @@ check('ext: hatchFromSeed confirms with a modal warning', extSrc.includes('Yes, 
   // orrery discs and Index tiles stay plain black (no layer there).
   check('ext: detail sheet is a starfield frame with star-free art',
     sysHtml.includes('id="detailArt" class="pp-frame"')
-    && sysHtml.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5, true)'));
+    && sysHtml.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.0, undefined, 0.5, true)'));
   check('ext: detail tick refreshes the planet layer + the stars',
     sysHtml.includes("artEl.querySelector('.pp-planet .pp-grid')")
     && sysHtml.includes('fillStars(artEl, sec)'));

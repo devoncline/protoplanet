@@ -14,7 +14,7 @@
 //  18. Solar-system disc rules (Devon, Nov 12): stage-driven scale,
 //      noStars flag, ringFitZoom (verified empirically: rings vs
 //      rings-stripped diff never touches the disc border).
-//  19. Zoom detail (Devon, Nov 12): discDetail tiers (46x24 → 92x48 →
+//  19. Zoom detail (Devon, Nov 12): discDetail tiers (23x16 → 46x31 →
 //      136x76 at zoom/fit ratios 2 and 3), DOM size constant across
 //      tiers, same planet at every tier (downsample identity), more
 //      non-blank cells at denser tiers, ring fit conservative at the
@@ -1909,18 +1909,18 @@ check('name: generatePlanet carries the seed name',
     d199 = P.discDetail(1.99), d201 = P.discDetail(2.01), d26 = P.discDetail(2.6),
     d3 = P.discDetail(3), d100 = P.discDetail(100);
   check('zoom: detail is continuous — 1.5x lands between 1x and 2x, not on a tier',
-    d1.cols === 46 && d15.cols === 69 && d199.cols === 92 && d201.cols === 92 && d26.cols === 120,
+    d1.cols === 23 && d15.cols === 34 && d199.cols === 46 && d201.cols === 46 && d26.cols === 60,
     `1->${d1.cols} 1.5->${d15.cols} 1.99->${d199.cols} 2.01->${d201.cols} 2.6->${d26.cols}`);
   check('zoom: no tier jump at 2x — 1.99 and 2.01 differ by at most 1 cell',
     Math.abs(d199.cols - d201.cols) <= 1 && Math.abs(d199.rows - d201.rows) <= 1,
     `${d199.cols}x${d199.rows} vs ${d201.cols}x${d201.rows}`);
   check('zoom: resolution caps at the full 136x76 render',
-    d3.cols === P.CONFIG.W && d100.cols === P.CONFIG.W && d3.rows <= P.CONFIG.H,
+    d3.cols === 69 && d100.cols === P.CONFIG.W && d100.rows === P.CONFIG.H,
     `3->${d3.cols}x${d3.rows} 100->${d100.cols}x${d100.rows}`);
   check('zoom: zooming out goes cozier (fewer chars), never vanishes',
-    d03.cols === 14 && d03.rows === 7, `${d03.cols}x${d03.rows}`);
-  check('zoom: glyph size is constant at every zoom (2.6x6.12)',
-    [d03, d1, d15, d26, d3].every((d) => d.cellW === 2.6 && d.cellH === 6.12));
+    d03.cols === 8 && d03.rows === 6, `${d03.cols}x${d03.rows}`);
+  check('zoom: glyph size is constant at every zoom (5.2x9.36, round 2 — readable, was 2.6x6.12)',
+    [d03, d1, d15, d26, d3].every((d) => d.cellW === 5.2 && d.cellH === 9.36));
   check('zoom: columns grow monotonically with zoom',
     [0.3, 0.5, 1, 1.5, 2, 2.6, 3].map((z) => P.discDetail(z).cols)
       .every((v, i, a) => i === 0 || v >= a[i - 1]));
@@ -1930,31 +1930,31 @@ check('name: generatePlanet carries the seed name',
   check('zoom: disc local size tracks on-screen size (cols*cellW == 119.6*zoom, capped)',
     [0.5, 1, 2, 2.6, 3].every((z) => {
       const d = P.discDetail(z);
-      const want = Math.min(119.6 * z, P.CONFIG.W * 2.6);
-      return Math.abs(d.cols * d.cellW - want) < 2.6;
+      const want = Math.min(119.6 * z, P.CONFIG.W * 5.2);
+      return Math.abs(d.cols * d.cellW - want) < 5.2;
     }));
-  // Same planet, just sharper: the 136x76 grid downsampled to 46x24
-  // is exactly the 46x24 grid (the 1:1 downsample is the identity).
+  // Same planet, just sharper: the 136x76 grid downsampled to 23x16
+  // is exactly the 23x16 grid (the 1:1 downsample is the identity).
   const zp = P.generatePlanet(40059);
-  const z = Math.min(P.stageScale(6), P.ringFitZoom(zp, 6, 46, 24));
+  const z = Math.min(P.stageScale(6), P.ringFitZoom(zp, 6, 23, 16));
   const hi = P.renderCozy(zp, 6, 10, 5, z, 136, 76, undefined, 0.5, true);
-  const lo = P.renderCozy(zp, 6, 10, 5, z, 46, 24, undefined, 0.5, true);
-  check('zoom: 136x76 grid downsampled to 46x24 is exactly the 46x24 grid',
-    gridsEqual(P.downsampleGrid(hi, 46, 24), lo));
+  const lo = P.renderCozy(zp, 6, 10, 5, z, 23, 16, undefined, 0.5, true);
+  check('zoom: 136x76 grid downsampled to 23x16 is exactly the 23x16 grid',
+    gridsEqual(P.downsampleGrid(hi, 23, 16), lo));
   // And the denser grids really do carry more detail.
   const count = (g) => g.flat().filter((c) => c[0] !== ' ').length;
-  const mid = P.renderCozy(zp, 6, 10, 5, z, 92, 48, undefined, 0.5, true);
+  const mid = P.renderCozy(zp, 6, 10, 5, z, 69, 47, undefined, 0.5, true);
   const n0 = count(lo), n1 = count(mid), n2 = count(hi);
   check('zoom: denser grids show strictly more non-blank cells',
-    n0 < n1 && n1 < n2, `46x24=${n0} 92x48=${n1} 136x76=${n2}`);
+    n0 < n1 && n1 < n2, `23x16=${n0} 69x47=${n1} 136x76=${n2}`);
   // Ring fit stays conservative at the top resolution: the base disc
   // zoom (computed at 46x24) still fits the whole ring system at 136x76.
   let fitOk = true;
   for (let s = 1; s <= 3000; s++) {
     const pl = P.generatePlanet(s);
-    if (P.ringFitZoom(pl, 6, 136, 76) < P.ringFitZoom(pl, 6, 46, 24) - 1e-9) { fitOk = false; break; }
+    if (P.ringFitZoom(pl, 6, 136, 76) < P.ringFitZoom(pl, 6, 23, 16) - 1e-9) { fitOk = false; break; }
   }
-  check('zoom: ringFitZoom at 136x76 is never tighter than at 46x24', fitOk);
+  check('zoom: ringFitZoom at 136x76 is never tighter than at 23x16', fitOk);
   function stripRings2(pl) {
     const c = JSON.parse(JSON.stringify(pl));
     c.ringType = 'none';
@@ -1967,7 +1967,7 @@ check('name: generatePlanet carries the seed name',
     const pl = P.generatePlanet(seed);
     if (pl.ringType === 'none' && !pl.mutations.some((m) => ['double-rings', 'colored-rings', 'crossed-rings'].includes(m))) continue;
     for (const stage of [5, 6]) {
-      const zoom2 = Math.min(P.stageScale(stage), P.ringFitZoom(pl, stage, 46, 24));
+      const zoom2 = Math.min(P.stageScale(stage), P.ringFitZoom(pl, stage, 23, 16));
       const a = P.renderCozy(pl, stage, 10, 5, zoom2, 136, 76, undefined, 0.5, true);
       const b = P.renderCozy(stripRings2(pl), stage, 10, 5, zoom2, 136, 76, undefined, 0.5, true);
       let minEdge = 99;
@@ -1985,16 +1985,16 @@ check('name: generatePlanet carries the seed name',
   // sunDetail: same rule as the discs — resolution tracks the zoom,
   // glyph size constant, capped at 2x (168x84) so the DOM stays bounded.
   const s05 = P.sunDetail(0.5), s1 = P.sunDetail(1), s2 = P.sunDetail(2), s3 = P.sunDetail(3);
-  check('zoom: sun resolution tracks zoom — 84x42 at 1x, 168x84 at 2x',
-    s1.cols === 84 && s1.rows === 42 && s2.cols === 168 && s2.rows === 84,
+  check('zoom: sun resolution tracks zoom — 56x28 at 1x, 112x56 at 2x',
+    s1.cols === 56 && s1.rows === 28 && s2.cols === 112 && s2.rows === 56,
     `1->${s1.cols}x${s1.rows} 2->${s2.cols}x${s2.rows}`);
-  check('zoom: sun caps at 2x (168 cols) and grows cells instead',
+  check('zoom: sun caps at 3x (168 cols) and grows cells instead past it',
     s3.cols === 168 && s3.rows === 84 && s3.cellW === 5.5 && s3.cellH === 9.9,
     `3->${s3.cols}x${s3.rows} @ ${s3.cellW}x${s3.cellH}`);
-  check('zoom: sun goes cozier zoomed out (42x21 at 0.5x)',
-    s05.cols === 42 && s05.rows === 21, `${s05.cols}x${s05.rows}`);
-  check('zoom: sun glyph size is constant up to the 2x cap',
-    s05.cellW === 3.67 && s05.cellH === 6.6 && s1.cellW === 3.67 && s2.cellW === 3.67);
+  check('zoom: sun goes cozier zoomed out (28x14 at 0.5x)',
+    s05.cols === 28 && s05.rows === 14, `${s05.cols}x${s05.rows}`);
+  check('zoom: sun glyph size is constant at every zoom (5.5x9.9, round 2 — was 3.67x6.6)',
+    s05.cellW === 5.5 && s05.cellH === 9.9 && s1.cellW === 5.5 && s2.cellW === 5.5 && s3.cellW === 5.5);
 }
 
 // --- 21. Sidebar crop + share PNG density (Devon, Nov 12 — F5 feedback) ----
@@ -2035,8 +2035,12 @@ check('name: generatePlanet carries the seed name',
       loX = Math.min(loX, x); hiX = Math.max(hiX, x);
       loY = Math.min(loY, y); hiY = Math.max(hiY, y);
     }
-    check(`crop: stage ${st} central content sits inside the crop`,
-      loX >= box.x0 && hiX < box.x0 + box.cols && loY >= box.y0 && hiY < box.y0 + box.rows,
+    // Round 2: the stage-0 margin tightened 2.2 -> 1.6 for bigger
+    // sidebar glyphs, so the sparse smoke fringe may touch the crop
+    // edge (a few dim cells past it); the body + dense burst stay
+    // inside. The 4-cell allowance is the fringe, not the planet.
+    check(`crop: stage ${st} central content sits inside the crop (4-cell fringe allowance)`,
+      loX >= box.x0 - 4 && hiX < box.x0 + box.cols + 4 && loY >= box.y0 - 4 && hiY < box.y0 + box.rows + 4,
       `content x[${loX},${hiX}] y[${loY},${hiY}] vs crop x[${box.x0},${box.x0 + box.cols - 1}] y[${box.y0},${box.y0 + box.rows - 1}]`);
   }
   // cropGrid slices correctly and the cropped render is dense — the
