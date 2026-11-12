@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Protoplanet — Piece 1 preview: seeded planets</title>
+<style>
+  /* text-size-adjust: none is load-bearing here. Mobile browsers inflate
+     small text while line-height stays fixed — that is what squashed the
+     planets flat on Nov 10. It must never be removed from this page. */
+  html, body { -webkit-text-size-adjust: none; text-size-adjust: none; }
+  body { background: #000; color: #ddd; font-family: monospace; margin: 24px; }
+  h1 { font-size: 20px; color: #fff; margin: 0 0 4px; }
+  p { color: #999; margin: 0 0 16px; max-width: 900px; line-height: 1.5; }
+  button { background: #222; color: #fff; border: 1px solid #555; font-family: monospace;
+           font-size: 14px; padding: 8px 14px; margin: 0 8px 16px 0; cursor: pointer; }
+  button:hover { background: #333; }
+  h2 { font-size: 15px; color: #fff; margin: 24px 0 8px; }
+  .grid { display: flex; flex-wrap: wrap; gap: 16px; }
+  .cell { background: #050505; border: 1px solid #222; padding: 8px; overflow-x: auto; }
+  .cell .label { font-size: 12px; color: #bbb; margin-bottom: 6px; }
+  .cell .label b { color: #fff; }
+  /* Fixed-size cells (see gridToHtml in planet.js): each color run is an
+     inline-block box of explicit width (chars x --pp-cw) and fixed height
+     (--pp-ch). The font never decides cell geometry — the planet is a
+     circle on any screen, any font, any phone. --pp-fs is measured at
+     runtime so one glyph advance == exactly one cell width. */
+  .pp-grid {
+    margin: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace;
+    font-size: var(--pp-fs, 16px);
+    line-height: var(--pp-ch, 18px);
+    letter-spacing: 0;
+    white-space: pre;
+    -webkit-text-size-adjust: none; text-size-adjust: none;
+  }
+  .pp-run {
+    display: inline-block;
+    height: var(--pp-ch, 18px);
+    line-height: var(--pp-ch, 18px);
+    vertical-align: top;
+    overflow: hidden;
+    white-space: pre;
+    font-kerning: none;
+  }
+</style>
+</head>
+<body>
+<h1>Protoplanet — Piece 1: seeded planets</h1>
+<p>Every planet below comes from a number (a seed). Same seed = same planet, forever.
+No AI — an algorithm rolls the terrain, atmosphere, rings and moons. These ten
+cover all ten terrains. The bottom row is one planet (seed 1838) growing through
+all 8 lifecycle stages. Hit "Roll a new planet" to see a fresh random one.
+Restyled Nov 11 toward the reel's look: smaller characters, bigger planet,
+faded edges, softer light.</p>
+
+<button id="pauseBtn">Pause</button>
+<button id="rollBtn">Roll a new planet</button>
+<span id="rollLabel" style="color:#999"></span>
+
+<h2>Ten terrains, ten seeds (Civilization stage, animated)</h2>
+<div class="grid" id="showcase"></div>
+
+<h2>One planet, all 8 stages (seed 1838 — crystal world)</h2>
+<div class="grid hero" id="hero"></div>
+
+<h2>Your roll</h2>
+<div class="grid"><div class="cell"><div class="label" id="rollTitle">Press "Roll a new planet".</div><pre class="pp-grid" id="rollPre"></pre></div></div>
+
+<script src="planet.js"></script>
+<script>
+(function () {
+  const P = window.Protoplanet;
+  const SHOWCASE = [
+    { seed: 1838, terrain: 'crystal' }, { seed: 145, terrain: 'desert' },
+    { seed: 1967, terrain: 'gas' },     { seed: 301, terrain: 'icy' },
+    { seed: 1003, terrain: 'jungle' },  { seed: 1034, terrain: 'lava' },
+    { seed: 470,  terrain: 'metal' },   { seed: 339, terrain: 'ocean' },
+    { seed: 1165, terrain: 'rocky' },   { seed: 178, terrain: 'toxic' },
+  ];
+  const HERO_SEED = 1838;
+  const FONT_STACK = "ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace";
+
+  // --- Fixed-cell layout -------------------------------------------------
+  // Cells are 10x18 CSS px at full scale (same ratio as the PNG renderer).
+  // The grid is 136 wide now (restyle, Nov 11), so full scale is 1360px
+  // wide — on narrow screens the whole grid scales down proportionally
+  // (never below 0.5x — below that the cell scrolls instead). The font
+  // size is measured from the real monospace font at runtime, so one
+  // glyph advance == exactly one cell width, on any device. Re-run after
+  // fonts load and on resize; the animation loop re-renders every tick
+  // anyway, so a new scale takes effect on the next frame.
+  const root = document.documentElement;
+  let cellW = 10, cellH = 18;
+  function layout() {
+    const avail = document.getElementById('showcase').clientWidth - 18;
+    const fullW = P.CONFIG.W * P.CONFIG.CELL_W; // 136 cols x 10px
+    const scale = Math.max(0.5, Math.min(1, avail / fullW));
+    const newW = +(10 * scale).toFixed(2), newH = +(18 * scale).toFixed(2);
+    if (newW === cellW && newH === cellH && root.style.getPropertyValue('--pp-fs')) return;
+    cellW = newW; cellH = newH;
+    // Probe this device's real monospace advance at 16px, then size the
+    // font so the advance equals the cell width exactly.
+    const probe = document.createElement('span');
+    probe.style.cssText = 'position:absolute;visibility:hidden;font-family:' + FONT_STACK +
+      ';font-size:16px;letter-spacing:0;white-space:pre;';
+    probe.textContent = 'MMMMMMMMMMMMMMMMMMMM'; // 20 chars
+    document.body.appendChild(probe);
+    const adv16 = probe.offsetWidth / 20;
+    probe.remove();
+    let fs = 16 * cellW / adv16;
+    if (fs > cellH) fs = cellH; // never taller than the cell; tiny drift is fine
+    root.style.setProperty('--pp-cw', cellW + 'px');
+    root.style.setProperty('--pp-ch', cellH + 'px');
+    root.style.setProperty('--pp-fs', fs.toFixed(2) + 'px');
+  }
+  layout();
+  window.addEventListener('resize', layout);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(layout);
+
+  // Build the DOM cells.
+  const showcaseEl = document.getElementById('showcase');
+  const showcaseCells = SHOWCASE.map(s => {
+    const planet = P.generatePlanet(s.seed);
+    const div = document.createElement('div');
+    div.className = 'cell';
+    div.innerHTML = `<div class="label"><b>Seed ${s.seed}</b> · ${planet.summary}</div><pre class="pp-grid"></pre>`;
+    showcaseEl.appendChild(div);
+    return { planet, pre: div.querySelector('pre') };
+  });
+
+  const heroEl = document.getElementById('hero');
+  const heroPlanet = P.generatePlanet(HERO_SEED);
+  const heroCells = P.STAGES.map((st, i) => {
+    const div = document.createElement('div');
+    div.className = 'cell';
+    div.innerHTML = `<div class="label"><b>Stage ${i + 1}/8 · ${st.name}</b></div><pre class="pp-grid"></pre>`;
+    heroEl.appendChild(div);
+    return { stage: i, pre: div.querySelector('pre') };
+  });
+
+  let rollPlanet = null;
+  const rollPre = document.getElementById('rollPre');
+  const rollTitle = document.getElementById('rollTitle');
+  document.getElementById('rollBtn').addEventListener('click', () => {
+    const seed = Math.floor(Math.random() * 1000000);
+    rollPlanet = P.generatePlanet(seed);
+    rollTitle.innerHTML = `<b>Seed ${seed}</b> · ${rollPlanet.summary}`;
+  });
+
+  let paused = false;
+  const pauseBtn = document.getElementById('pauseBtn');
+  pauseBtn.addEventListener('click', () => {
+    paused = !paused;
+    pauseBtn.textContent = paused ? 'Play' : 'Pause';
+  });
+
+  // Animate: ~7 fps is plenty for the flicker/drift illusion.
+  let sec = 0;
+  setInterval(() => {
+    if (paused) return;
+    sec += 0.15;
+    for (const c of showcaseCells) {
+      c.pre.innerHTML = P.gridToHtml(P.render(c.planet, 6, 5.0, sec), cellW, cellH);
+    }
+    for (const c of heroCells) {
+      c.pre.innerHTML = P.gridToHtml(P.render(heroPlanet, c.stage, P.STAGES[c.stage].dur * 0.5, sec), cellW, cellH);
+    }
+    if (rollPlanet) {
+      rollPre.innerHTML = P.gridToHtml(P.render(rollPlanet, 6, 5.0, sec), cellW, cellH);
+    }
+  }, 150);
+})();
+</script>
+</body>
+</html>

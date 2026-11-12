@@ -1,0 +1,52 @@
+[
+  {
+    "seed": 1838,
+    "terrain": "crystal",
+    "summary": "Crystal world · double ring · 3 moons"
+  },
+  {
+    "seed": 145,
+    "terrain": "desert",
+    "summary": "Desert world · double ring · 3 moons"
+  },
+  {
+    "seed": 1967,
+    "terrain": "gas",
+    "summary": "Gas world · double ring · 3 moons"
+  },
+  {
+    "seed": 301,
+    "terrain": "icy",
+    "summary": "Icy world · double ring · 3 moons"
+  },
+  {
+    "seed": 1003,
+    "terrain": "jungle",
+    "summary": "Jungle world · ice ring · 3 moons"
+  },
+  {
+    "seed": 1034,
+    "terrain": "lava",
+    "summary": "Lava world · double ring · 3 moons"
+  },
+  {
+    "seed": 470,
+    "terrain": "metal",
+    "summary": "Metal world · ice ring · 2 moons"
+  },
+  {
+    "seed": 339,
+    "terrain": "ocean",
+    "summary": "Ocean world · double ring · 3 moons"
+  },
+  {
+    "seed": 1165,
+    "terrain": "rocky",
+    "summary": "Rocky world · ice ring · 3 moons"
+  },
+  {
+    "seed": 178,
+    "terrain": "toxic",
+    "summary": "Toxic world · shattered · 3 moons"
+  }
+]

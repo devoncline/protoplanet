@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- Protoplanet activity-bar icon: a little ringed planet. Drawn by hand,
+       no downloaded assets. Gold reads on dark themes; the ring is tilted
+       like the loop's rings. -->
+  <circle cx="12" cy="12" r="6" fill="#e8b64c"/>
+  <ellipse cx="12" cy="12" rx="10.5" ry="3.4" fill="none" stroke="#e8b64c" stroke-width="1.5" transform="rotate(-18 12 12)"/>
+  <circle cx="10" cy="10" r="1.2" fill="#8a6d1f"/>
+</svg>

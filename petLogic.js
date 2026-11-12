@@ -1,0 +1,610 @@
+// petLogic.js — Piece 2: the PURE logic of the Protoplanet extension.
+//
+// No `vscode` import here: every function in this file runs in plain Node
+// (see test-pet.js). extension.js does the VS Code wiring (events,
+// webview, status bar, globalState) and calls into here. Keeping the
+// logic separate is what makes it testable without launching VS Code.
+//
+// The model:
+//   * Typing is XP: 1 inserted character = 1 XP (for now).
+//   * XP grows the current planet through the 8 lifecycle stages
+//     (Dust cloud -> ... -> Civilization -> End), same stages as
+//     lifecycle.py / planet.js. Thresholds live in CONFIG below.
+//   * After the End stage, more typing rebirths the planet: the old one
+//     is archived to the collection record and a new planet hatches
+//     (new seed, generation +1). Leftover XP carries over.
+
+'use strict';
+
+const Planet = require('./planet.js');
+
+// ---------------------------------------------------------------------------
+// CONFIG — every tunable number for piece 2 lives here, in one place.
+// ---------------------------------------------------------------------------
+const CONFIG = {
+  // XP_THRESHOLDS[i] = total XP needed to REACH stage i (0 = Dust cloud).
+  // First evolution is fast (~100 chars) so you see it quickly; later
+  // stages take longer — a Civilization planet is a few days of real
+  // typing. All numbers are tunable here.
+  XP_THRESHOLDS: [0, 100, 300, 600, 1000, 1500, 2200, 3000],
+
+  // XP at which an End-stage planet rebirths: it is archived to the
+  // collection record and a new planet (new seed, generation +1) hatches.
+  // 600 XP past End gives you time to actually see the End stage first.
+  REBIRTH_XP: 3600,
+
+  // Starter terrains offered on first run (first planet only).
+  STARTER_TERRAINS: ['icy', 'lava', 'jungle', 'rocky', 'ocean'],
+
+  // How many finished planets the collection record keeps (oldest are
+  // dropped first). 200 is generous; the panel (piece 4) shows them.
+  PAST_LIMIT: 200,
+
+  // How often the pet's state is written to disk while typing (ms).
+  // Saves also happen immediately on stage change / rebirth / new
+  // planet, so nothing important is ever lost.
+  SAVE_DEBOUNCE_MS: 3000,
+
+  // --- Minerals, salvage/recycle, prestige (step 2, Nov 11) -----------
+  // Mineral families map to mutation families (each mutation carries
+  // tags in planet.js). A mineral tilts the NEXT planet's birth roll
+  // toward matching mutations — it never changes the current planet,
+  // because mutations are born with the planet (Nov 11 redesign).
+  MINERAL_FAMILIES: ['moon', 'rings', 'glow', 'storm', 'sky', 'weird'],
+
+  // Feeding multipliers (applied to CONFIG.MUTATION_CHANCE for the
+  // matching mutations on the next planet's birth roll). A family
+  // mineral tilts every mutation in its family; a mineral carrying a
+  // specific mutation tilts that one mutation much harder.
+  FED_FAMILY_BOOST_MULT: 10,
+  FED_EXACT_BOOST_MULT: 20,
+
+  // Prestige inheritance: a parent mutation passes to the offspring
+  // at a multiplied chance — ~2x if one parent has it, ~3x if both.
+  PRESTIGE_INHERIT_MULT_ONE: 2,
+  PRESTIGE_INHERIT_MULT_BOTH: 3,
+
+  // Parent fate (Devon's call, accepted retire for now): parents STAY
+  // in the collection, but each planet can only be a parent ONCE.
+  // Flip to true to destroy the parents instead (merge realism) —
+  // the offspring's record always stores its parents (lineage).
+  PRESTIGE_CONSUMES_PARENTS: false,
+
+  // A planet can prestige once it reached Civilization (stage 6,
+  // 2200 XP). "Reached" — an End-stage planet counts too; it grew
+  // through Civilization.
+  PRESTIGE_MIN_CHARS: 2200,
+
+  // The one free starter mineral, granted on first run (crystal —
+  // tilts toward glow effects).
+  STARTER_MINERAL: { kind: 'crystal', family: 'glow', mutation: null, source: 'starter' },
+};
+
+// ---------------------------------------------------------------------------
+// Counting typed characters (from a VS Code onDidChangeTextDocument event).
+// ---------------------------------------------------------------------------
+
+// Document schemes we count typing in. Everything else (output panels,
+// git views, settings UI, ...) is not "coding" and earns no XP.
+const COUNTED_SCHEMES = new Set(['file', 'untitled', 'vscode-notebook-cell']);
+
+function shouldCountDocument(scheme) {
+  return COUNTED_SCHEMES.has(scheme);
+}
+
+// Count net inserted characters from one event's contentChanges.
+// Each change: text.length chars were inserted, rangeLength chars were
+// removed. Only the positive difference counts (deletions never grow
+// the planet, and they never shrink it either). A big paste counts —
+// you did type it (or paste it), and the planet is made of characters.
+function countInsertedChars(contentChanges) {
+  let n = 0;
+  for (const c of contentChanges) {
+    // .length counts UTF-16 units, same as VS Code's offsets — so an
+    // emoji counts as 2 XP. Harmless, and consistent with rangeLength.
+    const inserted = c.text.length - c.rangeLength;
+    if (inserted > 0) n += inserted;
+  }
+  return n;
+}
+
+// ---------------------------------------------------------------------------
+// Stages and progress (pure functions of total XP).
+// ---------------------------------------------------------------------------
+
+// Which lifecycle stage (0-7) an XP total is in.
+function stageForXp(xp) {
+  const t = CONFIG.XP_THRESHOLDS;
+  let idx = 0;
+  for (let i = 0; i < t.length; i++) {
+    if (xp >= t[i]) idx = i;
+    else break;
+  }
+  return idx;
+}
+
+// Everything the UI needs to show progress for an XP total.
+function stageInfo(xp) {
+  const idx = stageForXp(xp);
+  const t = CONFIG.XP_THRESHOLDS;
+  const stageStart = t[idx];
+  const nextXp = idx + 1 < t.length ? t[idx + 1] : CONFIG.REBIRTH_XP;
+  const st = Planet.STAGES[idx];
+  return {
+    stageIdx: idx,
+    name: st.name,
+    desc: st.desc,
+    stageStart, // XP where this stage began
+    nextXp, // XP where the next stage (or rebirth) happens
+    inStage: xp - stageStart, // XP earned inside this stage
+    span: nextXp - stageStart, // XP this stage takes in total
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Planets and state.
+// ---------------------------------------------------------------------------
+
+function randomSeed() {
+  return Math.floor(Math.random() * 1000000000);
+}
+
+// A fresh planet: the seeded traits from planet.js plus XP tracking.
+// xp and chars are the same number in v1 (1 char = 1 XP); chars is
+// kept as its own field because later pieces add XP that isn't typed
+// (minerals, piece 5) — "grown from N characters" stays honest.
+// `tilt` (optional, step 2) biases the birth roll — see takeTilt().
+// `usedAsParent` tracks the one-time-parent rule; `parents` is the
+// lineage (prestige offspring only) — always stored, so the family
+// tree stays visible even if parent-fate flips to destroy.
+function makePlanet(seed, starterTerrain, tilt) {
+  const p = Planet.generatePlanet(seed, starterTerrain, tilt);
+  p.xp = 0;
+  p.chars = 0;
+  p.usedAsParent = false;
+  p.parents = null;
+  return p;
+}
+
+function freshState() {
+  return {
+    version: 1,
+    starterDone: false, // has the first-run terrain pick been done?
+    generation: 1, // how many planet lives so far (rebirths + new planets)
+    current: null, // the living planet (makePlanet result), or null
+    past: [], // finished planets: {seed, terrain, terrainLabel, summary, chars, generation, archivedAt, mutations, parents, usedAsParent}
+    // Step 2: the mineral inventory.
+    minerals: [], // [{ id, kind, family, mutation, source }]
+    fedMineral: null, // the mineral fed for the NEXT planet's birth roll, or null
+    mineralSeq: 0, // counter for mineral ids
+    starterMineralGranted: false,
+  };
+}
+
+// First run: hatch the first planet, optionally biased by the starter
+// terrain the user picked (undefined = fully random). Grants the one
+// free starter mineral (crystal — tilts toward glow effects).
+function startFirstPlanet(state, seed, starterTerrain) {
+  state.current = makePlanet(seed, starterTerrain);
+  state.starterDone = true;
+  grantStarterMineral(state);
+  return state.current;
+}
+
+// ---------------------------------------------------------------------------
+// Minerals (step 2) — the inventory, feeding, and the tilt.
+// A mineral is { id, kind, family, mutation, source }:
+//   * family: one of CONFIG.MINERAL_FAMILIES (moon/rings/glow/...).
+//   * mutation: the mutation id it carries, or null for a plain family
+//     mineral. A mutated planet yields a mineral OF its mutation.
+//   * source: 'starter' | 'salvage' | 'prestige' (where it came from).
+// ---------------------------------------------------------------------------
+
+function mineralName(mineral) {
+  if (!mineral) return '';
+  if (mineral.mutation) {
+    const def = Planet.mutationDef(mineral.mutation);
+    return `${def ? def.name : mineral.mutation} mineral`;
+  }
+  if (mineral.kind === 'crystal') return 'Crystal mineral';
+  return `${mineral.family} mineral`;
+}
+
+// Plain words for the UI: what does this mineral tilt toward?
+function mineralTiltsText(mineral) {
+  if (!mineral) return '';
+  if (mineral.mutation) {
+    const def = Planet.mutationDef(mineral.mutation);
+    return `tilts your next planet toward ${def ? def.name : mineral.mutation}`;
+  }
+  return `tilts your next planet toward ${mineral.family} mutations`;
+}
+
+function makeMineral(state, spec) {
+  state.mineralSeq += 1;
+  return {
+    id: `min-${state.mineralSeq}`,
+    kind: spec.kind || (spec.mutation ? 'mutation' : 'family'),
+    family: spec.family,
+    mutation: spec.mutation || null,
+    source: spec.source || 'salvage',
+  };
+}
+
+// The one free starter mineral (crystal). Once per state, ever.
+function grantStarterMineral(state) {
+  if (state.starterMineralGranted) return null;
+  state.starterMineralGranted = true;
+  const m = makeMineral(state, CONFIG.STARTER_MINERAL);
+  state.minerals.push(m);
+  return m;
+}
+
+// Feed a mineral for the NEXT planet's birth roll. The mineral moves
+// out of the inventory into the fed slot; feeding another one returns
+// the old one to the inventory. The fed mineral is CONSUMED when the
+// next planet is generated (rebirth, recycle, new planet, prestige) —
+// it never changes the planet you already have.
+function feedMineral(state, mineralId) {
+  const idx = (state.minerals || []).findIndex((m) => m.id === mineralId);
+  if (idx < 0) return { ok: false, reason: 'no such mineral' };
+  let returned = null;
+  if (state.fedMineral) {
+    returned = state.fedMineral;
+    state.minerals.push(returned);
+  }
+  state.fedMineral = state.minerals.splice(idx, 1)[0];
+  return { ok: true, fed: state.fedMineral, returned };
+}
+
+function unfeedMineral(state) {
+  if (!state.fedMineral) return { ok: false, reason: 'nothing fed' };
+  const m = state.fedMineral;
+  state.fedMineral = null;
+  state.minerals.push(m);
+  return { ok: true, mineral: m };
+}
+
+// Take the fed mineral out of the slot (consumed by a new planet's
+// birth roll). Returns the mineral, or null when nothing was fed.
+function takeFedMineral(state) {
+  const m = state.fedMineral;
+  state.fedMineral = null;
+  return m || null;
+}
+
+// The boosts map for a fed mineral: { mutationId: multiplier }.
+// A family mineral tilts every mutation in its family; a mineral
+// carrying a specific mutation tilts that one mutation much harder.
+function boostsForMineral(mineral) {
+  if (!mineral) return {};
+  const boosts = {};
+  if (mineral.mutation) {
+    boosts[mineral.mutation] = CONFIG.FED_EXACT_BOOST_MULT;
+    return boosts;
+  }
+  for (const mut of Planet.CONFIG.MUTATIONS) {
+    if ((mut.tags || []).includes(mineral.family)) boosts[mut.id] = CONFIG.FED_FAMILY_BOOST_MULT;
+  }
+  return boosts;
+}
+
+// Build the tilt for the next planet: the fed mineral's boosts
+// (consumed now) merged with any extra boosts (prestige inheritance).
+// Multipliers stack — a mutation boosted by both is boosted by both.
+// Returns null when there is nothing to tilt (plain birth roll).
+function takeTilt(state, extraBoosts) {
+  const boosts = boostsForMineral(takeFedMineral(state));
+  if (extraBoosts) {
+    for (const [id, mult] of Object.entries(extraBoosts)) {
+      boosts[id] = (boosts[id] || 1) * mult;
+    }
+  }
+  return Object.keys(boosts).length > 0 ? { boosts } : null;
+}
+
+// What the status bar / pet window shows about minerals.
+function mineralSummary(state) {
+  const byFamily = {};
+  for (const f of CONFIG.MINERAL_FAMILIES) byFamily[f] = 0;
+  for (const m of state.minerals || []) byFamily[m.family] = (byFamily[m.family] || 0) + 1;
+  return {
+    total: (state.minerals || []).length,
+    byFamily,
+    fed: state.fedMineral ? mineralName(state.fedMineral) : null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Salvage / recycle (step 2) — destroying planets for minerals.
+// ---------------------------------------------------------------------------
+
+// What a destroyed planet yields. One mineral per mutation it carries
+// (each carrying that mutation — the mineral remembers where it came
+// from); a plain planet yields one plain mineral of a family derived
+// from its own seed, so the yield is stable and testable.
+function yieldMineralsForPlanet(planet) {
+  const yields = [];
+  const muts = planet.mutations || [];
+  if (muts.length > 0) {
+    for (const id of muts) {
+      const def = Planet.mutationDef(id);
+      yields.push({ family: (def && def.tags && def.tags[0]) || 'weird', mutation: id, source: 'salvage' });
+    }
+    return yields;
+  }
+  const fams = CONFIG.MINERAL_FAMILIES;
+  const pick = fams[Math.trunc(Planet.mulberry32(planet.seed || 0)() * fams.length)];
+  return [{ family: pick, mutation: null, source: 'salvage' }];
+}
+
+function addMinerals(state, specs) {
+  const made = specs.map((s) => makeMineral(state, s));
+  state.minerals.push(...made);
+  return made;
+}
+
+// Recycle the CURRENT planet (Devon's loop): destroy it for minerals
+// and immediately hatch a fresh one. The destroyed planet is NOT
+// archived — it's gone, its minerals are what you keep. The new
+// planet's birth roll is tilted by any fed mineral (consumed).
+// Generation +1 — a recycled planet is a new life, same as a rebirth.
+function recycleCurrent(state, nextSeed) {
+  if (!state.current) return { ok: false, reason: 'no current planet' };
+  const destroyed = state.current;
+  const minerals = addMinerals(state, yieldMineralsForPlanet(destroyed));
+  state.generation += 1;
+  const tilt = takeTilt(state, null);
+  state.current = makePlanet(nextSeed ? nextSeed() : randomSeed(), null, tilt);
+  return { ok: true, minerals, destroyedSeed: destroyed.seed, planet: state.current };
+}
+
+// Salvage an ARCHIVED planet: destroy it for minerals, no new planet.
+// index is the position in state.past.
+function salvageArchived(state, index) {
+  if (!Number.isInteger(index) || index < 0 || index >= state.past.length) {
+    return { ok: false, reason: 'no such archived planet' };
+  }
+  const [destroyed] = state.past.splice(index, 1);
+  const minerals = addMinerals(state, yieldMineralsForPlanet(destroyed));
+  return { ok: true, minerals, destroyedSeed: destroyed.seed };
+}
+
+// ---------------------------------------------------------------------------
+// Prestige (step 2) — two Civilization-stage planets make an offspring.
+// ---------------------------------------------------------------------------
+
+// Prestige eligibility: a planet that reached Civilization (2200+
+// chars) and hasn't already been a parent. Archived records carry
+// chars + usedAsParent; old records without the flag count as unused.
+function prestigeEligible(planet) {
+  if (!planet) return false;
+  if ((planet.chars || 0) < CONFIG.PRESTIGE_MIN_CHARS) return false;
+  if (planet.usedAsParent) return false;
+  return true;
+}
+
+// Parent descriptors for the UI: { kind: 'current' } or
+// { kind: 'past', index }. Each entry carries what the pick list shows.
+function eligiblePrestigeParents(state) {
+  const list = [];
+  if (state.current && prestigeEligible(state.current)) {
+    list.push({
+      kind: 'current', index: -1,
+      label: `Current — ${state.current.summary}`,
+      seed: state.current.seed, generation: state.generation,
+      chars: state.current.chars, mutations: (state.current.mutations || []).slice(),
+    });
+  }
+  state.past.forEach((p, i) => {
+    if (prestigeEligible(p)) {
+      list.push({
+        kind: 'past', index: i,
+        label: `${p.summary} · Gen ${p.generation}`,
+        seed: p.seed, generation: p.generation,
+        chars: p.chars, mutations: (p.mutations || []).slice(),
+      });
+    }
+  });
+  return list;
+}
+
+function resolveParent(state, desc) {
+  if (!desc) return null;
+  if (desc.kind === 'current') return state.current;
+  if (desc.kind === 'past' && Number.isInteger(desc.index)) return state.past[desc.index] || null;
+  return null;
+}
+
+function parentKey(desc) {
+  return desc.kind === 'current' ? 'current' : `past:${desc.index}`;
+}
+
+// The offspring's inheritance boosts: each parent mutation passes at
+// a multiplied chance — ~2x if one parent has it, ~3x if both.
+// Mutations neither parent has still roll at the base chance.
+function inheritanceBoosts(parentMutationsA, parentMutationsB) {
+  const boosts = {};
+  const count = {};
+  for (const id of [...parentMutationsA, ...parentMutationsB]) count[id] = (count[id] || 0) + 1;
+  for (const [id, n] of Object.entries(count)) {
+    boosts[id] = n >= 2 ? CONFIG.PRESTIGE_INHERIT_MULT_BOTH : CONFIG.PRESTIGE_INHERIT_MULT_ONE;
+  }
+  return boosts;
+}
+
+// The lineage record the offspring always stores (names/seeds/stats),
+// so the family tree stays visible even if parent-fate flips to
+// destroy/merge.
+function lineageRecord(planet, generation) {
+  return {
+    seed: planet.seed,
+    generation: generation === undefined ? null : generation,
+    terrain: planet.terrain,
+    summary: planet.summary,
+    chars: planet.chars || 0,
+    mutations: (planet.mutations || []).slice(),
+  };
+}
+
+// Combine two Civilization-stage planets into an offspring: a new
+// seed starting as dust (0 XP), whose birth roll is tilted by the
+// parents' mutations (inheritance) plus any fed mineral (consumed).
+// The offspring becomes the new current planet; the old current
+// planet is archived (retired if it was a parent, plain if not) —
+// unless the parents were destroyed instead (flag). Parents STAY in
+// the collection by default, but each can only be a parent ONCE.
+function prestige(state, parentA, parentB, nextSeed) {
+  const a = resolveParent(state, parentA);
+  const b = resolveParent(state, parentB);
+  if (!a || !b) return { ok: false, reason: 'parent not found' };
+  if (parentKey(parentA) === parentKey(parentB)) return { ok: false, reason: 'pick two different planets' };
+  if (!prestigeEligible(a) || !prestigeEligible(b)) {
+    return { ok: false, reason: 'both parents must have reached Civilization and not already been parents' };
+  }
+  const mutsA = (a.mutations || []).slice();
+  const mutsB = (b.mutations || []).slice();
+  const genA = parentA.kind === 'current' ? state.generation : a.generation;
+  const genB = parentB.kind === 'current' ? state.generation : b.generation;
+  const parents = [lineageRecord(a, genA), lineageRecord(b, genB)];
+  const currentIsParent = parentA.kind === 'current' || parentB.kind === 'current';
+  if (CONFIG.PRESTIGE_CONSUMES_PARENTS) {
+    // Destroy the parents: remove their collection records (a current
+    // parent is destroyed below instead of archived). The offspring's
+    // lineage record is all that remains of them.
+    for (const [desc, planet, gen] of [[parentA, a, genA], [parentB, b, genB]]) {
+      if (desc.kind === 'past') {
+        const idx = state.past.findIndex((p) => p.seed === planet.seed && p.generation === gen);
+        if (idx >= 0) state.past.splice(idx, 1);
+      }
+    }
+  } else {
+    a.usedAsParent = true;
+    b.usedAsParent = true;
+  }
+  // The old current planet leaves the stage — archived (retired if it
+  // was a parent) — unless it was just destroyed as a parent.
+  if (state.current && !(CONFIG.PRESTIGE_CONSUMES_PARENTS && currentIsParent)) archiveCurrent(state);
+  const tilt = takeTilt(state, inheritanceBoosts(mutsA, mutsB));
+  state.generation += 1;
+  const offspring = makePlanet(nextSeed ? nextSeed() : randomSeed(), null, tilt);
+  offspring.parents = parents;
+  state.current = offspring;
+  return { ok: true, planet: offspring, parents };
+}
+
+// Move the current planet into the collection record.
+function archiveCurrent(state) {
+  if (!state.current) return;
+  const c = state.current;
+  state.past.push({
+    seed: c.seed,
+    terrain: c.terrain,
+    terrainLabel: c.terrainLabel,
+    summary: c.summary,
+    chars: c.chars,
+    generation: state.generation,
+    archivedAt: Date.now(),
+    mutations: (c.mutations || []).slice(),
+    parents: c.parents ? c.parents.map((p) => ({ ...p, mutations: (p.mutations || []).slice() })) : null,
+    usedAsParent: !!c.usedAsParent,
+  });
+  while (state.past.length > CONFIG.PAST_LIMIT) state.past.shift();
+}
+
+// Add n XP (typed characters) to the current planet. Handles stage
+// changes and rebirth (possibly more than once, if n is huge — a big
+// paste can hatch two planets in a row). Leftover XP past a rebirth
+// carries over to the new planet. nextSeed is () => number; pass a
+// deterministic one in tests.
+// Returns { stageChanged, rebirthed, stageIdx } for the caller to
+// decide what to refresh.
+function applyXp(state, n, nextSeed) {
+  if (!state.current || n <= 0) {
+    return {
+      stageChanged: false,
+      rebirthed: false,
+      stageIdx: state.current ? stageForXp(state.current.xp) : 0,
+    };
+  }
+  const before = stageForXp(state.current.xp);
+  state.current.xp += n;
+  state.current.chars += n;
+  let rebirthed = false;
+  let guard = 0;
+  while (state.current.xp >= CONFIG.REBIRTH_XP && guard < 100) {
+    guard++;
+    const leftover = state.current.xp - CONFIG.REBIRTH_XP;
+    archiveCurrent(state);
+    state.generation += 1;
+    // A rebirth hatches a new planet — a fed mineral tilts its birth
+    // roll (consumed). A giant paste can rebirth twice in a row; the
+    // second planet rolls plain, the mineral only ever tilts one.
+    state.current = makePlanet(nextSeed ? nextSeed() : randomSeed(), null, takeTilt(state, null));
+    state.current.xp = leftover;
+    state.current.chars = leftover;
+    rebirthed = true;
+  }
+  const after = stageForXp(state.current.xp);
+  return { stageChanged: rebirthed || before !== after, rebirthed, stageIdx: after };
+}
+
+// "New planet" command: archive the living planet (if any) and hatch a
+// fresh one. Generation +1 — a manual new planet is a new life, same
+// as a rebirth, just on demand. A fed mineral tilts the new planet's
+// birth roll (consumed).
+function newPlanet(state, nextSeed) {
+  if (state.current) archiveCurrent(state);
+  state.generation += 1;
+  state.current = makePlanet(nextSeed ? nextSeed() : randomSeed(), null, takeTilt(state, null));
+  return state.current;
+}
+
+// ---------------------------------------------------------------------------
+// Persistence (JSON in globalState under one key).
+// ---------------------------------------------------------------------------
+
+function serializeState(state) {
+  return JSON.stringify(state);
+}
+
+// Parse stored JSON; anything invalid or from another version falls
+// back to a fresh state rather than crashing the extension.
+function deserializeState(json) {
+  try {
+    const s = JSON.parse(json);
+    if (!s || typeof s !== 'object' || s.version !== 1) return freshState();
+    if (s.current !== null && (typeof s.current !== 'object' || typeof s.current.seed !== 'number' || typeof s.current.xp !== 'number')) return freshState();
+    if (!Array.isArray(s.past)) s.past = [];
+    if (typeof s.generation !== 'number' || s.generation < 1) s.generation = 1;
+    if (typeof s.starterDone !== 'boolean') s.starterDone = !!s.current;
+    // Step 2 fields: old saves (from before minerals existed) get
+    // defaults, plus a one-time starter mineral gift for players who
+    // started before minerals existed.
+    if (!Array.isArray(s.minerals)) s.minerals = [];
+    if (typeof s.fedMineral !== 'object') s.fedMineral = null;
+    if (typeof s.mineralSeq !== 'number' || s.mineralSeq < 0) s.mineralSeq = 0;
+    if (typeof s.starterMineralGranted !== 'boolean') {
+      s.starterMineralGranted = true;
+      if (s.minerals.length === 0) s.minerals.push(makeMineral(s, CONFIG.STARTER_MINERAL));
+    }
+    return s;
+  } catch (e) {
+    return freshState();
+  }
+}
+
+module.exports = {
+  CONFIG, COUNTED_SCHEMES,
+  shouldCountDocument, countInsertedChars,
+  stageForXp, stageInfo,
+  randomSeed, makePlanet, freshState, startFirstPlanet,
+  archiveCurrent, applyXp, newPlanet,
+  mineralName, mineralTiltsText, makeMineral, grantStarterMineral,
+  feedMineral, unfeedMineral, takeFedMineral, boostsForMineral, takeTilt,
+  mineralSummary, yieldMineralsForPlanet, addMinerals,
+  recycleCurrent, salvageArchived,
+  prestigeEligible, eligiblePrestigeParents, inheritanceBoosts,
+  lineageRecord, prestige,
+  serializeState, deserializeState,
+};
