@@ -44,7 +44,7 @@ stage 0, hidden when the planet has none.)
 
 ## Cross-stage (verified Nov 11)
 
-Every mutation reads on ALL 8 stages, adapted per stage — not identical.
+Every mutation reads on ALL 7 stages, adapted per stage — not identical.
 Moons, comet, meteor shower and glitch show from stage 0; sparkles and crystals from stage 1
 (the core's own sparkles carry stage 0); rings, oceans and the storm
 from stage 4, when those traits exist at all. Before a trait exists the
@@ -86,7 +86,7 @@ the planet, so feeding a mineral does NOT change the current planet.
 Feeding tilts the NEXT planet's birth roll toward matching mutations.
 Feed any time (Command Palette: "Feed a mineral"); the fed mineral
 sits in the fed slot and is CONSUMED when the next planet is
-generated — rebirth, recycle, new planet, or prestige offspring.
+generated — recycle, new planet, or prestige offspring.
 Feeding another mineral returns the old one to the inventory.
 A family mineral tilts every mutation in its family (x10); a mineral
 carrying a specific mutation tilts that one mutation harder (x20).
@@ -118,7 +118,7 @@ window's meta line, plus any fed mineral ("Fed: Crystal mineral").
 ## Prestige (BUILT — step 2, Nov 11; word kept — Devon's lean)
 
 Combining two planets that REACHED Civilization (2200+ chars —
-"reached", so an End-stage planet counts too) makes an offspring: a
+"reached", so a maxed planet that kept growing past 2200 counts too) makes an offspring: a
 new seed starting as dust, whose birth roll is tilted by the
 parents' mutations — each parent mutation passes at a multiplied
 chance (~2x if one parent has it, ~3x if both); mutations neither
@@ -152,9 +152,10 @@ keeps the memory.
 
 ## Second planet (flag for Devon)
 
-Rebirth (3,600 XP → old planet archived, new seed starts) IS the
-current path to a second planet — but that means two full planets
-before the first prestige. That grind is long. Recycle is NOT a
+The New planet command (manual — old planet archived, new seed
+starts) IS the current path to a second planet — but that means two
+full planets before the first prestige. That grind is long. (Auto-
+rebirth at 3,600 XP used to be the path; cut Nov 12.) Recycle is NOT a
 shortcut here: it replaces the current planet, it doesn't give you
 two at once. Ask him if he wants a faster second-planet route; do
 not invent one on your own.

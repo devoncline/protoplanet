@@ -23,10 +23,10 @@ for (const { seed } of seeds) {
     });
   }
 }
-// One planet across all 8 stages, to show the lifecycle.
+// One planet across all 7 stages, to show the lifecycle.
 const hero = P.generatePlanet(seeds[0].seed);
 hero.mutations = []; // plain, like the rest of the base set (see above).
-for (let i = 0; i < 8; i++) {
+for (let i = 0; i < P.STAGES.length; i++) {
   out.push({
     seed: hero.seed, tag: `stage${i + 1}`, stage: P.STAGES[i].name,
     summary: hero.summary, terrain: hero.terrain,

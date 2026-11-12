@@ -296,7 +296,6 @@ const STAGES = [
   { name: 'Oceans',        mode: 'ocean', radius: 27.0, ring: 0.35, dur: 9,  pat: [0.6, 0.15], bands: [27, 33, 39],    banded: true, desc: 'Water pools, clouds drift, waves roll.' },
   { name: 'Life',          mode: 'life', radius: 28.5, ring: 0.6,  dur: 9,  pat: [1.2, 0.35], bands: [28, 34, 40],    banded: true, desc: 'Green spreads across the continents.' },
   { name: 'Civilization',  mode: 'civ', radius: 28.5, ring: 1.0,  dur: 10, pat: [1.0, 0.20], bands: [19, 27, 22],    banded: true, desc: 'City lights blink on the night side. Rings open wide.' },
-  { name: 'End',           mode: 'end', radius: 21.0, ring: 0.7,  dur: 8,  pat: [1.4, 0.30], bands: [52, 88, 124],   desc: 'The star ages. Oceans boil off, embers fade.' },
 ];
 
 // Stage-0 looks (Nov 11): the first thing people see when they start a
@@ -608,6 +607,49 @@ function generatePlanet(seed, starterTerrain, tilt) {
     // Human-readable one-liner, e.g. "Icy world · wide ring · 2 moons".
     summary: `${terrain.label} world · ${finalRingLabel.toLowerCase()} · ${moons.length} moon${moons.length === 1 ? '' : 's'}`,
   };
+}
+
+// ---------------------------------------------------------------------------
+// SEED HATCH (Nov 12 — Devon): the plain twin of a planet. A seed
+// hatches the exact same planet — same seed = same planet — but a
+// planet hatched from a SHARED seed never carries mutations, so
+// nobody gets your rare mutated planet just by pasting its seed.
+// Mutations stay unique to the original.
+//
+// stripMutations(planet) returns a NEW planet object: the same base
+// planet (same seed, name, terrain, rings, moons, size) with every
+// mutation removed. The renderer already gates every mutation visual
+// behind the active mutation set (drawRings reads baseRingType, moons
+// fall back to baseRadius/baseTint), so stripping the list alone
+// would already render plain — but the stored record must be honest
+// too, so the mutation-granted fields are reset to their base values
+// and the summary is recomputed from the base traits:
+//   * ringType/ringLabel back to the base ring (a mutation-granted
+//     double/colored/crossed ring goes away; a ring the base roll
+//     gave stays exactly as rolled)
+//   * ringHue / crossTilt cleared (they only exist for a mutation)
+//   * every moon back to its plain size and tint (baseRadius/baseTint)
+// A moon a mutation ADDED stays as a plain moon — the base form the
+// generator already stores for it; the rare part was the mutation
+// (its color/size), and that is gone. The original planet object is
+// untouched.
+// ---------------------------------------------------------------------------
+function stripMutations(planet) {
+  const p = JSON.parse(JSON.stringify(planet));
+  p.mutations = [];
+  const baseId = p.baseRingType || p.ringType;
+  const baseRing = CONFIG.RING_TYPES.find((rt) => rt.id === baseId);
+  p.ringType = baseRing ? baseRing.id : baseId;
+  p.ringLabel = baseRing ? baseRing.label : p.ringLabel;
+  p.ringHue = null;
+  p.crossTilt = null;
+  for (const m of p.moons) {
+    m.radius = m.baseRadius !== undefined ? m.baseRadius : m.radius;
+    m.tint = m.baseTint !== undefined ? m.baseTint : m.tint;
+    m.mutantIds = [];
+  }
+  p.summary = `${p.terrainLabel} world · ${p.ringLabel.toLowerCase()} · ${p.moons.length} moon${p.moons.length === 1 ? '' : 's'}`;
+  return p;
 }
 
 // ---------------------------------------------------------------------------
@@ -1424,18 +1466,6 @@ function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts, smokeScal
             }
           }
         }
-      } else if (mode === 'end') {
-        if (b < 0.12) hue = 238;
-        // Embers are surface features: sampled in the drifting texture
-        // cells (quantized, so each texture cell is a stable ember that
-        // rotates) — the old version was fixed in screen space and only
-        // blinked in place. The blink phase comes from the ember's own
-        // noise value, so each ember keeps its rhythm as it rotates.
-        const en = noise2(Math.floor(cx), Math.floor(cy), seed);
-        if (en > 0.9 && (Math.trunc(sec * 4) + Math.trunc(en * 100)) % 4 === 0) {
-          hue = 160; ch = '*';
-          emissive = true;
-        }
       }
       if (st.banded) {
         // Belts darken the brightness (reel: body *= 1 - 0.35 * weather
@@ -1456,12 +1486,9 @@ function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts, smokeScal
         }
       }
       // Storm: a bright oval (reel: body += 0.55 * weather * storm
-      // * lit). It runs on banded stages AND at End, where it fades
-      // to half strength — the storm is dying with the world, not
-      // switching off. Before Nov 11 it lived inside the banded
-      // block, so it vanished at stage 7.
-      if (st.banded || mode === 'end') {
-        const stormFade = mode === 'end' ? 0.5 : 1.0;
+      // * lit). It runs on banded stages (Oceans and later), where
+      // the bands exist for it to ride on.
+      if (st.banded) {
         // It sits at a FIXED texture longitude for this planet
         // (stormX/stormY, seeded — hoisted above the loops), and the
         // longitude distance WRAPS with the texture period (4 radius
@@ -1478,7 +1505,7 @@ function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts, smokeScal
         const sSigX = giant ? 0.70 : 0.35, sSigY = giant ? 0.36 : 0.18;
         const stormAmt = Math.exp(-((dtx * dtx) / (2 * sSigX * sSigX) + ((ty - stormY) * (ty - stormY)) / (2 * sSigY * sSigY)));
         if (stormAmt > 0.15) {
-          b = clamp(b + (giant ? 0.65 : 0.55) * fade * stormFade * stormAmt * Math.max(dif, 0), 0.0, 1.0);
+          b = clamp(b + (giant ? 0.65 : 0.55) * fade * stormAmt * Math.max(dif, 0), 0.0, 1.0);
           ch = RAMP[Math.min(RAMP.length - 1, Math.trunc(b * RAMP.length))];
           if (giant) {
             const eyeAmt = Math.exp(-((dtx * dtx) / (2 * 0.22 * 0.22) + ((ty - stormY) * (ty - stormY)) / (2 * 0.11 * 0.11)));
@@ -1505,8 +1532,8 @@ function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts, smokeScal
       // bottom of render(), is the broken one.)
       if (mode !== 'dust') {
         const crystal = activeMuts.has('crystal-crust')
-          && ['rock', 'molten', 'crust', 'ocean', 'life', 'civ', 'end'].includes(mode) && b > 0.15;
-        const glint = activeMuts.has('sparkling-surface') && b > (mode === 'end' ? 0.25 : 0.5);
+          && ['rock', 'molten', 'crust', 'ocean', 'life', 'civ'].includes(mode) && b > 0.15;
+        const glint = activeMuts.has('sparkling-surface') && b > 0.5;
         if (glint) {
           const gh = noise2(Math.floor(cx), Math.floor(cy), seed + 888);
           if (gh > 0.965 && (Math.trunc(sec * 3 + gh * 10) % 3) !== 0) {
@@ -1535,7 +1562,7 @@ function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts, smokeScal
         // sitting black. (First version: glowB 0.30-0.55 with the
         // surface glyph — it read as a few faint dots.)
         if (activeMuts.has('glowing-oceans')
-            && ['ocean', 'life', 'civ', 'end'].includes(mode)
+            && ['ocean', 'life', 'civ'].includes(mode)
             && b < 0.35 && landAmt < 0.05) {
           const og = valueNoise(tx * 3, ty * 3, seed + 222, 12);
           if (og > 0.55) {
@@ -1761,7 +1788,7 @@ function applyGlitch(grid, sec, planet) {
 }
 
 // Render one frame of a planet at a lifecycle stage.
-// stageIdx 0-7, t = seconds into the stage (morphs from the previous
+// stageIdx 0-6, t = seconds into the stage (morphs from the previous
 // stage over 3s), sec = global running clock (drives flicker/drift).
 // Returns a grid of [char, ansiColor] cells.
 function render(planet, stageIdx, t, sec, zoom, stage0Style, smokeScale) {
@@ -1774,7 +1801,6 @@ function render(planet, stageIdx, t, sec, zoom, stage0Style, smokeScale) {
   let radius = lerp(prev.radius, st.radius, m) * zoom * planet.size;
   let ring = lerp(prev.ring, st.ring, m);
   if (planet.ringType === 'none') ring = 0;
-  if (st.mode === 'end') radius = lerp(radius, radius * 0.82, clamp(t / st.dur));
   const fade = 0.35 + 0.65 * m; // stages fade in, never pop
   // The mutations on this planet — all of them, from stage 0 (birth
   // rolls, Nov 11). Computed once, passed down to every draw step.
@@ -2401,7 +2427,7 @@ function gridToText(grid) {
 // ---------------------------------------------------------------------------
 const API = {
   CONFIG, STAGES, STARS, STAGE0_STYLES,
-  mulberry32, generatePlanet, generatePlanetName, formatCatalogName, parseCatalogName, buildFragments, buildSmoke, buildSparkles, buildCoreMarkers, coreMarkerAt, smokeCellAt,
+  mulberry32, generatePlanet, stripMutations, generatePlanetName, formatCatalogName, parseCatalogName, buildFragments, buildSmoke, buildSparkles, buildCoreMarkers, coreMarkerAt, smokeCellAt,
   mutationDef, activeMutations, hasMutation, mutationLabel,
   collisionFrame, collisionPhase, collisionShardAt, COLLISION_TIMELINE, COLLISION_END,
   drawComet, drawMeteorShower, applyGlitch,

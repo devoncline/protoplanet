@@ -143,7 +143,7 @@ check('terrain colors stay saturated (not washed out)', shade.meanSat > 25 && sh
   `mean saturation ${shade.meanSat.toFixed(1)}, max ${shade.maxSat}`);
 
 // --- 6. Render smoke: every stage renders without throwing -----------------
-for (let i = 0; i < 8; i++) {
+for (let i = 0; i < P.STAGES.length; i++) {
   const p = P.generatePlanet(100 + i);
   const g = P.render(p, i, P.STAGES[i].dur * 0.5, 2.0);
   const filled = g.flat().filter(([ch]) => ch !== ' ').length;
@@ -1349,7 +1349,7 @@ for (const [id, fn, min] of [['green-moon', greenDom14, 4], ['blood-moon', redDo
 }
 
 // 14g. Cross-stage matrix (Nov 11 redesign): every mutation must
-// exist and read on ALL 8 stages — adapted per stage, not identical.
+// exist and read on ALL 7 stages — adapted per stage, not identical.
 // VISIBLE_FROM is the first stage the effect can show: moons, comet,
 // meteor and glitch from stage 0; sparkles and crystals from stage 1
 // (the core's own sparkles carry stage 0); rings, oceans and the storm
@@ -1380,7 +1380,7 @@ for (const [id, fn, min] of [['green-moon', greenDom14, 4], ['blood-moon', redDo
     const tw = plainTwin14(pl);
     const from = VISIBLE_FROM[mut.id];
     let beforeOk = true, beforeWorst = -1, afterOk = true, afterWorst = 999;
-    for (let st = 0; st < 8; st++) {
+    for (let st = 0; st < 7; st++) {
       const d = gridDiff(P.render(pl, st, 5.0, 2.5), P.render(tw, st, 5.0, 2.5));
       if (st < from) { if (d !== 0) { beforeOk = false; beforeWorst = Math.max(beforeWorst, d); } }
       else { if (d < 3) { afterOk = false; afterWorst = Math.min(afterWorst, d); } }
@@ -1603,6 +1603,78 @@ check('name: generatePlanet carries the seed name',
   check('collision: a mutated parent renders and stays deterministic',
     mutA && gridsEqual(P.collisionFrame(mutA, colB, colO, 2.0), P.collisionFrame(mutA, colB, colO, 2.0)),
     mutA ? 'seed ' + mutA.seed : 'no green-moon carrier found');
+}
+
+// --- 17. Seed hatch: stripMutations (Nov 12) --------------------------------
+// A planet hatched from a shared seed is the SAME base planet — same
+// seed = same planet — but WITHOUT mutations. Mutations stay unique
+// to the original: nobody gets your rare mutated planet just by
+// pasting its seed.
+{
+  // A mutated carrier, stripped: same identity, no mutations, base
+  // traits restored, summary recomputed, original untouched.
+  const carrier = singleSeed14('double-rings'); // grants a ring the base roll didn't give
+  const orig = JSON.parse(JSON.stringify(carrier));
+  const stripped = P.stripMutations(carrier);
+  check('strip: mutations cleared', stripped.mutations.length === 0);
+  check('strip: no mutation label', P.mutationLabel(stripped) === null);
+  check('strip: no active mutations', P.activeMutations(stripped).size === 0);
+  check('strip: seed/terrain/size/name unchanged',
+    stripped.seed === orig.seed && stripped.terrain === orig.terrain && stripped.size === orig.size && stripped.name === orig.name,
+    `${stripped.seed} ${stripped.terrain} ${stripped.size} ${stripped.name}`);
+  check('strip: ring back to the base ring', stripped.ringType === orig.baseRingType, `${orig.ringType} -> ${stripped.ringType} (base ${orig.baseRingType})`);
+  check('strip: ringHue / crossTilt cleared', stripped.ringHue === null && stripped.crossTilt === null);
+  check('strip: summary recomputed from base traits',
+    stripped.summary === `${stripped.terrainLabel} world · ${stripped.ringLabel.toLowerCase()} · ${stripped.moons.length} moon${stripped.moons.length === 1 ? '' : 's'}`,
+    stripped.summary);
+  check('strip: original untouched', JSON.stringify(carrier) === JSON.stringify(orig));
+  // A stripped planet renders EXACTLY like its plain twin
+  // (mutations=[] only) — stripping is bookkeeping, not a different
+  // planet — and DIFFERENTLY from the mutated original.
+  let sameAsTwin = true, diffFromOrig = false;
+  for (const sec of [0, 2.5, 5.0]) {
+    if (!gridsEqual(P.render(stripped, 6, 5.0, sec), P.render(plainTwin14(orig), 6, 5.0, sec))) sameAsTwin = false;
+    if (!gridsEqual(P.render(stripped, 6, 5.0, sec), P.render(orig, 6, 5.0, sec))) diffFromOrig = true;
+  }
+  check('strip: renders exactly like the plain twin', sameAsTwin);
+  check('strip: renders differently from the mutated original', diffFromOrig);
+}
+{
+  // Moons: a Big Moon shrinks back to its base radius and tint, and
+  // the moon count stays — the moon itself isn't the mutation.
+  const carrier = singleSeed14('big-moon');
+  const stripped = P.stripMutations(carrier);
+  check('strip: big moon shrinks back to its base radius',
+    stripped.moons.every((m) => m.radius === m.baseRadius), `radii [${stripped.moons.map((m) => m.radius)}]`);
+  check('strip: moon tints back to base', stripped.moons.every((m) => m.tint === m.baseTint));
+  check('strip: moon count unchanged', stripped.moons.length === carrier.moons.length);
+  // Ring mutations: the granted color and the second tilt go away.
+  const s1 = P.stripMutations(singleSeed14('colored-rings'));
+  check('strip: colored-rings carrier loses its hue', s1.ringHue === null && s1.ringType === s1.baseRingType);
+  const s2 = P.stripMutations(singleSeed14('crossed-rings'));
+  check('strip: crossed-rings carrier loses its second tilt', s2.crossTilt === null && s2.ringType === s2.baseRingType);
+}
+{
+  // A plain planet is untouched by stripping (deep equal).
+  let plain = null;
+  for (let s = 0; s < 4000 && !plain; s++) { const pl = P.generatePlanet(s); if (pl.mutations.length === 0) plain = pl; }
+  check('strip: plain planet is unchanged (deep equal)',
+    JSON.stringify(P.stripMutations(plain)) === JSON.stringify(plain));
+  // Every mutation strips cleanly (13/13).
+  let allOk = true, worst = '';
+  for (const m of P.CONFIG.MUTATIONS) {
+    const carrier = singleSeed14(m.id);
+    if (!carrier) { allOk = false; worst = m.id + ' no carrier'; break; }
+    const s = P.stripMutations(carrier);
+    const ok = s.mutations.length === 0 && s.ringType === carrier.baseRingType && s.ringHue === null && s.crossTilt === null
+      && s.moons.every((mo) => mo.radius === mo.baseRadius && mo.tint === mo.baseTint && mo.mutantIds.length === 0)
+      && s.seed === carrier.seed && s.terrain === carrier.terrain && s.name === carrier.name;
+    if (!ok) { allOk = false; worst = m.id; break; }
+  }
+  check('strip: every mutation strips cleanly (13/13)', allOk, worst);
+  // Determinism: same seed -> same stripped planet.
+  check('strip: deterministic (same seed -> same stripped planet)',
+    JSON.stringify(P.stripMutations(P.generatePlanet(12345))) === JSON.stringify(P.stripMutations(P.generatePlanet(12345))));
 }
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);

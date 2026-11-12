@@ -7,12 +7,15 @@
 //
 // The model:
 //   * Typing is XP: 1 inserted character = 1 XP (for now).
-//   * XP grows the current planet through the 8 lifecycle stages
-//     (Dust cloud -> ... -> Civilization -> End), same stages as
+//   * XP grows the current planet through the 7 lifecycle stages
+//     (Shattered birth -> ... -> Civilization), same stages as
 //     lifecycle.py / planet.js. Thresholds live in CONFIG below.
-//   * After the End stage, more typing rebirths the planet: the old one
-//     is archived to the collection record and a new planet hatches
-//     (new seed, generation +1). Leftover XP carries over.
+//   * There is NO automatic rebirth (cut Nov 12): past the last stage
+//     the planet just keeps gaining XP indefinitely. A new planet only
+//     ever starts when the player asks for one (New planet command,
+//     recycle, prestige) — the old one is archived to the collection
+//     record then. A maxed planet (Civilization, 2200+ XP) shows an
+//     orange XP bar and gets a one-time prompt offering a new planet.
 
 'use strict';
 
@@ -26,12 +29,11 @@ const CONFIG = {
   // First evolution is fast (~100 chars) so you see it quickly; later
   // stages take longer — a Civilization planet is a few days of real
   // typing. All numbers are tunable here.
-  XP_THRESHOLDS: [0, 100, 300, 600, 1000, 1500, 2200, 3000],
+  XP_THRESHOLDS: [0, 100, 300, 600, 1000, 1500, 2200],
 
-  // XP at which an End-stage planet rebirths: it is archived to the
-  // collection record and a new planet (new seed, generation +1) hatches.
-  // 600 XP past End gives you time to actually see the End stage first.
-  REBIRTH_XP: 3600,
+  // No automatic rebirth (cut Nov 12): there is no XP total that
+  // archives the planet on its own. XP past the last stage just keeps
+  // accumulating, and a new planet only starts on demand.
 
   // Starter terrains offered on first run (first planet only).
   STARTER_TERRAINS: ['icy', 'lava', 'jungle', 'rocky', 'ocean'],
@@ -41,8 +43,8 @@ const CONFIG = {
   PAST_LIMIT: 200,
 
   // How often the pet's state is written to disk while typing (ms).
-  // Saves also happen immediately on stage change / rebirth / new
-  // planet, so nothing important is ever lost.
+  // Saves also happen immediately on stage change / new planet, so
+  // nothing important is ever lost.
   SAVE_DEBOUNCE_MS: 3000,
 
   // --- Minerals, salvage/recycle, prestige (step 2, Nov 11) -----------
@@ -71,8 +73,8 @@ const CONFIG = {
   PRESTIGE_CONSUMES_PARENTS: false,
 
   // A planet can prestige once it reached Civilization (stage 6,
-  // 2200 XP). "Reached" — an End-stage planet counts too; it grew
-  // through Civilization.
+  // 2200 XP). "Reached" — a maxed planet that kept growing past
+  // 2200 counts too; Civilization is the final stage.
   PRESTIGE_MIN_CHARS: 2200,
 
   // --- Solar system (step 4, Nov 11) ------------------------------------
@@ -124,7 +126,7 @@ function countInsertedChars(contentChanges) {
 // Stages and progress (pure functions of total XP).
 // ---------------------------------------------------------------------------
 
-// Which lifecycle stage (0-7) an XP total is in.
+// Which lifecycle stage (0-6) an XP total is in.
 function stageForXp(xp) {
   const t = CONFIG.XP_THRESHOLDS;
   let idx = 0;
@@ -137,14 +139,21 @@ function stageForXp(xp) {
 
 // The display stage for the Solar System panel / Archive (step 4):
 // the planet is shown at its stage CAPPED at Civilization (stage 6).
-// Archived planets sit at 3600 chars = End, and End renders as
-// dispersing noise, not a planet — so the system never displays End
-// (Devon, Nov 11). The lifecycle itself still has End: the sidebar
-// pet and rebirth use the TRUE stage (stageForXp above); this is only
-// a display cap for the panel.
+// Civilization is the final stage (End was cut Nov 12), so the cap
+// is now a no-op safeguard — the true stage never exceeds it — but
+// the panel keeps going through this function so display logic
+// stays in one place.
 const DISPLAY_STAGE_MAX = Planet.STAGES.findIndex((s) => s.name === 'Civilization');
 function displayStageForXp(xp) {
   return Math.min(stageForXp(xp), DISPLAY_STAGE_MAX);
+}
+
+// Maxed = reached Civilization (stage 6, 2200+ XP) — fully evolved,
+// Pokechi-style: the XP bar turns orange from here on. Civilization
+// is the last planet stage (End was cut Nov 12); past it there is
+// no next stage at all (no auto-rebirth).
+function isMaxed(xp) {
+  return stageForXp(xp) >= DISPLAY_STAGE_MAX;
 }
 
 // Everything the UI needs to show progress for an XP total.
@@ -152,16 +161,17 @@ function stageInfo(xp) {
   const idx = stageForXp(xp);
   const t = CONFIG.XP_THRESHOLDS;
   const stageStart = t[idx];
-  const nextXp = idx + 1 < t.length ? t[idx + 1] : CONFIG.REBIRTH_XP;
+  const nextXp = idx + 1 < t.length ? t[idx + 1] : null; // null at Civilization: no next stage
   const st = Planet.STAGES[idx];
   return {
     stageIdx: idx,
     name: st.name,
     desc: st.desc,
     stageStart, // XP where this stage began
-    nextXp, // XP where the next stage (or rebirth) happens
+    nextXp, // XP where the next stage happens, null at Civilization (final stage)
     inStage: xp - stageStart, // XP earned inside this stage
-    span: nextXp - stageStart, // XP this stage takes in total
+    span: nextXp === null ? null : nextXp - stageStart, // XP this stage takes in total
+    isMax: isMaxed(xp), // fully evolved (Civilization+) — orange XP bar
   };
 }
 
@@ -263,7 +273,7 @@ function freshState() {
   return {
     version: 1,
     starterDone: false, // has the first-run terrain pick been done?
-    generation: 1, // how many planet lives so far (rebirths + new planets)
+    generation: 1, // how many planet lives so far (new planets: manual, recycle, prestige)
     current: null, // the living planet (makePlanet result), or null
     past: [], // finished planets: {seed, name, terrain, terrainLabel, summary, chars, generation, archivedAt, mutations, parents, usedAsParent, planet}
     // Step 4: the solar system — one slot per orbit ring. A slot is
@@ -341,7 +351,7 @@ function grantStarterMineral(state) {
 // Feed a mineral for the NEXT planet's birth roll. The mineral moves
 // out of the inventory into the fed slot; feeding another one returns
 // the old one to the inventory. The fed mineral is CONSUMED when the
-// next planet is generated (rebirth, recycle, new planet, prestige) —
+// next planet is generated (recycle, new planet, prestige) —
 // it never changes the planet you already have.
 function feedMineral(state, mineralId) {
   const idx = (state.minerals || []).findIndex((m) => m.id === mineralId);
@@ -446,7 +456,7 @@ function addMinerals(state, specs) {
 // and immediately hatch a fresh one. The destroyed planet is NOT
 // archived — it's gone, its minerals are what you keep. The new
 // planet's birth roll is tilted by any fed mineral (consumed).
-// Generation +1 — a recycled planet is a new life, same as a rebirth.
+// Generation +1 — a recycled planet is a new life.
 function recycleCurrent(state, nextSeed) {
   if (!state.current) return { ok: false, reason: 'no current planet' };
   const destroyed = state.current;
@@ -675,7 +685,7 @@ function lockedRingLabel(state, ringIndex) {
 
 // Find the planet a slot points at: an archived record first, then
 // the current planet (same seed+generation — a slot survives its
-// planet's rebirth into the archive). Returns { kind, record } or
+// planet moving into the archive). Returns { kind, record } or
 // null when the planet is gone (salvaged) — a stale slot.
 function resolveSlotPlanet(state, slot) {
   if (!slot) return null;
@@ -741,51 +751,150 @@ function removeFromSystem(state, slotIndex) {
 }
 
 // Add n XP (typed characters) to the current planet. Handles stage
-// changes and rebirth (possibly more than once, if n is huge — a big
-// paste can hatch two planets in a row). Leftover XP past a rebirth
-// carries over to the new planet. nextSeed is () => number; pass a
-// deterministic one in tests.
-// Returns { stageChanged, rebirthed, stageIdx } for the caller to
-// decide what to refresh.
+// changes only — there is NO automatic rebirth (cut Nov 12): a maxed
+// planet keeps gaining XP indefinitely, and a new planet only starts
+// when the player asks for one (newPlanet / recycle / prestige).
+// nextSeed is kept for signature compatibility and is unused.
+// Returns { stageChanged, rebirthed, becameMax, stageIdx } for the
+// caller to decide what to refresh. rebirthed is always false now
+// (kept so callers don't change); becameMax is true exactly once,
+// on the transition into Civilization (2200+ XP).
 function applyXp(state, n, nextSeed) {
   if (!state.current || n <= 0) {
     return {
       stageChanged: false,
       rebirthed: false,
+      becameMax: false,
       stageIdx: state.current ? stageForXp(state.current.xp) : 0,
     };
   }
   const before = stageForXp(state.current.xp);
   state.current.xp += n;
   state.current.chars += n;
-  let rebirthed = false;
-  let guard = 0;
-  while (state.current.xp >= CONFIG.REBIRTH_XP && guard < 100) {
-    guard++;
-    const leftover = state.current.xp - CONFIG.REBIRTH_XP;
-    archiveCurrent(state);
-    state.generation += 1;
-    // A rebirth hatches a new planet — a fed mineral tilts its birth
-    // roll (consumed). A giant paste can rebirth twice in a row; the
-    // second planet rolls plain, the mineral only ever tilts one.
-    state.current = makePlanet(nextSeed ? nextSeed() : randomSeed(), null, takeTilt(state, null), takenNamesFor(state));
-    state.current.xp = leftover;
-    state.current.chars = leftover;
-    rebirthed = true;
-  }
   const after = stageForXp(state.current.xp);
-  return { stageChanged: rebirthed || before !== after, rebirthed, stageIdx: after };
+  return {
+    stageChanged: before !== after,
+    rebirthed: false,
+    becameMax: before < DISPLAY_STAGE_MAX && after >= DISPLAY_STAGE_MAX,
+    stageIdx: after,
+  };
 }
 
 // "New planet" command: archive the living planet (if any) and hatch a
-// fresh one. Generation +1 — a manual new planet is a new life, same
-// as a rebirth, just on demand. A fed mineral tilts the new planet's
-// birth roll (consumed).
+// fresh one. Generation +1 — a manual new planet is a new life, on
+// demand. A fed mineral tilts the new planet's birth roll (consumed).
 function newPlanet(state, nextSeed) {
   if (state.current) archiveCurrent(state);
   state.generation += 1;
   state.current = makePlanet(nextSeed ? nextSeed() : randomSeed(), null, takeTilt(state, null), takenNamesFor(state));
   return state.current;
+}
+
+// ---------------------------------------------------------------------------
+// Seed hatch (Nov 12 — Devon): hatch a planet from a shared seed.
+// A seed hatches the exact same planet — same seed = same planet —
+// but the hatched planet NEVER carries mutations: the seed's base
+// planet, mutations stripped (Planet.stripMutations). Mutations stay
+// unique to the original — nobody gets your rare mutated planet just
+// by pasting its seed.
+//
+// One honest limit: a FIRST planet born from a starter pick has its
+// terrain forced by the pick, not the seed — hatching from its seed
+// gives the seed's canonical terrain, which can differ. Every later
+// planet (new planet / recycle / prestige) is born from the seed
+// alone, so those reproduce exactly.
+// ---------------------------------------------------------------------------
+
+// Parse a pasted seed for "Hatch from seed": a plain integer in the
+// range randomSeed() produces (0..999999999). Every shared seed comes
+// from a real planet, so it is in this range. Rejects empty input,
+// non-digits, negatives, decimals, and out-of-range numbers with a
+// plain reason the input box can show.
+function parseSeedInput(text) {
+  const t = String(text == null ? '' : text).trim();
+  if (!t) return { ok: false, reason: 'Enter a seed number.' };
+  if (!/^\d+$/.test(t)) return { ok: false, reason: 'A seed is a whole number — digits only.' };
+  const seed = Number(t);
+  if (!Number.isSafeInteger(seed) || seed < 0 || seed > 999999999) {
+    return { ok: false, reason: 'Seed must be between 0 and 999999999.' };
+  }
+  return { ok: true, seed };
+}
+
+// The seed's base planet, mutations stripped: same terrain, rings,
+// moons, size and name as the seed's canonical planet — the name is
+// seed-derived (same seed = same name), nudged only when that name
+// is already taken in this collection (the same birth-time
+// uniqueness rule every other birth follows).
+function makeSeedPlanet(seed, takenNames) {
+  const p = Planet.stripMutations(Planet.generatePlanet(seed));
+  if (takenNames) p.name = uniquePlanetName(p.name, seed, takenNames);
+  p.xp = 0;
+  p.chars = 0;
+  p.usedAsParent = false;
+  p.parents = null;
+  return p;
+}
+
+// "Hatch from seed" command: archive the living planet (kept in the
+// collection) and hatch the seed's base planet, mutations stripped.
+// Generation +1 — a seed-hatched planet is a new life, on demand.
+// NO tilt is applied: a fed mineral would change the planet away
+// from the seed's canonical form, so the fed mineral stays fed for
+// the next birth that actually rolls (new planet / recycle /
+// prestige). When there is no current planet yet (first run), the
+// seed hatch IS the first planet (starter done + the one free
+// starter mineral), so the first-run pick never pops up afterwards.
+function hatchFromSeed(state, seed) {
+  if (state.current) {
+    archiveCurrent(state);
+    state.generation += 1;
+  } else if (!state.starterDone) {
+    state.starterDone = true;
+    grantStarterMineral(state);
+  } else {
+    state.generation += 1;
+  }
+  state.current = makeSeedPlanet(seed, takenNamesFor(state));
+  return state.current;
+}
+
+// ---------------------------------------------------------------------------
+// Share card (P0, Nov 12 — Devon picked it first from the popularity
+// assessment). One click: the planet's art + name, seed, stage and
+// mutation, as a PNG for X/Reddit and a Markdown block for a README.
+// The PNG itself is rendered in the webview (canvas from the planet
+// grid); these pure helpers build the filename and the README markdown
+// so the panel and the tests agree on exactly what gets shared.
+// A seed hatches the exact same planet — same seed = same planet —
+// so the seed IS the shareable planet: the markdown embeds it so a
+// friend can paste it into their own Protoplanet and grow the same
+// world. The image line points at the downloaded PNG file, which
+// sits next to the README wherever the player puts it.
+// ---------------------------------------------------------------------------
+const SHARE_REPO_URL = 'https://github.com/devoncline/protoplanet';
+
+// protoplanet-k2-277c-gen5.png — the catalog name slugified, so the
+// file is readable and unique per planet (names are unique in a
+// collection, and the generation disambiguates across collections).
+function shareCardFilename(name, generation) {
+  const slug = String(name || 'planet').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'planet';
+  return `protoplanet-${slug}-gen${generation || 1}.png`;
+}
+
+// The README block. `planet` is the renderable shape from
+// extension.js (name, seed, stageName, mutationLabel, generation,
+// chars, terrainLabel). The mutation line only appears when the
+// planet has one — a plain planet's card stays clean.
+function shareCardMarkdown(planet, filename) {
+  const lines = [];
+  lines.push(`![${planet.name} — Protoplanet](${filename})`);
+  lines.push('');
+  lines.push(`**${planet.name}** · ${planet.terrainLabel || 'Protoplanet'} · ${planet.stageName} · Gen ${planet.generation} · grown from ${Number(planet.chars || 0).toLocaleString()} characters`);
+  if (planet.mutationLabel) lines.push(planet.mutationLabel);
+  lines.push(`Seed \`${planet.seed}\` — hatch the same base planet in [Protoplanet](${SHARE_REPO_URL}).`);
+  return lines.join('\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -828,9 +937,9 @@ function deserializeState(json) {
 module.exports = {
   CONFIG, COUNTED_SCHEMES,
   shouldCountDocument, countInsertedChars,
-  stageForXp, stageInfo, displayStageForXp,
+  stageForXp, stageInfo, displayStageForXp, isMaxed,
   randomSeed, makePlanet, nameForPlanet, uniquePlanetName, takenNamesFor, freshState, startFirstPlanet,
-  archiveCurrent, applyXp, newPlanet,
+  archiveCurrent, applyXp, newPlanet, parseSeedInput, makeSeedPlanet, hatchFromSeed,
   finishedCount, systemRank, lockedRingLabel, resolveSlotPlanet,
   slotIndexForPlanet, normalizeSystem, placePlanet, removeFromSystem,
   mineralName, mineralTiltsText, makeMineral, grantStarterMineral,
@@ -839,5 +948,6 @@ module.exports = {
   recycleCurrent, salvageArchived,
   prestigeEligible, eligiblePrestigeParents, inheritanceBoosts,
   lineageRecord, prestige,
+  shareCardFilename, shareCardMarkdown, SHARE_REPO_URL,
   serializeState, deserializeState,
 };

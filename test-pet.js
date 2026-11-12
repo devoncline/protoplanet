@@ -67,9 +67,9 @@ eq('stage: 1500 xp -> Life', L.stageForXp(1500), 5);
 eq('stage: 2199 xp -> Life', L.stageForXp(2199), 5);
 eq('stage: 2200 xp -> Civilization', L.stageForXp(2200), 6);
 eq('stage: 2999 xp -> Civilization', L.stageForXp(2999), 6);
-eq('stage: 3000 xp -> End', L.stageForXp(3000), 7);
-eq('stage: 3599 xp -> End', L.stageForXp(3599), 7);
-eq('thresholds: 8 stages', T.length, 8);
+eq('stage: 3000 xp -> Civilization (final)', L.stageForXp(3000), 6);
+eq('stage: 3599 xp -> Civilization (final)', L.stageForXp(3599), 6);
+eq('thresholds: 7 stages', T.length, 7);
 eq('thresholds: strictly increasing', T.every((v, i) => i === 0 || v > T[i - 1]), true);
 
 // --- 4. Progress info --------------------------------------------------------
@@ -81,9 +81,18 @@ eq('progress: next threshold', info.nextXp, 1000);
 eq('progress: in-stage xp', info.inStage, 40);
 eq('progress: stage span', info.span, 400);
 info = L.stageInfo(3200);
-eq('progress: 3200 xp is stage 7 (End)', info.stageIdx, 7);
-eq('progress: End next threshold is rebirth', info.nextXp, L.CONFIG.REBIRTH_XP);
-eq('progress: End stage start', info.stageStart, 3000);
+eq('progress: 3200 xp is stage 6 (Civilization, final)', info.stageIdx, 6);
+eq('progress: Civilization has no next threshold (no auto-rebirth)', info.nextXp, null);
+eq('progress: Civilization has no span (no next stage)', info.span, null);
+eq('progress: Civilization is maxed', info.isMax, true);
+eq('progress: Civilization stage start', info.stageStart, 2200);
+info = L.stageInfo(2200);
+eq('progress: Civilization is maxed (orange bar)', info.isMax, true);
+eq('progress: Civilization has no next threshold at 2200 either', info.nextXp, null);
+info = L.stageInfo(2199);
+eq('progress: Life is not maxed yet', info.isMax, false);
+eq('progress: isMaxed helper agrees at 2200', L.isMaxed(2200), true);
+eq('progress: isMaxed helper agrees at 2199', L.isMaxed(2199), false);
 info = L.stageInfo(0);
 eq('progress: 0 xp next threshold is 100', info.nextXp, 100);
 
@@ -92,7 +101,7 @@ let st = freshWithPlanet(42);
 let res = L.applyXp(st, 50, seedSeq());
 eq('xp: 50 chars stays Dust cloud', res.stageIdx, 0);
 eq('xp: no stage change at 50', res.stageChanged, false);
-eq('xp: no rebirth at 50', res.rebirthed, false);
+eq('xp: never rebirths at 50', res.rebirthed, false);
 eq('xp: total is 50', st.current.xp, 50);
 eq('xp: chars tracked', st.current.chars, 50);
 res = L.applyXp(st, 60, seedSeq());
@@ -108,36 +117,47 @@ eq('xp: 0 chars is a no-op', res.stageChanged, false);
 res = L.applyXp(st, -5, seedSeq());
 eq('xp: negative is a no-op', st.current.xp, 1000);
 
-// --- 6. Rebirth ---------------------------------------------------------------
+// --- 6. No automatic rebirth (cut Nov 12) ---------------------------------
+// A maxed planet keeps gaining XP indefinitely — crossing 3600 (or
+// any total) archives nothing and hatches nothing.
 st = freshWithPlanet(42);
 L.applyXp(st, 3550, seedSeq());
-eq('rebirth: 3550 is End', L.stageForXp(st.current.xp), 7);
+eq('no-rebirth: 3550 is Civilization (final)', L.stageForXp(st.current.xp), 6);
 const oldSeed = st.current.seed;
 res = L.applyXp(st, 100, seedSeq(5000));
-eq('rebirth: crossed 3600 -> rebirthed', res.rebirthed, true);
-eq('rebirth: one planet archived', st.past.length, 1);
-eq('rebirth: archived chars', st.past[0].chars, 3650);
-eq('rebirth: archived seed is the old one', st.past[0].seed, oldSeed);
-eq('rebirth: archived generation is 1', st.past[0].generation, 1);
-eq('rebirth: generation is now 2', st.generation, 2);
-eq('rebirth: leftover XP carries over (50)', st.current.xp, 50);
-eq('rebirth: leftover chars carry over', st.current.chars, 50);
-eq('rebirth: new planet is Dust cloud', L.stageForXp(st.current.xp), 0);
-eq('rebirth: new seed differs', st.current.seed !== oldSeed, true);
+eq('no-rebirth: crossed 3600 -> still no rebirth', res.rebirthed, false);
+eq('no-rebirth: nothing archived past 3600', st.past.length, 0);
+eq('no-rebirth: same planet keeps its seed', st.current.seed, oldSeed);
+eq('no-rebirth: generation still 1', st.generation, 1);
+eq('no-rebirth: XP keeps accumulating (3650)', st.current.xp, 3650);
+eq('no-rebirth: chars keep accumulating', st.current.chars, 3650);
 
-// One giant paste can hatch two planets in a row.
+// A giant paste doesn't hatch anything either.
 st = freshWithPlanet(42);
 res = L.applyXp(st, 7300, seedSeq(9000));
-eq('rebirth x2: 7300 chars -> two rebirths', st.past.length, 2);
-eq('rebirth x2: generation is 3', st.generation, 3);
-eq('rebirth x2: leftover is 100', st.current.xp, 100);
-eq('rebirth x2: rebirthed flag set', res.rebirthed, true);
+eq('no-rebirth x2: 7300 chars -> still one planet', st.past.length, 0);
+eq('no-rebirth x2: generation still 1', st.generation, 1);
+eq('no-rebirth x2: XP is the full 7300', st.current.xp, 7300);
+eq('no-rebirth x2: rebirthed flag unset', res.rebirthed, false);
 
-// Exactly at the boundary rebirths.
+// Exactly at the old boundary: nothing happens.
 st = freshWithPlanet(42);
 res = L.applyXp(st, 3600, seedSeq());
-eq('rebirth: exactly 3600 rebirths', res.rebirthed, true);
-eq('rebirth: exactly 3600 leaves 0 XP', st.current.xp, 0);
+eq('no-rebirth: exactly 3600 does not rebirth', res.rebirthed, false);
+eq('no-rebirth: exactly 3600 keeps 3600 XP', st.current.xp, 3600);
+
+// becameMax fires exactly once, on the transition into Civilization.
+st = freshWithPlanet(42);
+res = L.applyXp(st, 2199, seedSeq());
+eq('maxed: 2199 does not max yet', res.becameMax, false);
+res = L.applyXp(st, 1, seedSeq());
+eq('maxed: crossing 2200 fires becameMax once', res.becameMax, true);
+eq('maxed: now Civilization', res.stageIdx, 6);
+res = L.applyXp(st, 500, seedSeq());
+eq('maxed: further typing does not re-fire becameMax', res.becameMax, false);
+res = L.applyXp(st, 1000, seedSeq());
+eq('maxed: past Civilization still no re-fire', res.becameMax, false);
+eq('maxed: XP keeps growing past Civilization', st.current.xp, 3700);
 
 // --- 7. Starter pick guarantees the terrain (Devon, Nov 11) ------------------
 let icy = 0;
@@ -221,8 +241,27 @@ check('ext: listens for typing', extSrc.includes('onDidChangeTextDocument'));
 check('ext: uses gridToHtml (fixed cells)', extSrc.includes('gridToHtml'));
 check('ext: no bare <pre> grid rendering', !/\.grid.*innerHTML\s*=\s*[^P]/.test(extSrc) || extSrc.includes('gridToHtml'));
 check('ext: webview uses nonce CSP', extSrc.includes('Content-Security-Policy') && extSrc.includes('nonce-'));
-check('ext: no notification popups on typing', !extSrc.includes('showInformationMessage'));
 check('ext: uses petLogic for XP', extSrc.includes('Logic.applyXp'));
+// The maxed-planet prompt is the ONE popup that can fire while
+// typing (Nov 12): it fires once, when the planet first reaches
+// Civilization, and only offers a new planet. The only other info
+// message is a direct answer to a command the player just ran (Share
+// with no planet yet) — never a typing interruption. The save
+// confirmation lives in the panel itself (the Download button flashes
+// "Saved!"), not a popup.
+const infoPopups = (extSrc.match(/showInformationMessage/g) || []).length;
+check('ext: typing pops up only the once-per-planet maxed prompt',
+  infoPopups === 2 // maxed prompt + Share-with-no-planet guard
+  && extSrc.includes('becameMax') && extSrc.includes('fully evolved')
+  && extSrc.includes('No planet yet — pick a starter first, then share it.'));
+check('ext: the save confirmation is in-panel, not a popup',
+  extSrc.includes("type: 'saved'") && extSrc.includes("Saved!'"));
+// Maxed (Civilization+) wiring: orange XP bar, isMax in the view
+// model, MAX in the status bar, no next threshold past Civilization.
+check('ext: XP bar turns orange at max (maxed class)', extSrc.includes('#xpfill.maxed') && extSrc.includes('#ff8c1a'));
+check('ext: view model carries isMax', extSrc.includes('isMax: info.isMax'));
+check('ext: status bar shows MAX at max', extSrc.includes('· MAX'));
+check('ext: sidebar handles a null next threshold at max', extSrc.includes('msg.nextXp === null'));
 // The sidebar webview runs planet.js as window.Protoplanet only — a bare
 // `Planet` global does not exist there. (Nov 11: layout() threw
 // ReferenceError: Planet is not defined at load, so 'ready' never fired
@@ -450,10 +489,12 @@ eq('summary: one glow mineral', summary.byFamily.glow, 1);
 eq('summary: nothing fed', summary.fed, null);
 
 // --- 13. Solar system (step 4): System Rank, slots, names, overflow -------
-// Helper: grow `n` finished planets (each applyXp(3600) rebirths once).
+// Helper: grow `n` finished planets — each one typed to Civilization
+// (2500 chars) and then archived with a manual new planet (no
+// auto-rebirth since Nov 12).
 function growFinished(st, n, seedStart) {
   const seq = seedSeq(seedStart === undefined ? 10000 : seedStart);
-  for (let i = 0; i < n; i++) L.applyXp(st, 3600, seq);
+  for (let i = 0; i < n; i++) { L.applyXp(st, 2500, seq); L.newPlanet(st, seq); }
   return st;
 }
 
@@ -516,20 +557,20 @@ eq('remove: planet still in the collection (not deleted)',
 eq('remove: empty ring rejected', L.removeFromSystem(st, 0).ok, false);
 eq('remove: bad ring rejected', L.removeFromSystem(st, 99).ok, false);
 // The current (growing) planet can be placed too, and the slot
-// survives its rebirth into the archive.
+// survives it moving into the archive (manual new planet).
 st = freshWithPlanet(42);
 pl = L.placePlanet(st, 0, st.current.seed, st.generation);
 eq('place: current planet can be placed', pl.ok, true);
-L.applyXp(st, 3600, seedSeq(20000));
-eq('place: slot survives the rebirth (same seed+generation)',
+L.newPlanet(st, seedSeq(20000));
+eq('place: slot survives the new planet (same seed+generation)',
   L.slotIndexForPlanet(st, 42, 1), 0);
-eq('place: the rebirthed planet is now archived', st.past.some((p) => p.seed === 42), true);
+eq('place: the old planet is now archived', st.past.some((p) => p.seed === 42), true);
 
 // 13c. Names on records: stored at birth, derived for old records.
 st = freshWithPlanet(42);
 eq('name: current planet has its seed name',
   st.current.name, Planet.generatePlanetName(42));
-L.applyXp(st, 3600, seedSeq(21000));
+L.newPlanet(st, seedSeq(21000));
 eq('name: archived record stores the name',
   st.past[0].name, Planet.generatePlanetName(42));
 check('name: archived record stores the full planet snapshot',
@@ -579,11 +620,10 @@ eq('overflow: current planet fills the 5th ring',
   L.placePlanet(st, 4, st.current.seed, st.generation).ok, true);
 eq('overflow: all 5 rings used', st.system.filter(Boolean).length, 5);
 const beforePast = st.past.length;
-res = L.applyXp(st, 3600, seedSeq(22000));
-eq('overflow: rebirth still happens with a full system', res.rebirthed, true);
-eq('overflow: the old planet lands in the Archive', st.past.length, beforePast + 1);
+L.newPlanet(st, seedSeq(22000));
+eq('overflow: a new planet archives with a full system', st.past.length, beforePast + 1);
 eq('overflow: a new planet hatches', st.current.xp, 0);
-eq('overflow: the 5 rings are untouched by the rebirth',
+eq('overflow: the 5 rings are untouched by the new planet',
   st.system.filter(Boolean).length, 5);
 eq('overflow: the new planet is not forced into the system',
   L.slotIndexForPlanet(st, st.current.seed, st.generation), -1);
@@ -659,21 +699,19 @@ check('names: a non-catalog name is left alone',
 st = freshWithPlanet(42);
 growFinished(st, 30); // 30 finished planets + the current one
 const allNames = st.past.map((p) => p.name).concat([st.current.name]);
-check('names: 31 planets grown through rebirths are all distinct',
+check('names: 31 planets grown through new planets are all distinct',
   new Set(allNames).size === allNames.length, new Set(allNames).size + ' distinct of ' + allNames.length);
 
 // 13i. Display fixes (Nov 11 — Devon's preview feedback).
-// (a) The panel shows a stage CAPPED at Civilization — never End.
-// Archived planets sit at 3600 chars = End, and End renders as
-// dispersing noise. The TRUE lifecycle stage is unchanged (the
-// sidebar pet and rebirth still see End); only the panel display
-// is capped.
+// (a) The panel shows a stage CAPPED at Civilization. End was cut
+// Nov 12, so Civilization is the final stage and the cap is now a
+// no-op safeguard — display stage always equals the true stage.
 check('display stage: 3600 chars displays as Civilization', L.displayStageForXp(3600) === 6);
-check('display stage: 3000 chars (End starts) displays as Civilization', L.displayStageForXp(3000) === 6);
+check('display stage: 3000 chars displays as Civilization', L.displayStageForXp(3000) === 6);
 check('display stage: 2999 chars displays as Civilization', L.displayStageForXp(2999) === 6);
 check('display stage: 2200 chars displays as Civilization', L.displayStageForXp(2200) === 6);
 check('display stage: 1500 chars displays as Life', L.displayStageForXp(1500) === 5);
-check('display stage: true stage is untouched (3600 is still End)', L.stageForXp(3600) === 7);
+check('display stage: true stage is Civilization at 3600 too', L.stageForXp(3600) === 6);
 // (b) The panel wires the cap, the bigger detailed star, the small
 // discs again, the full-detail panel art, and the labeled card badges.
 check('ext: panel caps the display stage', extSrc.includes('displayStageForXp'));
@@ -1145,6 +1183,163 @@ check('ext: panel shows the fed mineral tilting the offspring', extSrc.includes(
 // browser's [hidden] is overridden and the slots stay visible
 // mid-collision and on the result screen (caught by stills).
 check('ext: prestige CSS makes [hidden] actually hide', extSrc.includes('[hidden] { display: none !important; }'));
+
+// --- 15. Share card (P0, Nov 12 — Devon picked it first) ------------------
+// The filename and the README markdown are pure petLogic helpers, so
+// the panel and the tests agree on exactly what gets shared. A seed
+// hatches the exact same planet, so the seed is the shareable planet.
+const sharePlanet = {
+  name: 'K2-277c', seed: 805839337, stageName: 'Civilization',
+  mutationLabel: 'MUTATION · Green Moon', generation: 5, chars: 2400,
+  terrainLabel: 'Toxic world',
+};
+eq('share: filename slugifies the catalog name',
+  L.shareCardFilename('K2-277c', 5), 'protoplanet-k2-277c-gen5.png');
+eq('share: filename strips spaces and dots',
+  L.shareCardFilename('TOI 700.d', 2), 'protoplanet-toi-700-d-gen2.png');
+eq('share: filename falls back for an empty name',
+  L.shareCardFilename('', 1), 'protoplanet-planet-gen1.png');
+eq('share: filename defaults the generation to 1',
+  L.shareCardFilename('Kepler-442b'), 'protoplanet-kepler-442b-gen1.png');
+const shareMd = L.shareCardMarkdown(sharePlanet, 'protoplanet-k2-277c-gen5.png');
+check('share: markdown embeds the PNG file',
+  shareMd.includes('![K2-277c — Protoplanet](protoplanet-k2-277c-gen5.png)'), shareMd);
+check('share: markdown names the planet, terrain, stage, generation and chars',
+  shareMd.includes('**K2-277c** · Toxic world · Civilization · Gen 5 · grown from 2,400 characters'), shareMd);
+check('share: markdown carries the mutation label when the planet has one',
+  shareMd.includes('MUTATION · Green Moon'), shareMd);
+check('share: markdown embeds the seed in backticks',
+  shareMd.includes('Seed `805839337`'), shareMd);
+check('share: markdown links the Protoplanet repo',
+  shareMd.includes('[Protoplanet](https://github.com/devoncline/protoplanet)'), shareMd);
+// A plain planet (no mutation) gets a clean card — no mutation line.
+const plainMd = L.shareCardMarkdown({ ...sharePlanet, mutationLabel: null }, 'protoplanet-k2-277c-gen5.png');
+check('share: markdown has no mutation line for a plain planet',
+  !plainMd.includes('MUTATION'), plainMd);
+check('share: plain card still embeds the seed',
+  plainMd.includes('Seed `805839337`'), plainMd);
+
+// 15b. package.json + extension.js wiring for the Share panel.
+check('pkg: sharePlanet command', cmds.some((c) => c.command === 'protoplanet.sharePlanet'));
+check('ext: registers sharePlanet', extSrc.includes("'protoplanet.sharePlanet'"));
+check('ext: share panel HTML exists', extSrc.includes('getShareHtml'));
+check('ext: share panel is a dedicated webview panel', extSrc.includes("'protoplanet.share'"));
+check('ext: share builds its view model from the shared renderable helper', extSrc.includes('shareViewModel') && extSrc.includes('renderablePlanet'));
+check('ext: share filename comes from petLogic', extSrc.includes('Logic.shareCardFilename'));
+check('ext: share markdown comes from petLogic', extSrc.includes('Logic.shareCardMarkdown'));
+check('ext: share handles the download message', extSrc.includes("msg.type === 'downloadPng'"));
+check('ext: share asks where to save (save dialog)', extSrc.includes('showSaveDialog'));
+check('ext: share writes the PNG bytes to disk', extSrc.includes('workspace.fs.writeFile'));
+check('ext: share copies the seed through the host clipboard', extSrc.includes("msg.type === 'copySeed'") && extSrc.includes('env.clipboard.writeText'));
+check('ext: share copies the markdown through the host clipboard', extSrc.includes("msg.type === 'copyMarkdown'"));
+check('ext: share panel draws the PNG on a canvas', extSrc.includes('pngCanvas') && extSrc.includes('toBlob'));
+check('ext: share canvas uses the full-density render (same grid as the panel)', extSrc.includes('P.render(state.planet, state.stageIdx,') && extSrc.includes('P.CONFIG.W, P.CONFIG.H)'));
+check('ext: share canvas colors cells from the ANSI palette', extSrc.includes('P.ansi256ToRgb'));
+check('ext: share panel shows the seed', extSrc.includes('id="seedText"'));
+check('ext: share panel shows the README block', extSrc.includes('id="markdownBlock"'));
+check('ext: share panel has all three actions', extSrc.includes('id="downloadPngBtn"') && extSrc.includes('id="copySeedBtn"') && extSrc.includes('id="copyMarkdownBtn"'));
+check('ext: share panel reuses the fixed-cell renderer', extSrc.includes('gridToHtml'));
+check('ext: share panel pushes live state on typing', extSrc.includes('postShareState'));
+
+// --- 16. Seed hatch (Nov 12) ------------------------------------------------
+// A seed hatches the same base planet, mutations stripped — the
+// original keeps its mutations in the collection.
+
+// parseSeedInput: accepts plain integers in range, rejects the rest.
+eq('seed input: plain seed', L.parseSeedInput('805839337').ok, true);
+eq('seed input: plain seed value', L.parseSeedInput('805839337').seed, 805839337);
+eq('seed input: zero', L.parseSeedInput('0').seed, 0);
+eq('seed input: max', L.parseSeedInput('999999999').seed, 999999999);
+eq('seed input: trims spaces', L.parseSeedInput('  42  ').seed, 42);
+eq('seed input: leading zeros', L.parseSeedInput('007').seed, 7);
+check('seed input: empty rejected', L.parseSeedInput('').ok === false);
+check('seed input: spaces only rejected', L.parseSeedInput('   ').ok === false);
+check('seed input: letters rejected', L.parseSeedInput('abc').ok === false);
+check('seed input: mixed rejected', L.parseSeedInput('12a').ok === false);
+check('seed input: negative rejected', L.parseSeedInput('-5').ok === false);
+check('seed input: decimal rejected', L.parseSeedInput('1.5').ok === false);
+check('seed input: too big rejected', L.parseSeedInput('1000000000').ok === false);
+check('seed input: null rejected', L.parseSeedInput(null).ok === false);
+
+// makeSeedPlanet: the canonical roll for the seed, mutations stripped.
+{
+  let mutSeed = null, mutPlanet = null;
+  for (let s = 0; s < 4000 && !mutSeed; s++) {
+    const pl = Planet.generatePlanet(s);
+    if (pl.mutations.length > 0) { mutSeed = s; mutPlanet = pl; }
+  }
+  const hatched = L.makeSeedPlanet(mutSeed, new Set());
+  check('seed planet: mutations stripped', hatched.mutations.length === 0, `seed ${mutSeed}, was ${mutPlanet.mutations.join(',')}`);
+  check('seed planet: same terrain as the canonical roll', hatched.terrain === mutPlanet.terrain);
+  check('seed planet: base ring, not the mutated ring', hatched.ringType === mutPlanet.baseRingType, `${mutPlanet.ringType} -> ${hatched.ringType}`);
+  check('seed planet: same name as the canonical roll', hatched.name === mutPlanet.name);
+  check('seed planet: same moons', hatched.moons.length === mutPlanet.moons.length);
+  check('seed planet: same size', hatched.size === mutPlanet.size);
+  check('seed planet: starts at 0 XP', hatched.xp === 0 && hatched.chars === 0);
+  check('seed planet: not a parent, no lineage', hatched.usedAsParent === false && hatched.parents === null);
+  check('seed planet: deterministic',
+    JSON.stringify(L.makeSeedPlanet(mutSeed, new Set())) === JSON.stringify(hatched));
+}
+
+// hatchFromSeed: archives the current planet (mutations KEPT in the
+// collection), hatches the seed's base planet, generation +1.
+{
+  let mutSeed = null;
+  for (let s = 0; s < 4000 && !mutSeed; s++) {
+    if (Planet.generatePlanet(s).mutations.length > 0) mutSeed = s;
+  }
+  const st = freshWithPlanet(mutSeed);
+  const oldName = st.current.name;
+  const oldMuts = st.current.mutations.slice();
+  const p = L.hatchFromSeed(st, 805839337);
+  check('seed hatch: current archived', st.past.length === 1 && st.past[0].seed === mutSeed);
+  check('seed hatch: archived planet KEEPS its mutations', JSON.stringify(st.past[0].mutations) === JSON.stringify(oldMuts), oldMuts.join(','));
+  check('seed hatch: generation +1', st.generation === 2);
+  check('seed hatch: current is the seed planet', st.current === p && p.seed === 805839337);
+  check('seed hatch: hatched planet has no mutations', p.mutations.length === 0);
+  check('seed hatch: hatched planet is the canonical roll', p.terrain === Planet.generatePlanet(805839337).terrain && p.name === Planet.generatePlanet(805839337).name);
+}
+// A fed mineral is NOT consumed by a seed hatch — the hatch is the
+// seed's canonical planet, not a roll — and it still applies to the
+// next rolled birth (new planet).
+{
+  const st = freshWithPlanet(42);
+  const fedId = st.minerals[0].id; // the starter mineral from startFirstPlanet
+  L.feedMineral(st, fedId);
+  L.hatchFromSeed(st, 805839337);
+  check('seed hatch: fed mineral stays fed', st.fedMineral && st.fedMineral.id === fedId);
+  check('seed hatch: inventory untouched', st.minerals.length === 0);
+  L.newPlanet(st, () => 777);
+  check('seed hatch: fed mineral consumed by the NEXT rolled birth', st.fedMineral === null);
+}
+// No current planet yet (first run): the seed hatch IS the first
+// planet — starter done + the one free starter mineral, still Gen 1.
+{
+  const st = L.freshState();
+  const p = L.hatchFromSeed(st, 805839337);
+  check('seed hatch first run: planet hatched', !!st.current && st.current.seed === 805839337);
+  check('seed hatch first run: still Gen 1', st.generation === 1);
+  check('seed hatch first run: starter done', st.starterDone === true);
+  check('seed hatch first run: starter mineral granted', st.minerals.length === 1);
+  check('seed hatch first run: no archive', st.past.length === 0);
+}
+// Hatching from the current planet's own seed: the archived original
+// keeps its name, the new planet's name nudges — same seed, new life.
+{
+  const st = freshWithPlanet(42);
+  const oldName = st.current.name;
+  const p = L.hatchFromSeed(st, 42);
+  check('seed hatch: same-seed name nudged (old name taken)', p.name !== oldName, `${oldName} -> ${p.name}`);
+  check('seed hatch: seed still the input seed', p.seed === 42);
+  check('seed hatch: past keeps the original name', st.past.length === 1 && st.past[0].name === oldName);
+}
+// Wiring: package.json + extension.js.
+check('pkg: hatchFromSeed command', cmds.some((c) => c.command === 'protoplanet.hatchFromSeed'));
+check('ext: registers hatchFromSeed', extSrc.includes("'protoplanet.hatchFromSeed'"));
+check('ext: hatchFromSeed asks for the seed', extSrc.includes('showInputBox') && extSrc.includes('hatchFromSeed'));
+check('ext: hatchFromSeed validates with parseSeedInput', extSrc.includes('Logic.parseSeedInput'));
+check('ext: hatchFromSeed calls Logic.hatchFromSeed', extSrc.includes('Logic.hatchFromSeed(this.state'));
+check('ext: hatchFromSeed confirms with a modal warning', extSrc.includes('Yes, hatch it'));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) {

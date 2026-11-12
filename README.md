@@ -2,7 +2,7 @@
 
 A coding pet for VS Code: as you type, a little ASCII planet grows —
 through an 8-stage lifecycle (dust → rock →
-world → civilization → end → rebirth). Typing is the fuel: the planet
+world → civilization → end — no automatic rebirth). Typing is the fuel: the planet
 is made of the characters you type.
 
 **Built in polished pieces, one at a time.** Devon reviews each piece
@@ -41,7 +41,7 @@ The foundation everything else depends on.
   size range — with comments. Tweak there.
 - **`preview.html`** — open it in a browser to SEE the variety: ten
   showcase planets (one per terrain, animated), one planet across all
-  8 stages, and a "Roll a new planet" button for a fresh random seed.
+  7 stages, and a "Roll a new planet" button for a fresh random seed.
 - **Tests:** `node test-planet.js` — determinism (same seed → same
   planet, same render → identical grid), variety (500 seeds cover all
   10 terrains, 6 ring types, moon counts 0–3), starfield match, and
@@ -73,18 +73,23 @@ then **Install from VSIX**. Nothing is published to the Marketplace.
 - **`petLogic.js`** — the pure logic, no `vscode` import, tested in plain
   Node (`node test-pet.js`, 110 checks). Typing = XP (1 inserted char =
   1 XP; deletions earn nothing; undo/redo and non-text documents like
-  the output panel earn nothing). XP grows the planet through the 8
-  stages — thresholds `0 / 100 / 300 / 600 / 1000 / 1500 / 2200 / 3000`,
-  then rebirth at 3600 XP (old planet archived, new seed, generation +1,
-  leftover XP carries over — a giant paste can even rebirth twice).
+  the output panel earn nothing). XP grows the planet through the 7
+  stages — thresholds `0 / 100 / 300 / 600 / 1000 / 1500 / 2200`,
+  then no automatic rebirth: past the last stage the planet just keeps
+  gaining XP indefinitely. A new planet only starts when the player
+  asks for one (New planet command, recycle, prestige) — the old
+  planet is archived, generation +1. At Civilization (2200+ XP) the
+  XP bar turns orange and a one-time prompt offers a new planet.
   First run asks for a starter terrain (icy / lava / jungle / rocky /
   ocean), which biases the first planet's seed. All numbers live in one
   `CONFIG` object at the top of `petLogic.js`.
 - **`extension.js`** — VS Code wiring only: sidebar webview, status bar
   (globe icon + `Oceans · 640/1000 XP`, click to show the pet), `globalState`
   persistence (one key, debounced 3s while typing, immediate on stage
-  change / rebirth / new planet). **Ambient:** no popups while typing —
-  evolutions show in the pet window and status bar only.
+  change / new planet). **Ambient:** no popups while typing —
+  evolutions show in the pet window and status bar only (one
+  exception: a single prompt when the planet first reaches
+  Civilization, offering a new planet).
 - **The pet window** reuses `planet.js`'s `gridToHtml()` + the
   fixed-size-cell CSS from the piece-1 fix (10:18 ratio, `text-size-adjust:
   none`, runtime font measurement, nonce CSP). It animates at ~7 fps and
@@ -97,11 +102,11 @@ then **Install from VSIX**. Nothing is published to the Marketplace.
   generator — changing how a planet looks is changing values, not
   rebuilding. A design polish pass is a later piece, after living with
   the pet a while.
-- **Tests:** `node test-pet.js` — 275 checks (XP counting, stage
-  boundaries, rebirth incl. double rebirth, starter bias, new-planet
+- **Tests:** `node test-pet.js` — 509 checks (XP counting, stage
+  boundaries, no-auto-rebirth + orange max bar, starter bias, new-planet
   command, persistence round-trip, bad-data fallback, minerals /
   salvage / prestige, System Rank / slots / overflow, package.json
-  contract). Plus a wiring harness
+  contract, share card, seed hatch). Plus a wiring harness
   (`../scratch/test-system-panel.js`, fake `vscode` module) that
   loads `extension.js` for real and drives activation, typing
   events, status bar, webview messages and the generated HTML,
@@ -156,17 +161,92 @@ view Devon asked for, not top-down and not pure side view.
   number/letter deterministically when a name is already used by
   another planet in the collection, so no two planets share a name.
   Shown in the orrery, the detail panel, and the Archive cards.
-- **Tests:** `node test-pet.js` — now 275 checks (was 110; section 13
-  covers System Rank / slot unlocks, place/remove validation,
+- **Tests:** `node test-pet.js` — now 509 checks (was 110; sections 13–16
+  cover System Rank / slot unlocks, place/remove validation,
   salvage clearing a slot, rank-drop returning the planet to the
-  Archive, overflow-to-Archive, persistence, and panel wiring).
-  `node test-planet.js` — section 15 covers name determinism
+  Archive, overflow-to-Archive, persistence, panel wiring, the
+  share card below, and seed hatch).
+  `node test-planet.js` — 207 checks; section 15 covers name determinism
   (same seed → same name, starter/tilt don't change the name),
   format, and variety. Plus a wiring harness
   (`../scratch/test-system-panel.js`, fake `vscode` module) that
   loads `extension.js` for real, grows 4 finished planets by typing,
   opens the panel, and drives place/remove messages through the
   webview: 33 checks, all passing.
+
+## Share card (DONE Nov 12)
+
+One click, one card. Command **Protoplanet: Share planet** opens a panel
+with the live animated planet (same fixed-cell render as the sidebar),
+its catalog name, stage, generation, mutation badge when it has one,
+and seed — plus three actions:
+
+- **Download PNG** — draws the same planet on a canvas at 8px cells
+  (the full 136×76 grid, 1088px wide + an amber `Name · seed <seed>`
+  caption) and saves it via a save dialog as
+  `protoplanet-<name>-gen<N>.png`. Postable on X/Reddit or in a README.
+- **Copy seed** — the seed on the clipboard. A friend can paste it into
+  their own Protoplanet and hatch the same base planet, without
+  mutations (see Hatch from seed below).
+- **Copy Markdown** — a README-ready block (image line, bold name/terrain/
+  stage/generation/characters line, mutation line when present, seed line
+  linking back to https://github.com/devoncline/protoplanet).
+
+The filename and the Markdown are pure helpers in `petLogic.js`
+(`shareCardFilename`, `shareCardMarkdown`) so the panel and the tests
+agree on exactly what gets shared. The card stays live while typing
+(`pushState` posts fresh state) and re-opening the command reveals the
+same panel. No new popups: the save confirmation flashes on the Download
+button in the panel, and the only info message is the no-planet guard
+("No planet yet — pick a starter first, then share it.").
+- **Tests:** `node test-pet.js` — section 15 (filename slug rules,
+  markdown shape with/without a mutation, panel wiring). Plus a wiring
+  harness (`../scratch/test-share-panel.js`, fake `vscode` module) that
+  loads `extension.js` for real, opens the panel, and drives the
+  download / copy-seed / copy-markdown messages through the webview:
+  36 checks, all passing. The PNG itself was rendered in headless
+  Chrome (`../scratch/share-png-probe.html`) and eyeballed: the full
+  grid at 8px cells reads as the dense sphere Devon knows — the cozy
+  68×38 grid at 16px cells was tried first and looked like a loose
+  scatter of letters with a hole for a night side, so it was cut.
+
+## Hatch from seed (DONE Nov 12)
+
+Command: **Protoplanet: Hatch from seed** (`protoplanet.hatchFromSeed`).
+
+Paste a seed number and hatch that seed's planet. Same seed = same
+planet: same terrain, rings, moons, size, and catalog name. **But never
+the mutations** — a planet hatched from a shared seed is the seed's
+base planet, mutations stripped (`stripMutations` in `planet.js`:
+mutations cleared, ring back to the base roll, mutation-granted hue /
+second tilt / oversized moon reset, summary recomputed). Mutations stay
+unique to the original — nobody gets your rare mutated planet just by
+pasting its seed.
+
+Flow: input box for the seed (validated: digits only, 0–999999999),
+then the same modal confirm as New planet. The current planet is
+archived into the collection — mutations and all — and the hatched
+planet becomes the new current planet at Gen +1, 0 XP. A fed mineral
+is NOT consumed: the hatch is the seed's canonical planet, not a roll,
+so the fed mineral stays fed for the next birth that actually rolls.
+On a fresh install (no planet yet) the hatch IS the first planet —
+starter done + the one free starter mineral, still Gen 1. One honest
+limit: a first planet born from a starter pick has its terrain forced
+by the pick, not the seed, so hatching from its seed gives the seed's
+canonical terrain, which can differ. No new popups: the input box and
+confirm are user-invoked from the Command Palette, and the result
+shows in the pet window and status bar.
+- **Tests:** `node test-planet.js` — section 17 (strip per mutation,
+  13/13 clean, stripped renders exactly like the plain twin and
+  differently from the mutated original, plain planet untouched,
+  determinism). `node test-pet.js` — section 16 (seed parsing,
+  makeSeedPlanet, archive-keeps-mutations, fed mineral survives the
+  hatch, first-run hatch, same-seed name nudge, package.json +
+  extension wiring). Plus a wiring harness
+  (`../scratch/test-seed-hatch.js`, fake `vscode` module) that loads
+  `extension.js` for real, activates it with a live mutated planet,
+  and drives the command end to end (happy path, bad input, dismissed
+  box, declined confirm): 13 checks, all passing.
 
 ## What's next (pieces 3+, only after Devon approves piece 2)
 - **Design polish: DONE Nov 11** — reel-style restyle of the renderer

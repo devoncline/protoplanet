@@ -12,6 +12,7 @@
 
 'use strict';
 
+const os = require('os');
 const vscode = require('vscode');
 const Planet = require('./planet.js');
 const Logic = require('./petLogic.js');
@@ -42,6 +43,7 @@ class ProtoplanetApp {
     this.systemPanel = null; // the Solar System panel (step 4), or null
     this.prestigePanel = null; // the Prestige / fusion panel (step 4b), or null
     this.prestigeResult = null; // the last fusion result, shown until dismissed
+    this.sharePanel = null; // the Share card panel (P0, Nov 12), or null
     this.saveTimer = null;
     context.subscriptions.push(this.statusBar);
     context.subscriptions.push(
@@ -55,6 +57,12 @@ class ProtoplanetApp {
     );
     context.subscriptions.push(
       vscode.commands.registerCommand('protoplanet.openPrestige', () => this.openPrestige())
+    );
+    context.subscriptions.push(
+      vscode.commands.registerCommand('protoplanet.sharePlanet', () => this.openShare())
+    );
+    context.subscriptions.push(
+      vscode.commands.registerCommand('protoplanet.hatchFromSeed', () => this.hatchFromSeed())
     );
     context.subscriptions.push(
       vscode.commands.registerCommand('protoplanet.newPlanet', () => this.newPlanet())
@@ -79,7 +87,7 @@ class ProtoplanetApp {
   saveNow() {
     if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
     // globalState.update is async; we don't wait — a save is also
-    // triggered on every stage change / rebirth / new planet.
+    // triggered on every stage change / new planet.
     this.context.globalState.update(STATE_KEY, Logic.serializeState(this.state));
   }
 
@@ -101,9 +109,14 @@ class ProtoplanetApp {
     if (n <= 0) return;
     const res = Logic.applyXp(this.state, n, Logic.randomSeed);
     this.pushState();
-    // Stage changes and rebirths save immediately; plain typing is
-    // debounced so we don't write to disk on every keystroke.
+    // Stage changes save immediately; plain typing is debounced so
+    // we don't write to disk on every keystroke.
     this.scheduleSave(res.stageChanged || res.rebirthed);
+    // First time the planet maxes out (Civilization, 2200+ XP):
+    // offer a fresh planet. Once per planet — XP only ever rises,
+    // so becameMax fires on the one transition. Optional: the maxed
+    // planet keeps growing either way.
+    if (res.becameMax) this.promptMaxedPlanet();
   }
 
   // -- commands --------------------------------------------------------------
@@ -119,6 +132,58 @@ class ProtoplanetApp {
       'Yes, new planet'
     );
     if (answer !== 'Yes, new planet') return;
+    Logic.newPlanet(this.state, Logic.randomSeed);
+    this.saveNow();
+    this.pushState();
+  }
+
+  // "Hatch from seed" (Nov 12 — Devon): hatch a planet from a
+  // shared seed number — the seed's base planet, mutations stripped,
+  // so nobody gets your rare mutated planet just by pasting its
+  // seed. Input box for the seed, then the same modal confirm as
+  // New planet (the current planet is archived into the collection).
+  // User-invoked from the Command Palette, so the input box and the
+  // confirm are fine — the no-popups rule is about typing, and this
+  // never fires while typing. No info popup: the result shows in the
+  // pet window and status bar.
+  async hatchFromSeed() {
+    const raw = await vscode.window.showInputBox({
+      prompt: 'Protoplanet: hatch a planet from a shared seed',
+      placeHolder: 'Seed number, e.g. 805839337',
+      ignoreFocusOut: true,
+      validateInput: (v) => {
+        if (!v.trim()) return null;
+        const r = Logic.parseSeedInput(v);
+        return r.ok ? null : r.reason;
+      },
+    });
+    if (raw === undefined) return; // dismissed
+    const parsed = Logic.parseSeedInput(raw);
+    if (!parsed.ok) return; // validateInput already rejected it; defensive
+    const answer = await vscode.window.showWarningMessage(
+      `Hatch the planet from seed ${parsed.seed}? Your current planet will be kept in your collection. The hatched planet is the seed's base planet — it never carries mutations.`,
+      { modal: true },
+      'Yes, hatch it'
+    );
+    if (answer !== 'Yes, hatch it') return;
+    Logic.hatchFromSeed(this.state, parsed.seed);
+    this.saveNow();
+    this.pushState();
+  }
+
+  // The ONE exception to the no-popups-while-typing rule (Devon,
+  // Nov 12): the planet just reached Civilization — fully evolved.
+  // A single non-modal prompt offers a fresh planet; "Keep growing"
+  // just closes it, and the maxed planet keeps gaining XP either way.
+  // The new planet goes through the same flow as the command (the
+  // current planet is kept in the collection).
+  async promptMaxedPlanet() {
+    const answer = await vscode.window.showInformationMessage(
+      'Your planet reached Civilization — fully evolved! It keeps growing with every character. Start a fresh planet? Your current planet will be kept in your collection.',
+      'Start a new planet',
+      'Keep growing'
+    );
+    if (answer !== 'Start a new planet') return;
     Logic.newPlanet(this.state, Logic.randomSeed);
     this.saveNow();
     this.pushState();
@@ -288,11 +353,9 @@ class ProtoplanetApp {
       traits = Planet.generatePlanet(record.seed);
       traits.mutations = (record.mutations || []).slice();
     }
-    // Display stage: CAPPED at Civilization (never End) — archived
-    // planets sit at 3600 chars = End, which renders as dispersing
-    // noise, so the panels show them at their best stage instead
-    // (Devon, Nov 11). The lifecycle still has End; this is only
-    // what the panels show.
+    // Display stage: CAPPED at Civilization — the final stage
+    // (End was cut Nov 12), so the cap is a safeguard and the
+    // panels always show the planet at its true stage.
     const dStage = Logic.displayStageForXp(record.chars || 0);
     return {
       seed: record.seed,
@@ -490,6 +553,82 @@ class ProtoplanetApp {
     }
   }
 
+  // -- share card (P0, Nov 12 — Devon picked it first from the
+  // popularity assessment). One click: a panel with the planet card —
+  // the live ASCII render plus name, seed, stage and mutation — a
+  // Download PNG button (the art as a real PNG, postable to X/Reddit
+  // or a README), a Copy seed button (the seed hatches the exact same
+  // planet, so it IS the shareable planet), and a Markdown block for
+  // a GitHub README. The panel is a dumb view like the others: the
+  // filename and markdown come from petLogic.js, the PNG bytes are
+  // drawn in the webview and only written to disk here.
+  openShare() {
+    if (!this.state.current) {
+      vscode.window.showInformationMessage('No planet yet — pick a starter first, then share it.');
+      return;
+    }
+    if (this.sharePanel) { this.sharePanel.reveal(); return; }
+    const panel = vscode.window.createWebviewPanel(
+      'protoplanet.share',
+      'Protoplanet — Share your planet',
+      vscode.ViewColumn.One,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true, // the card survives tab switches
+        localResourceRoots: [this.context.extensionUri],
+      }
+    );
+    this.sharePanel = panel;
+    panel.webview.html = this.getShareHtml(panel.webview);
+    panel.webview.onDidReceiveMessage((msg) => this.onShareMessage(msg));
+    panel.onDidDispose(() => { this.sharePanel = null; });
+    this.postShareState();
+  }
+
+  // Everything the card needs: the renderable planet (same shared
+  // helper as the Solar System and Prestige panels) plus the PNG
+  // filename and the README markdown from petLogic.js.
+  shareViewModel() {
+    const p = this.renderablePlanet(this.state.current, 'current');
+    const filename = Logic.shareCardFilename(p.name, p.generation);
+    return { type: 'share', ...p, filename, markdown: Logic.shareCardMarkdown(p, filename) };
+  }
+
+  postShareState() {
+    if (this.sharePanel) this.sharePanel.webview.postMessage(this.shareViewModel());
+  }
+
+  // Messages from the panel: copy the seed / markdown to the
+  // clipboard, or save the PNG the panel drew on its canvas. The
+  // panel never touches the clipboard or the disk itself — it asks,
+  // the host decides. A cancelled save dialog is silent (no popup).
+  async onShareMessage(msg) {
+    if (!msg || typeof msg !== 'object') return;
+    if (msg.type === 'copySeed' && this.state.current) {
+      await vscode.env.clipboard.writeText(String(this.state.current.seed));
+      if (this.sharePanel) this.sharePanel.webview.postMessage({ type: 'copied', what: 'seed' });
+    } else if (msg.type === 'copyMarkdown') {
+      await vscode.env.clipboard.writeText(this.shareViewModel().markdown);
+      if (this.sharePanel) this.sharePanel.webview.postMessage({ type: 'copied', what: 'markdown' });
+    } else if (msg.type === 'downloadPng' && typeof msg.dataUrl === 'string' && typeof msg.filename === 'string') {
+      const m = msg.dataUrl.match(/^data:image\/png;base64,(.+)$/);
+      if (!m) return; // not a PNG data URL — ignore, don't write garbage
+      const folder = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0])
+        ? vscode.workspace.workspaceFolders[0].uri
+        : vscode.Uri.file(os.homedir());
+      const uri = await vscode.window.showSaveDialog({
+        defaultUri: vscode.Uri.joinPath(folder, msg.filename),
+        filters: { 'PNG image': ['png'] },
+        saveLabel: 'Save planet card',
+      });
+      if (!uri) return; // cancelled
+      await vscode.workspace.fs.writeFile(uri, Buffer.from(m[1], 'base64'));
+      // Confirmation lives in the panel (the Download button flashes
+      // "Saved!"), not a popup — the no-popups rule stays intact.
+      if (this.sharePanel) this.sharePanel.webview.postMessage({ type: 'saved', filename: msg.filename });
+    }
+  }
+
   async maybeFirstRun() {
     if (this.state.starterDone) return;
     const items = Logic.CONFIG.STARTER_TERRAINS.map((id) => {
@@ -534,7 +673,8 @@ class ProtoplanetApp {
       mutationLabel: Planet.mutationLabel(cur),
       stageStart: info.stageStart,
       xp: cur.xp,
-      nextXp: info.nextXp,
+      nextXp: info.nextXp, // null at Civilization: no next stage
+      isMax: info.isMax, // fully evolved (Civilization+) — orange XP bar
       chars: cur.chars,
       generation: this.state.generation,
       summary: cur.summary,
@@ -551,7 +691,9 @@ class ProtoplanetApp {
       // planet is unmissable even with the sidebar closed. The mineral
       // count rides along as well (◆N), so the inventory is visible
       // at a glance without opening the panel.
-      this.statusBar.text = `$(globe) ${vm.stageName} · ${vm.xp}/${vm.nextXp} XP`
+      // Maxed (Civilization+): "· MAX" instead of a next threshold —
+      // past Civilization there is no next stage, and the bar is orange.
+      this.statusBar.text = `$(globe) ${vm.stageName} · ${vm.xp}${vm.nextXp === null ? '' : '/' + vm.nextXp} XP${vm.isMax ? ' · MAX' : ''}`
         + (vm.mutationLabel ? ` · ${vm.mutationLabel}` : '')
         + (vm.minerals && vm.minerals.total > 0 ? ` · ◆${vm.minerals.total}` : '');
     } else {
@@ -559,13 +701,16 @@ class ProtoplanetApp {
     }
     this.viewProvider.postState(vm);
     // The Solar System panel gets the same push (its own view model)
-    // — typing never opens it, but a rebirth while it is open must
+    // — typing never opens it, but a new planet while it is open must
     // show the new planet in the Archive right away.
     this.postSystemState();
     // Same for the Prestige panel — typing can make the current
     // planet eligible, and a fusion from the palette must show up
     // there too.
     this.postPrestigeState();
+    // Same for the Share card — typing while it is open must keep
+    // the card (stage, XP, seed) showing the live planet.
+    this.postShareState();
   }
 
   // -- webview HTML ----------------------------------------------------------
@@ -615,8 +760,13 @@ class ProtoplanetApp {
      border — plus a label with the numbers, so there's no guessing. */
   #xpbar { height: 10px; background: #1a1a1a; border: 1px solid rgba(232, 182, 76, 0.5);
     border-radius: 5px; overflow: hidden; }
+  #xpbar.maxed { border-color: rgba(255, 140, 26, 0.6); }
   #xpfill { height: 100%; background: #e8b64c; width: 0%; }
+  /* Maxed (Civilization+) — Pokechi-style: the XP bar turns orange
+     once the planet is fully evolved, gold before that. */
+  #xpfill.maxed { background: #ff8c1a; }
   #xplabel { font-size: 11px; color: #e8b64c; opacity: .9; margin: 4px 0 6px; }
+  #xplabel.maxed { color: #ff8c1a; }
   #meta { font-size: 11px; opacity: .7; margin-top: 6px; line-height: 1.5; }
 </style>
 </head>
@@ -675,7 +825,7 @@ class ProtoplanetApp {
     lastStage = msg.stageIdx;
     state = msg;
     document.getElementById('stageName').textContent =
-      'Stage ' + (msg.stageIdx + 1) + '/8 \\u00b7 ' + msg.stageName +
+      'Stage ' + (msg.stageIdx + 1) + '/7 \\u00b7 ' + msg.stageName +
       (msg.generation > 1 ? ' \\u00b7 Gen ' + msg.generation : '');
     const mutEl = document.getElementById('mutationLabel');
     if (msg.mutationLabel) { mutEl.textContent = msg.mutationLabel; mutEl.style.display = 'inline-block'; }
@@ -686,10 +836,21 @@ class ProtoplanetApp {
     // the stage line, the grown-from line, and the XP bar only. The
     // pre-hatch guidance above stays until the first state arrives.
     document.getElementById('stageDesc').style.display = 'none';
-    const span = Math.max(1, msg.nextXp - msg.stageStart);
-    const pct = Math.max(0, Math.min(100, (msg.xp - msg.stageStart) / span * 100));
-    document.getElementById('xpfill').style.width = pct.toFixed(1) + '%';
-    document.getElementById('xplabel').textContent = 'XP ' + msg.xp + ' / ' + msg.nextXp;
+    // Maxed (Civilization+): the bar turns orange (Pokechi-style,
+    // fully evolved). Past Civilization there is no next stage — the bar sits
+    // full and the label says MAX instead of a threshold.
+    const barEl = document.getElementById('xpbar');
+    const fillEl = document.getElementById('xpfill');
+    const labelEl = document.getElementById('xplabel');
+    barEl.classList.toggle('maxed', !!msg.isMax);
+    fillEl.classList.toggle('maxed', !!msg.isMax);
+    labelEl.classList.toggle('maxed', !!msg.isMax);
+    const span = msg.nextXp === null ? 1 : Math.max(1, msg.nextXp - msg.stageStart);
+    const pct = msg.nextXp === null ? 100 : Math.max(0, Math.min(100, (msg.xp - msg.stageStart) / span * 100));
+    fillEl.style.width = pct.toFixed(1) + '%';
+    labelEl.textContent = msg.nextXp === null
+      ? 'XP ' + msg.xp + ' \\u00b7 MAX \\u2014 fully evolved'
+      : 'XP ' + msg.xp + ' / ' + msg.nextXp;
     document.getElementById('meta').textContent = 'Grown from ' + msg.chars + ' characters';
   });
 
@@ -1435,7 +1596,7 @@ class ProtoplanetApp {
       state.totalPlanets + ' planet' + (state.totalPlanets === 1 ? '' : 's') + ' — ' + state.ringsUsed + ' in system';
     if (list.length === 0) {
       cardsEl.innerHTML = '<div class="empty">' + (state.totalPlanets === 0
-        ? 'No planets yet — type to grow your first one, and it will show up here when it rebirths.'
+        ? 'No planets yet — type to grow your first one, and it will show up here when you start a new planet.'
         : (pickerRing !== null ? 'Every planet is already in your system.' : 'Nothing matches that search.')) + '</div>';
       return;
     }
@@ -2190,6 +2351,232 @@ class ProtoplanetApp {
     } else {
       renderAll();
     }
+  });
+
+  vscodeApi.postMessage({ type: 'ready' });
+})();
+</script>
+</body>
+</html>`;
+  }
+
+  // -- share card panel HTML ---------------------------------------------------
+  // The card: the live ASCII render (same fixed-cell rule as the
+  // sidebar — gridToHtml + explicit cell sizes, 10:18 ratio), the
+  // planet name, the mutation tag, the stage/generation/grown-from
+  // line, the seed with a copy button, the three actions, and the
+  // README markdown block. The PNG is drawn on a hidden canvas from
+  // the same planet grid (cozy 68x38, chunky 16px cells, caption with
+  // name + seed), so the downloaded file is the planet art itself —
+  // postable to X/Reddit or a README as-is.
+  getShareHtml(webview) {
+    const nonce = getNonce();
+    const planetJsUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.context.extensionUri, 'planet.js')
+    );
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' ${webview.cspSource};">
+<style>
+  html, body { -webkit-text-size-adjust: none; text-size-adjust: none; }
+  body { margin: 0; padding: 20px; background: #050505;
+    color: var(--vscode-editor-foreground);
+    font-family: var(--vscode-font-family); }
+  #card { max-width: 760px; margin: 0 auto; }
+  #wrap { background: #050505; border: 1px solid var(--vscode-widget-border, #222);
+    padding: 6px; overflow-x: auto; }
+  .pp-grid { margin: 0;
+    font-family: ${FONT_STACK};
+    font-size: var(--pp-fs, 10px); line-height: var(--pp-ch, 18px);
+    letter-spacing: 0; white-space: pre;
+    -webkit-text-size-adjust: none; text-size-adjust: none; }
+  .pp-run { display: inline-block; height: var(--pp-ch, 18px);
+    line-height: var(--pp-ch, 18px); vertical-align: top; overflow: hidden;
+    white-space: pre; font-kerning: none; }
+  h1 { font-size: 20px; margin: 14px 0 4px; }
+  #mutationLabel { display: inline-block; font-size: 11px; font-weight: 700;
+    letter-spacing: .12em; text-transform: uppercase; color: #ffd75f;
+    background: rgba(255, 215, 95, .12); border: 1px solid rgba(255, 215, 95, .55);
+    border-radius: 3px; padding: 2px 7px; margin: 0 0 8px; }
+  #meta { font-size: 13px; opacity: .8; margin: 0 0 4px; line-height: 1.5; }
+  #seedLine { font-size: 13px; margin: 0 0 14px; }
+  #seedLine code { font-family: ${FONT_STACK}; background: #1a1a1a;
+    border: 1px solid #333; border-radius: 3px; padding: 1px 6px; }
+  button { font-family: var(--vscode-font-family); font-size: 13px;
+    border-radius: 6px; border: 1px solid var(--vscode-widget-border, #333);
+    background: var(--vscode-button-secondaryBackground, #2a2a2a);
+    color: var(--vscode-button-secondaryForeground, #ddd);
+    padding: 7px 14px; margin: 0 8px 8px 0; cursor: pointer; }
+  button:hover { background: var(--vscode-button-secondaryHoverBackground, #3a3a3a); }
+  #downloadPngBtn { background: #e8b64c; border-color: #e8b64c; color: #111; font-weight: 600; }
+  #downloadPngBtn:hover { background: #ffd75f; }
+  h2 { font-size: 14px; margin: 18px 0 6px; }
+  #markdownBlock { background: #0b0b0b; border: 1px solid #262626; border-radius: 6px;
+    padding: 10px 12px; font-size: 12px; line-height: 1.6; white-space: pre-wrap;
+    word-break: break-all; font-family: ${FONT_STACK}; margin: 0 0 10px; }
+  #hint { font-size: 12px; opacity: .6; margin: 0; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div id="card">
+  <div id="wrap"><pre class="pp-grid" id="grid"></pre></div>
+  <h1 id="planetName">Your planet</h1>
+  <div id="mutationLabel" style="display:none"></div>
+  <p id="meta"></p>
+  <p id="seedLine">Seed <code id="seedText"></code></p>
+  <div>
+    <button type="button" id="downloadPngBtn">Download PNG</button>
+    <button type="button" id="copySeedBtn">Copy seed</button>
+    <button type="button" id="copyMarkdownBtn">Copy Markdown</button>
+  </div>
+  <h2>GitHub README</h2>
+  <pre id="markdownBlock"></pre>
+  <p id="hint">The seed hatches the same base planet &mdash; a friend can paste it into their own Protoplanet and grow the same world. The PNG is the planet art, ready to post.</p>
+</div>
+<canvas id="pngCanvas" style="display:none"></canvas>
+<script nonce="${nonce}" src="${planetJsUri}"></script>
+<script nonce="${nonce}">
+(function () {
+  var vscodeApi = acquireVsCodeApi();
+  var P = window.Protoplanet;
+  var gridEl = document.getElementById('grid');
+  var wrapEl = document.getElementById('wrap');
+  var root = document.documentElement;
+  var FONT_STACK = ${JSON.stringify(FONT_STACK)};
+  var cellW = 3, cellH = 5.4, state = null, sec = 0, stageStartSec = 0, lastStage = -1;
+
+  // --- Fixed-cell layout (same approach as the sidebar) ----------------------
+  // Cells scale to fit the card width — the 10:18 ratio never changes.
+  // The font size is measured from the real monospace font at runtime,
+  // so one glyph advance == one cell width.
+  function layout() {
+    var avail = Math.max(50, wrapEl.clientWidth - 12);
+    var scale = avail / (P.CONFIG.W * P.CONFIG.CELL_W);
+    var newW = Math.max(1, +(10 * scale).toFixed(2));
+    var newH = Math.max(1.8, +(18 * scale).toFixed(2));
+    if (newW === cellW && newH === cellH && root.style.getPropertyValue('--pp-fs')) return;
+    cellW = newW; cellH = newH;
+    var probe = document.createElement('span');
+    probe.style.cssText = 'position:absolute;visibility:hidden;font-family:' + FONT_STACK +
+      ';font-size:16px;letter-spacing:0;white-space:pre;';
+    probe.textContent = 'MMMMMMMMMMMMMMMMMMMM'; // 20 chars
+    document.body.appendChild(probe);
+    var adv16 = probe.offsetWidth / 20;
+    probe.remove();
+    var fs = 16 * cellW / adv16;
+    if (fs > cellH) fs = cellH; // never taller than the cell
+    root.style.setProperty('--pp-ch', cellH + 'px');
+    root.style.setProperty('--pp-fs', fs.toFixed(2) + 'px');
+  }
+  layout();
+  window.addEventListener('resize', layout);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(layout);
+
+  function renderMeta() {
+    document.getElementById('planetName').textContent = state.name;
+    var mutEl = document.getElementById('mutationLabel');
+    if (state.mutationLabel) { mutEl.textContent = state.mutationLabel; mutEl.style.display = 'inline-block'; }
+    else { mutEl.style.display = 'none'; }
+    document.getElementById('meta').textContent =
+      state.stageName + ' \\u00b7 Gen ' + state.generation + ' \\u00b7 grown from ' + state.chars + ' characters';
+    document.getElementById('seedText').textContent = state.seed;
+    document.getElementById('markdownBlock').textContent = state.markdown;
+  }
+
+  window.addEventListener('message', function (e) {
+    var msg = e.data;
+    if (!msg) return;
+    if (msg.type === 'share') {
+      if (!state || msg.stageIdx !== lastStage) stageStartSec = sec;
+      lastStage = msg.stageIdx;
+      state = msg;
+      layout();
+      renderMeta();
+    } else if (msg.type === 'copied') {
+      // The host confirms the clipboard write — flash the button so
+      // the player knows it landed. No popup for a copy.
+      var btn = msg.what === 'seed'
+        ? document.getElementById('copySeedBtn')
+        : document.getElementById('copyMarkdownBtn');
+      var orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(function () { btn.textContent = orig; }, 1200);
+    } else if (msg.type === 'saved') {
+      // The host confirms the PNG hit the disk — flash the Download
+      // button. No popup for a save either.
+      var dl = document.getElementById('downloadPngBtn');
+      var dlOrig = dl.textContent;
+      dl.textContent = 'Saved!';
+      setTimeout(function () { dl.textContent = dlOrig; }, 1200);
+    }
+  });
+
+  // Animate: ~7 fps is plenty for the flicker/drift illusion.
+  setInterval(function () {
+    sec += 0.15;
+    if (!state) return;
+    var t = Math.max(0, sec - stageStartSec);
+    gridEl.innerHTML = P.gridToHtml(P.render(state.planet, state.stageIdx, t, sec), cellW, cellH);
+  }, 150);
+
+  // --- PNG: the same planet, drawn cell by cell on a canvas ------------------
+  // Full grid (136x76, the same grid the panel shows) at 8px cells —
+  // 1088px wide, postable on X/Reddit and in a README. The cozy grid
+  // (68x38) was tried first: at 16px cells the disc reads as a loose
+  // scatter of letters, the night side as a hole, and the starfield
+  // 'i's as big green letters everywhere. The full grid at 8px cells
+  // is dense and reads as the sphere Devon knows.
+  var PNG_CELL_W = 8, PNG_CELL_H = PNG_CELL_W * (P.CONFIG.CELL_H / P.CONFIG.CELL_W);
+  function drawPng() {
+    if (!state) return null;
+    var grid = P.render(state.planet, state.stageIdx,
+      Math.max(0, sec - stageStartSec), sec, 1.0, P.CONFIG.W, P.CONFIG.H);
+    var canvas = document.getElementById('pngCanvas');
+    var captionH = 56;
+    canvas.width = P.CONFIG.W * PNG_CELL_W;
+    canvas.height = Math.round(P.CONFIG.H * PNG_CELL_H) + captionH;
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#050505';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.font = '13px ' + FONT_STACK; // monospace advance ~0.6em == 8px cell
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (var y = 0; y < grid.length; y++) {
+      for (var x = 0; x < grid[y].length; x++) {
+        var cell = grid[y][x];
+        if (cell[1] === null) continue; // empty sky stays the dark background
+        var rgb = P.ansi256ToRgb(cell[1]);
+        ctx.fillStyle = 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')';
+        ctx.fillText(cell[0], (x + 0.5) * PNG_CELL_W, (y + 0.5) * PNG_CELL_H);
+      }
+    }
+    ctx.fillStyle = '#e8b64c';
+    ctx.font = '20px ' + FONT_STACK;
+    ctx.fillText(state.name + ' \\u00b7 seed ' + state.seed,
+      canvas.width / 2, Math.round(P.CONFIG.H * PNG_CELL_H) + 28);
+    return canvas;
+  }
+
+  document.getElementById('downloadPngBtn').addEventListener('click', function () {
+    var canvas = drawPng();
+    if (!canvas) return;
+    canvas.toBlob(function (blob) {
+      if (!blob) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        vscodeApi.postMessage({ type: 'downloadPng', dataUrl: reader.result, filename: state.filename });
+      };
+      reader.readAsDataURL(blob);
+    }, 'image/png');
+  });
+  document.getElementById('copySeedBtn').addEventListener('click', function () {
+    vscodeApi.postMessage({ type: 'copySeed' });
+  });
+  document.getElementById('copyMarkdownBtn').addEventListener('click', function () {
+    vscodeApi.postMessage({ type: 'copyMarkdown' });
   });
 
   vscodeApi.postMessage({ type: 'ready' });
