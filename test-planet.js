@@ -1049,8 +1049,9 @@ function onDisc14(pl, stageIdx, x, y) {
 }
 
 // 14b. Distribution over 5000 seeds (measured over 10,000 seeds after
-// the Nov 11 redesign: any ~10%, each mutation ~0.7%, max 2 — thresholds
-// are wide on purpose; the point is the shape, not an exact roll).
+// the Nov 11 City Lights cut: any 9.0%, two 0.46%, each mutation
+// 0.63-0.85% — thresholds are wide on purpose; the point is the shape,
+// not an exact roll).
 {
   const N = 5000;
   let any = 0, maxMuts = 0;
@@ -1119,7 +1120,7 @@ function onDisc14(pl, stageIdx, x, y) {
     P.mutationLabel(singleSeed14('big-moon')));
   check('no mutation -> no label', P.mutationLabel(plainTwin14(singleSeed14('glitch'))) === null);
   check('several mutations join with " + "',
-    P.mutationLabel({ mutations: ['city-lights', 'glitch'] }) === 'MUTATION · City Lights + Glitch');
+    P.mutationLabel({ mutations: ['glitch', 'big-moon'] }) === 'MUTATION · Glitch + Big Moon');
   check('no tier helpers survive', P.tierRank === undefined && P.tierForMutations === undefined);
 }
 
@@ -1330,39 +1331,38 @@ for (const [id, fn, min] of [['green-moon', greenDom14, 4], ['blood-moon', redDo
   check('sparkling-surface: white glints on the lit side', countCells14(P.render(pl, 6, 5.0, 2.5), glint) >= 8);
   check('sparkling-surface: plain twin has none', countCells14(P.render(tw, 6, 5.0, 2.5), glint) === 0);
 }
-// City Lights: denser night lights than the base sparkles (summed over
-// 8 timestamps to beat the twinkle gate: measured 201 vs 90), plus a
-// few cyan/magenta lights the base never has (measured 8 vs 0).
+// City Lights is NOT a mutation (Devon, Nov 11): city lights are the
+// Civilization STAGE feature. No planet can roll it, and the stage-6
+// lights exist on a PLAIN planet. This pins that: the mutation list
+// has no city-lights entry, and a plain Civilization planet still
+// shows its warm night lights.
 {
-  const pl = singleSeed14('city-lights'), tw = plainTwin14(pl);
-  const bright = ([ch, c], x, y) => onDisc14(pl, 6, x, y) && x > P.CONFIG.CX && ['*', '+', '.'].includes(ch) && lumOf14(c) > 100;
-  const cyanB = ([ch, c], x, y) => onDisc14(pl, 6, x, y) && x > P.CONFIG.CX && ['*', '+', '.'].includes(ch) && lumOf14(c) > 100 && cyanDom14(c);
-  let sm = 0, sp = 0, cm = 0, cp = 0;
-  for (const sec of [0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5]) {
-    const g = P.render(pl, 6, 5.0, sec), gp = P.render(tw, 6, 5.0, sec);
-    sm += countCells14(g, bright); sp += countCells14(gp, bright);
-    cm += countCells14(g, cyanB); cp += countCells14(gp, cyanB);
-  }
-  check('city-lights: denser night lights than base', sm > sp * 1.5, `${sm} vs ${sp}`);
-  check('city-lights: multicolor lights the base never has', cm >= 4 && cp === 0, `cyan ${cm} vs ${cp}`);
+  check('city-lights is not in the mutation list',
+    !P.CONFIG.MUTATIONS.some((m) => m.id === 'city-lights'));
+  check('13 mutations total', P.CONFIG.MUTATIONS.length === 13);
+  const plain = plainTwin14(singleSeed14('glitch'));
+  const bright = ([ch, c], x, y) => onDisc14(plain, 6, x, y) && x > P.CONFIG.CX && ['*', '+', '.'].includes(ch) && lumOf14(c) > 100;
+  let lights = 0;
+  for (const sec of [0, 0.5, 1.0, 1.5]) lights += countCells14(P.render(plain, 6, 5.0, sec), bright);
+  check('plain Civilization planet still has stage city lights', lights >= 10, `lights ${lights}`);
 }
 
 // 14g. Cross-stage matrix (Nov 11 redesign): every mutation must
 // exist and read on ALL 8 stages — adapted per stage, not identical.
 // VISIBLE_FROM is the first stage the effect can show: moons, comet,
-// meteor, glitch and city lights (as embers in the core) from
-// stage 0; sparkles and crystals from stage 1 (the core's own sparkles
-// carry stage 0); rings, oceans and the storm from stage 4, when those
-// traits exist at all (rings open, oceans form, bands form). Before
-// VISIBLE_FROM the carrier must render EXACTLY like its plain twin
-// (diff 0) — the trait doesn't exist yet, so the mutation has nothing
-// to act on; at and after, the diff must be real (>= 3 cells). Measured
-// with scratch/cross-stage-probe.js (t=5.0, sec=2.5): the smallest
-// real diffs are blood-moon 6 and meteor-shower 7, so 3 has margin.
+// meteor and glitch from stage 0; sparkles and crystals from stage 1
+// (the core's own sparkles carry stage 0); rings, oceans and the storm
+// from stage 4, when those traits exist at all (rings open, oceans
+// form, bands form). Before VISIBLE_FROM the carrier must render
+// EXACTLY like its plain twin (diff 0) — the trait doesn't exist yet,
+// so the mutation has nothing to act on; at and after, the diff must
+// be real (>= 3 cells). Measured with scratch/cross-stage-probe.js
+// (t=5.0, sec=2.5): the smallest real diffs are blood-moon 6 and
+// meteor-shower 7, so 3 has margin.
 {
   const VISIBLE_FROM = {
     'big-moon': 0, 'green-moon': 0, 'blood-moon': 0, 'meteor-shower': 0,
-    'comet': 0, 'glitch': 0, 'city-lights': 0,
+    'comet': 0, 'glitch': 0,
     'sparkling-surface': 1, 'crystal-crust': 1,
     'double-rings': 4, 'colored-rings': 4, 'crossed-rings': 4,
     'glowing-oceans': 4, 'giant-storm': 4,
@@ -1389,6 +1389,48 @@ for (const [id, fn, min] of [['green-moon', greenDom14, 4], ['blood-moon', redDo
     check(`${mut.id}: reads on every stage from ${from}`, afterOk,
       afterWorst < 999 ? `min diff ${afterWorst}` : `seed ${pl.seed}`);
   }
+}
+
+// --- 15. Planet names (step 4): deterministic, seed-tied, catalog style ----
+// Format: [Catalog]-[Number][letter] — Kepler-442b, TRAPPIST-1e,
+// HD-209458b, WASP-12b, TOI-700d, GJ-1214b, K2-18b. Same seed -> same
+// name; catalog, number, and letter all come from the seed.
+check('name: same seed -> same name',
+  P.generatePlanetName(123) === P.generatePlanetName(123), P.generatePlanetName(123));
+check('name: generatePlanet carries the seed name',
+  P.generatePlanet(123).name === P.generatePlanetName(123));
+{
+  const nameRe = /^(.+)-(\d+)([b-f])$/;
+  const seen = new Set();
+  let bad = 0;
+  for (let s = 0; s < 500; s++) {
+    const n = P.generatePlanetName(s);
+    seen.add(n);
+    const m = nameRe.exec(n);
+    const cat = m && P.CONFIG.NAME_CATALOGS.find((c) => c.prefix === m[1]);
+    const num = m ? parseInt(m[2], 10) : -1;
+    if (!m || !cat || num < cat.min || num > cat.max) bad++;
+  }
+  check('name: 500 seeds are all catalog names (prefix-number-letter b-f, number in range)', bad === 0, bad + ' bad');
+  check('name: 500 seeds are almost all distinct base names (raw collisions are resolved by the birth-time layer)', seen.size >= 480, seen.size + ' distinct');
+  check('name: different seeds usually differ', P.generatePlanetName(1) !== P.generatePlanetName(2));
+  // Naming must not disturb the trait draws: the same seed still
+  // produces the same traits it did before names existed (the name
+  // runs on its own RNG stream).
+  const a = P.generatePlanet(4821), b = P.generatePlanet(4821);
+  check('name: same seed -> identical planet incl. name', JSON.stringify(a) === JSON.stringify(b));
+  // The name is a function of the seed ONLY — starter bias and tilt
+  // (which change the traits) must not change the name.
+  check('name: starter bias does not change the name',
+    P.generatePlanet(123, 'icy').name === P.generatePlanet(123).name);
+  check('name: a tilt does not change the name',
+    P.generatePlanet(123, null, { boosts: { 'green-moon': 10 } }).name === P.generatePlanet(123).name);
+  // parseCatalogName round-trips the generator, and rejects junk.
+  const parsed = P.parseCatalogName(P.generatePlanetName(123));
+  check('name: parseCatalogName round-trips a generated name',
+    !!parsed && P.formatCatalogName(parsed.catalog, parsed.num, P.CONFIG.NAME_LETTERS[parsed.letterIdx]) === P.generatePlanetName(123));
+  check('name: parseCatalogName rejects a non-catalog name',
+    P.parseCatalogName('Kelmor') === null && P.parseCatalogName('Kepler-999999b') === null);
 }
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);

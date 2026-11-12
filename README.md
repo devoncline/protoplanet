@@ -97,33 +97,91 @@ then **Install from VSIX**. Nothing is published to the Marketplace.
   generator — changing how a planet looks is changing values, not
   rebuilding. A design polish pass is a later piece, after living with
   the pet a while.
-- **Tests:** `node test-pet.js` — 110 checks (XP counting, stage
+- **Tests:** `node test-pet.js` — 275 checks (XP counting, stage
   boundaries, rebirth incl. double rebirth, starter bias, new-planet
-  command, persistence round-trip, bad-data fallback, package.json
-  contract). Plus a wiring harness (`/tmp/test-extension-wiring.js`,
-  fake `vscode` module) that loads `extension.js` for real and drives
-  activation, typing events, status bar, webview messages and the
-  generated HTML: 30 checks, all passing.
+  command, persistence round-trip, bad-data fallback, minerals /
+  salvage / prestige, System Rank / slots / overflow, package.json
+  contract). Plus a wiring harness
+  (`../scratch/test-system-panel.js`, fake `vscode` module) that
+  loads `extension.js` for real and drives activation, typing
+  events, status bar, webview messages and the generated HTML,
+  including opening the Solar System panel and driving place /
+  remove through it: 33 checks, all passing.
 - **Not verified here:** the Extension Development Host can't run
   headless on this VM — Devon runs it with F5 on his PC. That's the
   real test.
 
+## Step 4 — Solar System / collection view (DONE Nov 11)
+
+Command: **Protoplanet: Open solar system** (`protoplanet.openSolarSystem`).
+
+A full-screen webview panel, tilted orrery at the top and the
+Pokédex/Archive below it. The star sits in the middle (default star
+for now — no rarity or upgrades yet); one ring per unlocked slot, one
+planet per ring. Orbit rings are ellipses (tilt 0.42) while the planet
+discs stay upright, facing the viewer — the Stellaris-style tilted
+view Devon asked for, not top-down and not pure side view.
+
+- **Slots / System Rank:** 4 rings at Rank 0. Each rank unlocks +1
+  ring (Rank = floor(finished planets / 3), capped at 12 rings).
+  Locked rings are visible as dashed rings with the unlock
+  requirement written on them, e.g. "Ring 5 — grow 3 more planets".
+  The header shows "N / M rings used" and the next unlock.
+- **Detail:** click a planet → a side panel with large ASCII art,
+  name, seed, terrain, ring type, moons, size, stage, characters
+  grown, mutations, and generation — plus **Remove from system**
+  (moves it to the Archive, never deletes it) and **Replace**.
+- **Archive:** scroll down for the grid of ALL owned planets
+  (unlimited), searchable and sortable, each card with an
+  "In system" badge and the count "N planets — M in system".
+  Click an empty ring → the Archive opens in picker mode, filtered
+  to planets not already displayed.
+- **Orbits:** always on. The planets drift slowly around the star —
+  there is no static mode and no toggle (Devon's call, Nov 11). The
+  drift pauses momentarily on hover/focus and while the webview is
+  hidden, so a moving planet can still be clicked. 2D zoom
+  (wheel/buttons, fit-to-system reset) and drag-pan only — no 3D
+  rotation (ASCII shears, and rotation hurts click-to-select).
+- **Hard rules:** growing a new planet never fails because the system
+  is full — the new planet lands in the Archive. Removing a planet
+  from the system never deletes it.
+- **Planet names:** every planet gets a real catalog-style name tied
+  to its seed — `generatePlanetName(seed)` in `planet.js` builds a
+  designation like Kepler-442b, TRAPPIST-1e, HD-209458b, or TOI-700d
+  (catalog + number + letter b–f) from `NAME_CATALOGS` in `CONFIG`,
+  on its own RNG stream (`seed ^ 0x9E3779B9`), so naming never
+  disturbs the trait draws. The name is stored on the planet record
+  at birth and derived from the seed for older records. A birth-time
+  uniqueness layer (`uniquePlanetName` in `petLogic.js`) nudges the
+  number/letter deterministically when a name is already used by
+  another planet in the collection, so no two planets share a name.
+  Shown in the orrery, the detail panel, and the Archive cards.
+- **Tests:** `node test-pet.js` — now 275 checks (was 110; section 13
+  covers System Rank / slot unlocks, place/remove validation,
+  salvage clearing a slot, rank-drop returning the planet to the
+  Archive, overflow-to-Archive, persistence, and panel wiring).
+  `node test-planet.js` — section 15 covers name determinism
+  (same seed → same name, starter/tilt don't change the name),
+  format, and variety. Plus a wiring harness
+  (`../scratch/test-system-panel.js`, fake `vscode` module) that
+  loads `extension.js` for real, grows 4 finished planets by typing,
+  opens the panel, and drives place/remove messages through the
+  webview: 33 checks, all passing.
+
 ## What's next (pieces 3+, only after Devon approves piece 2)
 - **Design polish: DONE Nov 11** — reel-style restyle of the renderer
   (136×76 grid, limb fade, softer light, denser rings). See above.
-- **Piece 3 — mutations:** the rarity system — inheritable traits
-  (big moon, colored/double/shattered rings, aurora, sparkling
-  surface, glowing oceans, giant storm, comet, binary star, city
-  lights) rolled on each evolution, with weighted odds. Tiers
-  (Common→Legendary) are just labels derived from mutations.
-- **Piece 4 — collection panel:** a webview showing all finished
-  planets as a little solar system; click one to see its seed, traits,
-  mutations, characters grown, generation.
-- **Piece 5 — minerals, salvage, prestige:** feed minerals to tilt
-  mutation odds; destroy a planet for mineral pieces (a mutation
-  planet yields a mineral of that mutation); combine two
-  Civilization-stage planets — offspring inherits each parent
-  mutation at multiplied odds, parents stay in the collection.
+- **Piece 3 — mutations: DONE Nov 11** — birth rolls, no tiers,
+  13 mutations (see `MUTATIONS.md`). Rarity: ~9.0% any mutation.
+- **Piece 4 — collection panel: DONE Nov 11** — the Solar System
+  view above (tilted orrery, detail panel, Archive, System Rank,
+  planet names).
+- **Piece 5 — minerals, salvage, prestige: DONE Nov 11** — feed
+  minerals to tilt the NEXT planet's birth roll; destroy a planet
+  for mineral pieces (a mutation planet yields a mineral of that
+  mutation); combine two Civilization-stage planets — offspring
+  inherits each parent mutation at multiplied odds, parents stay
+  in the collection (one-time parents, tunable flag).
 - **Piece 6 — public polish:** Marketplace-ready (icon, README,
   publisher, packaging). Only when Devon says go.
 

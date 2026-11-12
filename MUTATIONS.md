@@ -16,8 +16,6 @@ Keep this list current. Devon asks for it on demand — send him this list.
 - **Big Moon** — one oversized moon.
 - **Colored Rings** — rings in a color (not the default gold).
 - **Double Rings** — two parallel rings.
-- **City Lights** — lights on the night side. Shows from stage 0 as
-  embers/sparks in the core, brighter at Civilization, fading embers at End.
 - **Glitch** — the planet looks glitched. Non-realistic, intentionally broken. Must look CLEARLY different from Crystal Crust's pretty sparkles.
 
 ## Cut (do not build)
@@ -28,6 +26,7 @@ Keep this list current. Devon asks for it on demand — send him this list.
 - **Eclipse** — Devon doesn't like it.
 - **Glow effect** — real bloom doesn't work in ASCII; skipped by agreement.
 - **Aurora Crown** — Devon not a fan (Nov 11, 4:20 PM): just text, no glow, would look clunky. Removed.
+- **City Lights** — Devon, Nov 11: city lights are the Civilization STAGE feature, not a mutation — having it as a mutation too was confusing and wrong. Removed (the stage-6 city-lights sparkles stay).
 
 ## Base rarity (NOT mutations)
 
@@ -46,8 +45,7 @@ stage 0, hidden when the planet has none.)
 ## Cross-stage (verified Nov 11)
 
 Every mutation reads on ALL 8 stages, adapted per stage — not identical.
-Moons, comet, meteor shower, glitch and city lights (as embers
-in the core) show from stage 0; sparkles and crystals from stage 1
+Moons, comet, meteor shower and glitch show from stage 0; sparkles and crystals from stage 1
 (the core's own sparkles carry stage 0); rings, oceans and the storm
 from stage 4, when those traits exist at all. Before a trait exists the
 mutation is label-carried only (no rings before stage 4, no oceans
@@ -73,7 +71,7 @@ Default: about 1 in 10 planets is born with a mutation (~10% any
 mutation, each mutation roughly equal chance). Most planets have NO
 mutation — when one shows up, it's special. 72% (the old per-evolution
 model) was too many. Retune after playing. Measured over 10,000 seeds
-(Nov 11, after the Aurora Crown cut): 9.7% any mutation, 0.49% two
+(Nov 11, after the City Lights cut): 9.0% any mutation, 0.46% two
 mutations, each mutation 0.63–0.85%. One knob: `CONFIG.MUTATION_CHANCE` (0.007).
 
 ## Minerals (BUILT — step 2, Nov 11)

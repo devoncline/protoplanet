@@ -124,6 +124,34 @@ const CONFIG = {
     { label: 'steep',  min: 20, max: 32, weight: 10 },
   ],
 
+  // --- Planet names (step 4, Nov 11; catalog style, Nov 11) --------------
+  // Every planet gets a name tied to its seed — deterministic, so the
+  // same seed always produces the same name. Names look like real
+  // exoplanet catalog designations — [Catalog]-[Number][letter]
+  // (Kepler-442b, TRAPPIST-1e, HD-209458b, WASP-12b, TOI-700d,
+  // GJ-1214b, K2-18b) — picked by a SEPARATE mulberry32 stream seeded
+  // from the planet's seed, so naming never consumes draws from the
+  // trait generator and can never reshuffle a planet's traits.
+  // Number ranges are plausible for each catalog: Kepler numbers run
+  // into the thousands, HD into the hundreds of thousands, TRAPPIST
+  // is a small family. The letter is b–f, like real exoplanets
+  // (b = the first planet found around that star).
+  NAME_CATALOGS: [
+    { prefix: 'Kepler',   min: 1,    max: 1650 },
+    { prefix: 'TRAPPIST', min: 1,    max: 12 },
+    { prefix: 'HD',       min: 1000, max: 250000 },
+    { prefix: 'WASP',     min: 1,    max: 200 },
+    { prefix: 'TOI',      min: 100,  max: 7000 },
+    { prefix: 'GJ',       min: 1,    max: 1300 },
+    { prefix: 'K2',       min: 1,    max: 500 },
+    { prefix: 'HAT-P',    min: 1,    max: 100 },
+    { prefix: 'CoRoT',    min: 1,    max: 40 },
+    { prefix: 'NGTS',     min: 1,    max: 80 },
+    { prefix: 'XO',       min: 1,    max: 20 },
+    { prefix: 'LHS',      min: 1000, max: 6000 },
+  ],
+  NAME_LETTERS: ['b', 'c', 'd', 'e', 'f'],
+
   // Moon styles: each moon is a tiny shaded sphere now (Nov 11), with
   // a seeded size and tint. Radius is in grid cells (the planet's
   // radius is ~28 cells, so moons stay small next to it).
@@ -182,7 +210,6 @@ const CONFIG = {
     { id: 'big-moon',          name: 'Big Moon',         tags: ['moon'],  desc: 'One oversized moon.' },
     { id: 'double-rings',      name: 'Double Rings',     tags: ['rings'], desc: 'Two parallel rings.' },
     { id: 'sparkling-surface', name: 'Sparkling Surface', tags: ['glow'],  desc: 'The surface glints in the light.' },
-    { id: 'city-lights',       name: 'City Lights',      tags: ['glow'],  desc: 'A dazzling lit-up civilization.' },
     { id: 'colored-rings',     name: 'Colored Rings',    tags: ['rings'], desc: 'Rings in a vivid color, not gold.' },
     { id: 'glowing-oceans',    name: 'Glowing Oceans',   tags: ['glow'],  desc: 'The oceans glow on the night side.' },
     { id: 'meteor-shower',     name: 'Meteor Shower',    tags: ['sky'],   desc: 'Streaks fall across the planet.' },
@@ -195,6 +222,63 @@ const CONFIG = {
     { id: 'glitch',            name: 'Glitch',           tags: ['weird'], desc: 'The planet looks broken — on purpose.' },
   ],
 };
+
+// ---------------------------------------------------------------------------
+// PLANET NAMES — deterministic, seed-tied, real catalog style (step 4).
+// ---------------------------------------------------------------------------
+// A planet's name looks like a real exoplanet catalog designation —
+// [Catalog]-[Number][letter] (Kepler-442b, TRAPPIST-1e, HD-209458b,
+// WASP-12b, TOI-700d, GJ-1214b, K2-18b). Catalog, number, and letter
+// are all picked from the seed by a SEPARATE mulberry32 stream, so
+// naming never consumes draws from the trait generator and can never
+// reshuffle a planet's traits. Same seed -> same name, always.
+function generatePlanetName(seed) {
+  const rng = mulberry32((seed ^ 0x9E3779B9) >>> 0);
+  const cats = CONFIG.NAME_CATALOGS;
+  const letters = CONFIG.NAME_LETTERS;
+  // Weighted catalog pick: weight = log10 of the catalog's name space
+  // (numbers x letters). Small famous catalogs (TRAPPIST) still show
+  // up regularly instead of HD swallowing two-thirds of all planets,
+  // and raw collisions stay modest — the birth-time uniqueness layer
+  // in petLogic.js guarantees no two planets in a collection share a
+  // name anyway.
+  let total = 0;
+  const weights = cats.map((c) => {
+    const w = Math.log10((c.max - c.min + 1) * letters.length);
+    total += w;
+    return w;
+  });
+  let pick = rng() * total;
+  let cat = cats[cats.length - 1];
+  for (let i = 0; i < cats.length; i++) {
+    pick -= weights[i];
+    if (pick < 0) { cat = cats[i]; break; }
+  }
+  const num = cat.min + Math.trunc(rng() * (cat.max - cat.min + 1));
+  const letter = letters[Math.trunc(rng() * letters.length)];
+  return formatCatalogName(cat, num, letter);
+}
+
+// One place that builds a catalog name, so the generator and the
+// uniqueness nudge can never drift apart in format.
+function formatCatalogName(cat, num, letter) {
+  return `${cat.prefix}-${num}${letter}`;
+}
+
+// Parse a catalog name back into { catalog, num, letterIdx } — the
+// uniqueness layer in petLogic.js nudges the number/letter when a
+// name is already taken. Returns null for names that aren't in
+// catalog form (e.g. a stored custom name).
+function parseCatalogName(name) {
+  if (typeof name !== 'string') return null;
+  const m = /^(.+)-(\d+)([b-f])$/.exec(name);
+  if (!m) return null;
+  const cat = CONFIG.NAME_CATALOGS.find((c) => c.prefix === m[1]);
+  if (!cat) return null;
+  const num = parseInt(m[2], 10);
+  if (num < cat.min || num > cat.max) return null;
+  return { catalog: cat, num, letterIdx: CONFIG.NAME_LETTERS.indexOf(m[3]) };
+}
 
 // ---------------------------------------------------------------------------
 // Lifecycle stages — identities copied from lifecycle.py (names, modes,
@@ -500,6 +584,10 @@ function generatePlanet(seed, starterTerrain, tilt) {
   const finalRingLabel = finalRingDef.label;
   return {
     seed,
+    // The planet's name — tied to the seed, so the same seed always
+    // has the same name (step 4). Generated on its own RNG stream,
+    // so it never disturbs the trait draws above.
+    name: generatePlanetName(seed),
     terrain: terrain.id,
     terrainLabel: terrain.label,
     bands: terrain.bands.slice(), // [dark pole, mid, bright pole] ANSI codes
@@ -1014,17 +1102,6 @@ function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts) {
             const ch = RAMP[Math.min(RAMP.length - 1, Math.trunc(coreB * RAMP.length))];
             const hue = coreB > 0.75 ? 226 : (coreB > 0.45 ? 214 : 202);
             grid[y][x] = [ch, shadeColor(hue, coreB, 1.0)];
-            // City Lights, at birth: the future city sites glow as
-            // embers in the molten core — the same seeded cells
-            // (seed+777) that become city lights at stage 6, so the
-            // pattern is continuous from birth. (Devon's stage-0
-            // example: city lights read as embers/sparks in the core.)
-            if (activeMuts.has('city-lights')) {
-              const em = noise2(Math.floor(csx * 8), Math.floor(cpy * 8), seed + 777);
-              if (em > 0.90 && (Math.trunc(sec * 2 + em * 10) % 3) !== 0) {
-                grid[y][x] = [em > 0.98 ? '*' : '+', em > 0.97 ? 230 : 222];
-              }
-            }
             continue;
           }
           if (radN <= 0.9) {
@@ -1325,20 +1402,9 @@ function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts) {
         // comes around — never the same identical pattern twice.
         // They are small ('.', '+', '*') in soft warm tones (222/230/
         // 229), much lighter and less dramatic than the old 226 blocks.
-        // City Lights mutation: the lights are DENSER (more of them)
-        // and a few shine cyan or magenta, so a lit-up planet reads
-        // multicolor instead of just warm.
-        const cityBoost = activeMuts.has('city-lights');
         if (b < 0.45 && sz > 0.45) {
           const ln = noise2(Math.floor(cx), Math.floor(cy), seed + 777);
-          // The boost drops the threshold 0.95 -> 0.85: the noise is
-          // interpolated value noise, so its tail is thin — a small
-          // drop barely adds lights (measured 1.26x at 0.90 on a
-          // desert carrier). 0.85 roughly triples the lit cells, so
-          // the mutation reads as a visibly brighter planet, and the
-          // cyan/magenta variants (0.96/0.98) are common enough to
-          // actually see.
-          if (ln > (cityBoost ? 0.85 : 0.95)) {
+          if (ln > 0.95) {
             // Twinkle: each light blinks on its own rhythm (its hash
             // picks the phase) — lit about 3 of every 4 beats.
             const tw = (Math.trunc(sec * 2.5) + Math.trunc(ln * 100)) % 4;
@@ -1346,8 +1412,6 @@ function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts) {
               if (ln > 0.985) { ch = '*'; hue = 229; }
               else if (ln > 0.97) { ch = '+'; hue = 230; }
               else { ch = '.'; hue = 222; }
-              if (cityBoost && ln > 0.98) { ch = '*'; hue = 51; }
-              else if (cityBoost && ln > 0.96) { ch = '+'; hue = 201; }
               emissive = true;
             }
           }
@@ -1359,16 +1423,9 @@ function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts) {
         // rotates) — the old version was fixed in screen space and only
         // blinked in place. The blink phase comes from the ember's own
         // noise value, so each ember keeps its rhythm as it rotates.
-        // City Lights mutation: the last lights burn denser and a few
-        // shine cyan or magenta — the civilization's lights, fading
-        // with the world instead of switching off at stage 6.
-        const cityBoost = activeMuts.has('city-lights');
         const en = noise2(Math.floor(cx), Math.floor(cy), seed);
-        const enThresh = cityBoost ? 0.82 : 0.9;
-        if (en > enThresh && (Math.trunc(sec * 4) + Math.trunc(en * 100)) % 4 === 0) {
-          if (cityBoost && en > 0.985) { hue = 51; ch = '*'; }
-          else if (cityBoost && en > 0.97) { hue = 201; ch = '+'; }
-          else { hue = 160; ch = '*'; }
+        if (en > 0.9 && (Math.trunc(sec * 4) + Math.trunc(en * 100)) % 4 === 0) {
+          hue = 160; ch = '*';
           emissive = true;
         }
       }
@@ -1442,20 +1499,6 @@ function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts) {
         const crystal = activeMuts.has('crystal-crust')
           && ['rock', 'molten', 'crust', 'ocean', 'life', 'civ', 'end'].includes(mode) && b > 0.15;
         const glint = activeMuts.has('sparkling-surface') && b > (mode === 'end' ? 0.25 : 0.5);
-        // City Lights, before civilization: the future city sites glow
-        // as embers in the rock, lava and ocean — the SAME seeded cells
-        // (seed+777) that become city lights at stage 6, so the pattern
-        // is continuous from birth: embers first, cities later. Warm
-        // sparks, sparse, on the lit side. (Devon's stage-0 example:
-        // city lights read as embers/sparks early on, not as cities.)
-        if (activeMuts.has('city-lights') && mode !== 'civ' && mode !== 'end') {
-          const em = noise2(Math.floor(cx), Math.floor(cy), seed + 777);
-          if (em > 0.93 && b > 0.3 && (Math.trunc(sec * 2 + em * 10) % 3) !== 0) {
-            ch = em > 0.985 ? '*' : '+';
-            hue = em > 0.98 ? 230 : 222;
-            glowB = clamp(b + 0.3, 0, 1);
-          }
-        }
         if (glint) {
           const gh = noise2(Math.floor(cx), Math.floor(cy), seed + 888);
           if (gh > 0.965 && (Math.trunc(sec * 3 + gh * 10) % 3) !== 0) {
@@ -1920,7 +1963,7 @@ function gridToText(grid) {
 // ---------------------------------------------------------------------------
 const API = {
   CONFIG, STAGES, STARS, STAGE0_STYLES,
-  mulberry32, generatePlanet, buildFragments, buildSmoke, buildSparkles, buildCoreMarkers, coreMarkerAt, smokeCellAt,
+  mulberry32, generatePlanet, generatePlanetName, formatCatalogName, parseCatalogName, buildFragments, buildSmoke, buildSparkles, buildCoreMarkers, coreMarkerAt, smokeCellAt,
   mutationDef, activeMutations, hasMutation, mutationLabel,
   drawComet, drawMeteorShower, applyGlitch,
   makeGrid, render, renderCozy, downsampleGrid, drawPlanet, drawRings, drawMoons, drawMiniSphere, starGrid,
