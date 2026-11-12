@@ -683,6 +683,39 @@ function starGrid(sec, atmosphere) {
   return grid;
 }
 
+// Starfield layer (Devon, Nov 12): the stars are a layer of the FRAME,
+// not part of the planet. starGrid() bakes the same 80 stars into the
+// 136x76 planet grid, so in a frame bigger than the planet's render
+// the stars stop at the render's edge and the rest of the rectangle
+// is empty black. starfieldGrid() scales those same 80 stars onto a
+// grid of ANY size, so a frame can fill its own box with sky and put
+// the star-free planet render on top. At 136x76 it is identical to
+// starGrid (same positions, same twinkle, same colors) — the fix only
+// changes bigger frames, where the same sky now spreads across the
+// whole rectangle instead of stopping at the planet's edge.
+function starfieldGrid(cols, rows, sec, atmosphere) {
+  const grid = [];
+  for (let y = 0; y < rows; y++) {
+    const row = [];
+    for (let x = 0; x < cols; x++) row.push([' ', null]);
+    grid.push(row);
+  }
+  for (const [sx, sy, sp, ch] of STARS) {
+    const x = Math.min(cols - 1, Math.round(sx * (cols - 1) / (CONFIG.W - 1)));
+    const y = Math.min(rows - 1, Math.round(sy * (rows - 1) / (CONFIG.H - 1)));
+    const tw = 0.5 + 0.5 * Math.sin(sec * 2.0 + sp * 3.0);
+    if (tw > 0.25) grid[y][x] = [ch, tw > 0.7 ? atmosphere : 244];
+  }
+  return grid;
+}
+
+// Starfield layer as HTML: gridToHtml of starfieldGrid. cellW/cellH
+// are the frame's planet-grid cells, so the star glyphs are the same
+// size as the planet's own letters.
+function starfieldHtml(cols, rows, sec, atmosphere, cellW, cellH) {
+  return gridToHtml(starfieldGrid(cols, rows, sec, atmosphere), cellW, cellH);
+}
+
 // Draw one ring band. innerR/outerR are in planet-radius units:
 // the band covers radii innerR..outerR. (Python's single band is
 // inner 1.25, outer 2.4; "double" draws two of these with a gap.)
@@ -1792,15 +1825,17 @@ function applyGlitch(grid, sec, planet) {
 // stage over 3s), sec = global running clock (drives flicker/drift).
 // Returns a grid of [char, ansiColor] cells.
 // Stage-driven scale (Devon, Nov 12): in the solar system, a planet's
-// rendered size grows with its stage — a newborn (stage 0) is half the
-// size of a mature planet (stage 6), so the collection reads as a
-// growth story, a newborn is clearly smaller than a mature planet,
-// and everything stays much smaller than the sun. The stage radii
-// already grow a little (18 -> 28.5); this multiplies them so the
-// growth is obvious side by side.
+// rendered size grows with its stage — a newborn (stage 0) is 0.7x a
+// mature planet (stage 6), so the collection reads as a growth story,
+// a newborn is clearly smaller than a mature planet, and everything
+// stays much smaller than the sun. The floor was 0.5; Devon found
+// stage 0 a speck in the Index (Nov 12, F5 feedback), so it is 0.7
+// now — stage 0 reads as a real planet, still the smallest. The stage
+// radii already grow a little (18 -> 28.5); this multiplies them so
+// the growth is obvious side by side.
 function stageScale(stageIdx) {
   const s = clamp(stageIdx, 0, STAGES.length - 1);
-  return 0.5 + (s / (STAGES.length - 1)) * 0.5;
+  return 0.7 + (s / (STAGES.length - 1)) * 0.3;
 }
 
 // Ring-fit zoom (Devon, Nov 12): the zoom at which this planet's whole
@@ -1851,36 +1886,94 @@ function ringFitZoom(planet, stageIdx, outW, outH) {
   return clamp(fit, 0.35, 1.0);
 }
 
-// Zoom detail (Devon, Nov 12): as the orrery camera zooms in, a disc
-// re-renders at a denser grid instead of just blowing up the same
-// letters — the letters stay the same pixel size on screen, the planet
-// just gets more detailed. Stepped tiers, not continuous: the swap
-// happens once per threshold (ratio = camera zoom / fit zoom), never
-// every frame, so it never flickers or pops mid-zoom. Base tier is the
-// disc's usual 46x24; the tiers step at 2x and 3x — 3x, not 4x, so the
-// top tier is actually reachable: the camera zoom caps at 3, and on a
-// 1440x900 panel the max ratio is ~3.2. Each tier roughly doubles the
-// grid until the full 136x76 render, which is the cap — the DOM never
-// holds more cells than the engine's own full grid. Cell sizes shrink in exact proportion, so
-// the disc's DOM size stays constant (46*2.6 = 92*1.3 = 136*0.88 wide,
-// 24*6.12 = 48*3.06 = 76*1.93 tall) and the planet never jumps.
+// Continuous zoom detail (Devon, Nov 12 — F5 feedback): the orrery
+// planet was a pixelated blob while the detail sheet looked good,
+// because the disc only had THREE stepped tiers (46x24 / 92x48 /
+// 136x76) and the glyphs were CSS-scaled between them. Devon's rule:
+// glyph size NEVER changes with zoom — zooming changes how many
+// characters there are (more detail in, cozier out), tracking the
+// camera zoom smoothly, not in jumps. So the grid resolution is
+// computed from the disc's current on-screen size divided by a fixed
+// cell size: cols = round(worldWidth * zoom / cellW). The disc's
+// world footprint is fixed (46x24 cells at 2.6x6.12px); the cell size
+// is CONSTANT — only the character count moves. Capped at the full
+// 136x76 render; floored so a far-out disc never vanishes. The panel
+// re-renders only when the computed grid size actually changes by
+// >= 1 cell, so it is smooth, not jumpy — and the disc is
+// counter-scaled (scale(1/zoom) in the panel) so the glyphs are
+// rasterized at their final on-screen size, never blown up from
+// sub-pixel letters.
 const DISC_DETAIL_BASE = { cols: 46, rows: 24, cellW: 2.6, cellH: 6.12 };
-const DISC_DETAIL_TIERS = [
-  { minRatio: 0, cols: 46, rows: 24 },
-  { minRatio: 2, cols: 92, rows: 48 },
-  { minRatio: 3, cols: 136, rows: 76 },
-];
-function discDetail(ratio) {
-  let tier = DISC_DETAIL_TIERS[0];
-  for (const t of DISC_DETAIL_TIERS) if (ratio >= t.minRatio) tier = t;
-  const idx = DISC_DETAIL_TIERS.indexOf(tier);
+const DISC_WORLD_W = DISC_DETAIL_BASE.cols * DISC_DETAIL_BASE.cellW; // 119.6
+const DISC_WORLD_H = DISC_DETAIL_BASE.rows * DISC_DETAIL_BASE.cellH; // 146.88
+function discDetail(zoom) {
+  const z = (zoom && isFinite(zoom) && zoom > 0) ? zoom : 1;
   return {
-    tier: idx,
-    cols: tier.cols,
-    rows: tier.rows,
-    cellW: +((DISC_DETAIL_BASE.cols * DISC_DETAIL_BASE.cellW) / tier.cols).toFixed(2),
-    cellH: +((DISC_DETAIL_BASE.rows * DISC_DETAIL_BASE.cellH) / tier.rows).toFixed(2),
+    cols: Math.max(8, Math.min(CONFIG.W, Math.round(DISC_WORLD_W * z / DISC_DETAIL_BASE.cellW))),
+    rows: Math.max(6, Math.min(CONFIG.H, Math.round(DISC_WORLD_H * z / DISC_DETAIL_BASE.cellH))),
+    cellW: DISC_DETAIL_BASE.cellW,
+    cellH: DISC_DETAIL_BASE.cellH,
   };
+}
+
+// Continuous sun resolution (Devon, Nov 12 — F5 feedback): the sun
+// was rendered once at a fixed 84x42 and CSS-scaled, so zoomed in
+// it was a giant pixel blob and zoomed out a tiny one. Same rule as
+// the discs — the sun re-renders at a resolution matching its
+// on-screen size, glyph size constant. The sun's world footprint is
+// 84x42 cells at 3.67x6.6px (308x277px). Capped at 2x zoom (168x84):
+// beyond that the cells grow instead, so the DOM stays bounded while
+// the sun keeps its footprint — the sun is a soft ball, slightly
+// larger glyphs at max zoom still read.
+const SUN_BASE = { cols: 84, rows: 42, cellW: 3.67, cellH: 6.6 };
+function sunDetail(zoom) {
+  const z = (zoom && isFinite(zoom) && zoom > 0) ? zoom : 1;
+  const rz = Math.min(z, 2);
+  return {
+    cols: Math.max(12, Math.round(SUN_BASE.cols * rz)),
+    rows: Math.max(6, Math.round(SUN_BASE.rows * rz)),
+    cellW: +(SUN_BASE.cellW * z / rz).toFixed(2),
+    cellH: +(SUN_BASE.cellH * z / rz).toFixed(2),
+  };
+}
+
+// Sidebar crop (Devon, Nov 12 — F5 feedback): the Explorer pet
+// renders the planet big in a narrow frame — the full 136x76 grid is
+// mostly empty sky around a small planet. sidebarCrop returns the
+// grid box to show: the body + its moons and atmosphere, centered on
+// the planet's center. Rings are allowed to clip at the frame edge
+// (standalone frames, same rule as the Index tiles). Stage 0's
+// shattered smoke spreads ~2x the body radius, so it gets a wider
+// margin (2.2); later stages get 1.7, which covers the body + moon
+// orbits (~1.55x). The radius follows the stage morph (lerp from the
+// previous stage over 3s), so the box tracks the birth condensing
+// instead of clipping it. Geometry-based, not content-based, so the
+// box never jitters as smoke and sparks flicker — and quantized to
+// 4-cell steps, so it only moves in small steps during a morph.
+function sidebarCrop(planet, stageIdx, t) {
+  const { W, H, CX, CY } = CONFIG;
+  const s = clamp(stageIdx, 0, STAGES.length - 1);
+  const st = STAGES[s];
+  const prev = STAGES[(s - 1 + STAGES.length) % STAGES.length];
+  const m = clamp((t || 0) / 3.0, 0, 1);
+  const r = lerp(prev.radius, st.radius, m) * (planet.size || 1);
+  const margin = s === 0 ? 2.2 : 1.7;
+  const qW = Math.max(8, Math.ceil((r * margin * 2) / 4) * 4);
+  const qH = Math.max(6, Math.ceil((r * margin) / 4) * 4);
+  const x0 = Math.max(0, Math.round(CX - qW / 2));
+  const x1 = Math.min(W, x0 + qW);
+  const y0 = Math.max(0, Math.round(CY - qH / 2));
+  const y1 = Math.min(H, y0 + qH);
+  return { x0, y0, cols: x1 - x0, rows: y1 - y0 };
+}
+
+// Crop a grid to a box (see sidebarCrop): returns the sub-grid.
+function cropGrid(grid, box) {
+  const out = [];
+  for (let y = box.y0; y < box.y0 + box.rows; y++) {
+    out.push(grid[y].slice(box.x0, box.x0 + box.cols));
+  }
+  return out;
 }
 
 function render(planet, stageIdx, t, sec, zoom, stage0Style, smokeScale, noStars) {
@@ -2499,7 +2592,22 @@ function gridToHtml(grid, cellW, cellH) {
         html += `<span class="pp-run" style="width:${w}px"></span>`;
       } else {
         const esc = buf.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        html += `<span class="pp-run" style="width:${w}px;color:${ansi256ToHex(cur)}">${esc}</span>`;
+        // Space-only runs with a DARK color are the night side:
+        // RAMP[0] is a space, so the renderer paints the dark disc
+        // as colored spaces. Give them that color as a background so
+        // the run is opaque — otherwise, in a layered frame, the
+        // starfield behind would show through the planet's dark
+        // side. Bright space cells (a city light swallowed by a dark
+        // belt) stay transparent, as they are today — they are
+        // invisible, not disc. On a #050505 page the dark backgrounds
+        // (#000000–#303030) are imperceptible, so baked-in renders
+        // look exactly as before.
+        let bg = '';
+        if (/^ +$/.test(buf)) {
+          const [r, g, b] = ansi256ToRgb(cur);
+          if ((r + g + b) / 3 < 96) bg = `;background:${ansi256ToHex(cur)}`;
+        }
+        html += `<span class="pp-run" style="width:${w}px;color:${ansi256ToHex(cur)}${bg}">${esc}</span>`;
       }
       buf = '';
     };
@@ -2527,7 +2635,7 @@ const API = {
   mutationDef, activeMutations, hasMutation, mutationLabel,
   collisionFrame, collisionPhase, collisionShardAt, COLLISION_TIMELINE, COLLISION_END,
   drawComet, drawMeteorShower, applyGlitch,
-  makeGrid, render, renderCozy, downsampleGrid, drawPlanet, drawRings, drawMoons, drawMiniSphere, starGrid, stageScale, ringFitZoom, discDetail,
+  makeGrid, render, renderCozy, downsampleGrid, drawPlanet, drawRings, drawMoons, drawMiniSphere, starGrid, starfieldGrid, starfieldHtml, stageScale, ringFitZoom, discDetail, sunDetail, sidebarCrop, cropGrid,
   ansi256ToHex, ansi256ToRgb, shadeColor, blendHue, gridToHtml, gridToText,
   noise2, continentField, valueNoise, hash2, clamp, lerp,
 };

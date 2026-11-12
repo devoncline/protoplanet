@@ -1687,7 +1687,8 @@ check('name: generatePlanet carries the seed name',
 
 // --- 18. Solar-system disc rules (Devon, Nov 12) ---------------------------
 // (1) Stage-driven scale: a planet's rendered size grows with its stage —
-// stage 0 is half the size of stage 6. (2) No per-planet stars in the
+// stage 0 is 0.7x the size of stage 6 (was 0.5; Devon found stage 0 a
+// speck in the Index, Nov 12 F5 feedback). (2) No per-planet stars in the
 // solar system: render()/renderCozy() take a noStars flag; the orrery
 // discs and Index tiles pass it, standalone frames don't. (3) Full
 // rings in the orrery: ringFitZoom shrinks a planet just enough that
@@ -1697,8 +1698,8 @@ check('name: generatePlanet carries the seed name',
 {
   // (1) stageScale: 0.5 at stage 0, 1.0 at stage 6, strictly increasing.
   const scales = [0, 1, 2, 3, 4, 5, 6].map((s) => P.stageScale(s));
-  check('disc: stageScale is 0.5 at stage 0 and 1.0 at stage 6',
-    scales[0] === 0.5 && scales[6] === 1.0, scales.join(', '));
+  check('disc: stageScale is 0.7 at stage 0 and 1.0 at stage 6',
+    scales[0] === 0.7 && scales[6] === 1.0, scales.join(', '));
   check('disc: stageScale strictly increases with stage',
     scales.every((v, i) => i === 0 || v > scales[i - 1]));
   // A stage-0 planet really does render smaller than a mature one:
@@ -1790,43 +1791,164 @@ check('name: generatePlanet carries the seed name',
     clipped === 0, `${checked} renders, ${clipped} clipped, worst margin ${worstMargin} cell(s)`);
 }
 
-// --- 19. Zoom detail (Devon, Nov 12) ---------------------------------------
-// As the orrery camera zooms in, a disc re-renders at a denser grid
-// instead of just blowing up the same letters — the letters stay the
-// same pixel size on screen, the planet just gets more detailed.
-// Stepped tiers (never continuous), capped at the full 136x76 render,
-// DOM size constant across tiers, same planet at every tier.
+// --- 20. Starfield layer (Devon, Nov 12) -------------------------------------
+// The stars are a layer of the FRAME, not part of the planet: a frame
+// fills its own box with P.starfieldHtml (the same 80 stars, scaled
+// from the 136x76 reference) and puts the star-free planet render on
+// top. At 136x76 the layer is exactly the old baked-in starfield.
 {
-  const d0 = P.discDetail(0), d199 = P.discDetail(1.99), d2 = P.discDetail(2),
-    d299 = P.discDetail(2.99), d3 = P.discDetail(3), d100 = P.discDetail(100);
-  check('zoom: detail tiers step at ratios 2 and 3',
-    d0.tier === 0 && d199.tier === 0 && d2.tier === 1 && d299.tier === 1 && d3.tier === 2 && d100.tier === 2,
-    `0->${d0.tier} 1.99->${d199.tier} 2->${d2.tier} 2.99->${d299.tier} 3->${d3.tier} 100->${d100.tier}`);
-  check('zoom: tier grids are 46x24, 92x48, 136x76 (cap = full render)',
-    d0.cols === 46 && d0.rows === 24 && d2.cols === 92 && d2.rows === 48
-    && d3.cols === P.CONFIG.W && d3.rows === P.CONFIG.H,
-    `${d0.cols}x${d0.rows} / ${d2.cols}x${d2.rows} / ${d3.cols}x${d3.rows}`);
-  // DOM size stays constant: the disc never jumps when the tier swaps.
-  const sizeOk = [d0, d2, d3].every((d) =>
-    Math.abs(d.cols * d.cellW - 119.6) < 0.5 && Math.abs(d.rows * d.cellH - 146.88) < 0.5);
-  check('zoom: disc DOM size is constant across tiers',
-    sizeOk, [d0, d2, d3].map((d) => `${(d.cols * d.cellW).toFixed(1)}x${(d.rows * d.cellH).toFixed(1)}`).join(' / '));
-  // Same planet, just sharper: the tier-2 grid downsampled to 46x24
-  // is exactly the tier-0 grid (the 1:1 downsample is the identity).
+  const atmo = 27;
+  // At the reference size the layer IS the old starfield, cell for cell.
+  check('stars: starfieldGrid(136, 76) is identical to starGrid',
+    JSON.stringify(P.starfieldGrid(136, 76, 5, atmo)) === JSON.stringify(P.starGrid(5, atmo)));
+  // It scales to any frame: every star lands inside the new bounds,
+  // glyphs stay . + *, colors stay 244 / atmosphere.
+  function starCells(g) {
+    let n = 0;
+    for (const row of g) for (const [ch, col] of row) {
+      if (ch !== ' ') {
+        n++;
+        if (!['.', '+', '*'].includes(ch) || (col !== 244 && col !== atmo)) return -1;
+      }
+    }
+    return n;
+  }
+  const distinct = new Set(P.STARS.map(([sx, sy]) => sx + ',' + sy)).size;
+  const small = P.starfieldGrid(34, 19, 5, atmo);
+  const big = P.starfieldGrid(258, 137, 5, atmo);
+  // Twinkle hides some stars at any given sec — compare against the
+  // VISIBLE count at the reference size, not the 80 positions.
+  const visibleRef = starCells(P.starfieldGrid(136, 76, 5, atmo));
+  check('stars: scaled layer keeps valid glyphs and colors',
+    starCells(small) > 0 && starCells(big) > 0, `small=${starCells(small)} big=${starCells(big)} ref=${visibleRef}`);
+  check('stars: scaling down only loses stars to collisions, never adds',
+    starCells(small) <= visibleRef && starCells(big) <= distinct);
+  check('stars: a bigger frame keeps every visible star (no collisions scaling up)',
+    starCells(big) === visibleRef, `${starCells(big)} vs ${visibleRef} visible at 136x76`);
+  // Positions scale with the frame: the first star lands at its
+  // scaled coordinates (checked at a sec where it is visibly on).
+  const [sx0, sy0, sp0] = P.STARS[0];
+  let visSec = null;
+  for (let s = 0; s < 40 && visSec === null; s += 0.5) {
+    if (0.5 + 0.5 * Math.sin(s * 2.0 + sp0 * 3.0) > 0.7) visSec = s;
+  }
+  const scaled = P.starfieldGrid(200, 100, visSec, atmo);
+  const ex = Math.round(sx0 * 199 / 135), ey = Math.round(sy0 * 99 / 75);
+  check('stars: positions scale proportionally with the frame',
+    scaled[ey][ex][0] !== ' ', `star 0 -> ${ex},${ey} at sec ${visSec}`);
+  // Twinkle: same sec -> same sky, different sec -> a different sky.
+  check('stars: layer twinkles with sec and is deterministic per sec',
+    JSON.stringify(P.starfieldGrid(68, 38, 5, atmo)) === JSON.stringify(P.starfieldGrid(68, 38, 5, atmo))
+    && JSON.stringify(P.starfieldGrid(68, 38, 5, atmo)) !== JSON.stringify(P.starfieldGrid(68, 38, 5.4, atmo)));
+  // Composition: a star-free planet render + the layer, overlaid, is
+  // the old stars-baked-in render. A cell is empty iff its COLOR is
+  // null — the night side is RAMP[0] (a space) with a dark color, so
+  // a blank char alone does not mean empty. (Planets without sky
+  // mutations only — comet / meteor-shower / glitch paint the sky
+  // themselves, so the layer would double-count there.)
+  const skyMut = new Set(['comet', 'meteor-shower', 'glitch']);
+  let composed = 0, composeOk = true, stage0Diffs = 0, stage0BareDrawn = true;
+  for (let s = 1; s <= 200 && composed < 3; s++) {
+    const pl = P.generatePlanet(s);
+    if ((pl.mutations || []).some((m) => skyMut.has(m))) continue;
+    for (const stage of [0, 6]) {
+      const withStars = P.render(pl, stage, 10, 5, 1.0);
+      const bare = P.render(pl, stage, 10, 5, 1.0, undefined, 1, true);
+      const layer = P.starfieldGrid(136, 76, 5, pl.atmosphere);
+      for (let y = 0; y < 76; y++) for (let x = 0; x < 136; x++) {
+        const over = bare[y][x][1] === null ? layer[y][x] : bare[y][x];
+        if (over[0] !== withStars[y][x][0] || over[1] !== withStars[y][x][1]) {
+          if (stage === 6) { composeOk = false; break; }
+          // Stage 0 only: the renderer yields to a star — a sparkle
+          // or fragment it drew over the star's cell in the bare
+          // render, where the starred render kept the star. One or
+          // two cells per planet, and the planet's own debris in
+          // front of a background star is the correct depth order.
+          stage0Diffs++;
+          if (bare[y][x][1] === null) stage0BareDrawn = false;
+        }
+      }
+      if (!composeOk) break;
+    }
+    composed++;
+  }
+  check('stars: noStars render + layer overlays to exactly the starred render (stage 6)',
+    composeOk, `${composed} planets`);
+  check('stars: stage-0 overlay differs only where the renderer drew over a star',
+    stage0Diffs <= 15 && stage0BareDrawn, `${stage0Diffs} differing cells across ${composed} planets`);
+  // The night side must be opaque in HTML: dark space-only runs get
+  // their color as a background, so the starfield layer behind never
+  // shows through the dark disc. Bright space cells (a city light
+  // swallowed by a dark belt) stay transparent.
+  const nightGrid = [[[' ', 16], [' ', 16], ['.', 232]], [[' ', 229], [' ', null], ['*', 250]]];
+  const nightHtml = P.gridToHtml(nightGrid, 10, 18);
+  check('stars: dark space runs paint their background (opaque night side)',
+    nightHtml.includes('background:#000000'));
+  check('stars: bright space runs stay transparent (no background)',
+    !nightHtml.includes('background:#ffffaf') && !nightHtml.includes('background:#ffffd7'));
+  check('stars: glyph runs are untouched by the background rule',
+    !nightHtml.includes('background:#080808'));
+  check('stars: starfieldHtml is gridToHtml of the layer',
+    P.starfieldHtml(46, 24, 5, atmo, 2.6, 4.68) === P.gridToHtml(P.starfieldGrid(46, 24, 5, atmo), 2.6, 4.68));
+}
+
+// --- 19. Continuous zoom detail (Devon, Nov 12 — F5 feedback) -------------
+// The orrery planet was a pixelated blob while the detail sheet looked
+// good: the disc only had THREE stepped tiers (46x24 / 92x48 / 136x76)
+// and the glyphs were CSS-scaled between them. Devon's rule: glyph
+// size NEVER changes with zoom — zooming changes how many characters
+// there are (more detail in, cozier out), tracking the camera zoom
+// smoothly. So the grid resolution is computed from the disc's
+// on-screen size divided by a fixed cell size (discDetail), and the
+// disc is counter-scaled in the panel so the glyphs are rasterized at
+// their final size. The sun gets the same treatment (sunDetail).
+{
+  // discDetail is continuous in the camera zoom, not stepped: 1.5x
+  // lands between 1x and 2x, and 1.99 vs 2.01 differ by at most a cell.
+  const d03 = P.discDetail(0.3), d1 = P.discDetail(1), d15 = P.discDetail(1.5),
+    d199 = P.discDetail(1.99), d201 = P.discDetail(2.01), d26 = P.discDetail(2.6),
+    d3 = P.discDetail(3), d100 = P.discDetail(100);
+  check('zoom: detail is continuous — 1.5x lands between 1x and 2x, not on a tier',
+    d1.cols === 46 && d15.cols === 69 && d199.cols === 92 && d201.cols === 92 && d26.cols === 120,
+    `1->${d1.cols} 1.5->${d15.cols} 1.99->${d199.cols} 2.01->${d201.cols} 2.6->${d26.cols}`);
+  check('zoom: no tier jump at 2x — 1.99 and 2.01 differ by at most 1 cell',
+    Math.abs(d199.cols - d201.cols) <= 1 && Math.abs(d199.rows - d201.rows) <= 1,
+    `${d199.cols}x${d199.rows} vs ${d201.cols}x${d201.rows}`);
+  check('zoom: resolution caps at the full 136x76 render',
+    d3.cols === P.CONFIG.W && d100.cols === P.CONFIG.W && d3.rows <= P.CONFIG.H,
+    `3->${d3.cols}x${d3.rows} 100->${d100.cols}x${d100.rows}`);
+  check('zoom: zooming out goes cozier (fewer chars), never vanishes',
+    d03.cols === 14 && d03.rows === 7, `${d03.cols}x${d03.rows}`);
+  check('zoom: glyph size is constant at every zoom (2.6x6.12)',
+    [d03, d1, d15, d26, d3].every((d) => d.cellW === 2.6 && d.cellH === 6.12));
+  check('zoom: columns grow monotonically with zoom',
+    [0.3, 0.5, 1, 1.5, 2, 2.6, 3].map((z) => P.discDetail(z).cols)
+      .every((v, i, a) => i === 0 || v >= a[i - 1]));
+  // The disc's local (counter-scaled) size is its on-screen size:
+  // cols*cellW == world width * zoom (capped at the full grid), so
+  // the planet never jumps as the resolution changes.
+  check('zoom: disc local size tracks on-screen size (cols*cellW == 119.6*zoom, capped)',
+    [0.5, 1, 2, 2.6, 3].every((z) => {
+      const d = P.discDetail(z);
+      const want = Math.min(119.6 * z, P.CONFIG.W * 2.6);
+      return Math.abs(d.cols * d.cellW - want) < 2.6;
+    }));
+  // Same planet, just sharper: the 136x76 grid downsampled to 46x24
+  // is exactly the 46x24 grid (the 1:1 downsample is the identity).
   const zp = P.generatePlanet(40059);
   const z = Math.min(P.stageScale(6), P.ringFitZoom(zp, 6, 46, 24));
   const hi = P.renderCozy(zp, 6, 10, 5, z, 136, 76, undefined, 0.5, true);
   const lo = P.renderCozy(zp, 6, 10, 5, z, 46, 24, undefined, 0.5, true);
-  check('zoom: tier-2 grid downsampled to tier-0 is exactly the tier-0 grid',
+  check('zoom: 136x76 grid downsampled to 46x24 is exactly the 46x24 grid',
     gridsEqual(P.downsampleGrid(hi, 46, 24), lo));
   // And the denser grids really do carry more detail.
   const count = (g) => g.flat().filter((c) => c[0] !== ' ').length;
   const mid = P.renderCozy(zp, 6, 10, 5, z, 92, 48, undefined, 0.5, true);
   const n0 = count(lo), n1 = count(mid), n2 = count(hi);
-  check('zoom: denser tiers show strictly more non-blank cells',
+  check('zoom: denser grids show strictly more non-blank cells',
     n0 < n1 && n1 < n2, `46x24=${n0} 92x48=${n1} 136x76=${n2}`);
-  // Ring fit stays conservative at the top tier: the base disc zoom
-  // (computed at 46x24) still fits the whole ring system at 136x76.
+  // Ring fit stays conservative at the top resolution: the base disc
+  // zoom (computed at 46x24) still fits the whole ring system at 136x76.
   let fitOk = true;
   for (let s = 1; s <= 3000; s++) {
     const pl = P.generatePlanet(s);
@@ -1858,8 +1980,92 @@ check('name: generatePlanet carries the seed name',
       if (minEdge < 1) clipped2++;
     }
   }
-  check('zoom: full rings still fit at the top tier (base disc zoom)',
+  check('zoom: full rings still fit at the top resolution (base disc zoom)',
     clipped2 === 0, `${checked2} renders, ${clipped2} clipped`);
+  // sunDetail: same rule as the discs — resolution tracks the zoom,
+  // glyph size constant, capped at 2x (168x84) so the DOM stays bounded.
+  const s05 = P.sunDetail(0.5), s1 = P.sunDetail(1), s2 = P.sunDetail(2), s3 = P.sunDetail(3);
+  check('zoom: sun resolution tracks zoom — 84x42 at 1x, 168x84 at 2x',
+    s1.cols === 84 && s1.rows === 42 && s2.cols === 168 && s2.rows === 84,
+    `1->${s1.cols}x${s1.rows} 2->${s2.cols}x${s2.rows}`);
+  check('zoom: sun caps at 2x (168 cols) and grows cells instead',
+    s3.cols === 168 && s3.rows === 84 && s3.cellW === 5.5 && s3.cellH === 9.9,
+    `3->${s3.cols}x${s3.rows} @ ${s3.cellW}x${s3.cellH}`);
+  check('zoom: sun goes cozier zoomed out (42x21 at 0.5x)',
+    s05.cols === 42 && s05.rows === 21, `${s05.cols}x${s05.rows}`);
+  check('zoom: sun glyph size is constant up to the 2x cap',
+    s05.cellW === 3.67 && s05.cellH === 6.6 && s1.cellW === 3.67 && s2.cellW === 3.67);
+}
+
+// --- 21. Sidebar crop + share PNG density (Devon, Nov 12 — F5 feedback) ----
+// The sidebar pet was a small planet in a big black grid; now the
+// render is cropped to the planet's own extent (sidebarCrop) and shown
+// star-free on the VS Code gray. And the share PNG passed P.CONFIG.W/H
+// as stage0Style/smokeScale, which drew stage 0 as a sparse
+// non-exploded core (264 cells instead of 670).
+{
+  const cp = P.generatePlanet(805839337);
+  const countCells = (g) => g.flat().filter((c) => c[1] !== null).length;
+  // The crop covers the body + moons + atmosphere at every stage, and
+  // is much smaller than the full grid — so the planet fills the frame.
+  for (const st of [0, 1, 6]) {
+    const box = P.sidebarCrop(cp, st, 10);
+    const r = P.STAGES[st].radius * cp.size;
+    check(`crop: stage ${st} box covers the body (r=${r})`,
+      box.cols >= 2 * r * 1.5 && box.rows >= r * 1.5,
+      `${box.cols}x${box.rows} for r=${r}`);
+    check(`crop: stage ${st} box is much smaller than the full grid`,
+      box.cols < P.CONFIG.W && box.rows < P.CONFIG.H, `${box.cols}x${box.rows}`);
+  }
+  // The settled content (body + smoke + moons) sits inside the crop —
+  // the rings may touch the edge (they are allowed to clip), but the
+  // planet itself never is.
+  for (const st of [0, 6]) {
+    const box = P.sidebarCrop(cp, st, 10);
+    const g = P.render(cp, st, 10, 5, 1.0, undefined, 1, true);
+    let loX = 999, hiX = -1, loY = 999, hiY = -1;
+    for (let y = 0; y < 76; y++) for (let x = 0; x < 136; x++) {
+      if (g[y][x][1] === null) continue;
+      // Rings are excluded: they are allowed to clip. A ring cell is
+      // far from the center in x (beyond the body's 1.7x margin) —
+      // approximate by only counting cells within the crop's own
+      // x-range widened by the ring band. Simpler: the body is the
+      // disc — check the central band (the disc's own rows) is inside.
+      if (Math.abs(y - 38) > 20) continue;
+      loX = Math.min(loX, x); hiX = Math.max(hiX, x);
+      loY = Math.min(loY, y); hiY = Math.max(hiY, y);
+    }
+    check(`crop: stage ${st} central content sits inside the crop`,
+      loX >= box.x0 && hiX < box.x0 + box.cols && loY >= box.y0 && hiY < box.y0 + box.rows,
+      `content x[${loX},${hiX}] y[${loY},${hiY}] vs crop x[${box.x0},${box.x0 + box.cols - 1}] y[${box.y0},${box.y0 + box.rows - 1}]`);
+  }
+  // cropGrid slices correctly and the cropped render is dense — the
+  // planet fills its frame instead of sitting small in a big grid.
+  for (const st of [0, 6]) {
+    const box = P.sidebarCrop(cp, st, 10);
+    const g = P.render(cp, st, 10, 5, 1.0, undefined, 1, true);
+    const cg = P.cropGrid(g, box);
+    check(`crop: cropGrid returns the stage-${st} box`,
+      cg[0].length === box.cols && cg.length === box.rows, `${cg[0].length}x${cg.length}`);
+    check(`crop: cropped stage-${st} render is dense (planet fills it)`,
+      countCells(cg) > 400, `${countCells(cg)} non-blank of ${box.cols * box.rows}`);
+  }
+  // The crop is stable across secs (geometry-based, not content-based)
+  // and follows the birth morph (wider at t=0, tighter settled).
+  const b0 = P.sidebarCrop(cp, 0, 10), b0b = P.sidebarCrop(cp, 0, 5.4);
+  check('crop: same box at different secs (no flicker jitter)',
+    b0.cols === b0b.cols && b0.rows === b0b.rows, `${b0.cols}x${b0.rows}`);
+  const bBirth = P.sidebarCrop(cp, 0, 0);
+  check('crop: birth morph starts wider than the settled core',
+    bBirth.cols > b0.cols, `t=0: ${bBirth.cols} vs settled: ${b0.cols}`);
+  // Share PNG input: the canonical stage-0 render is dense. The old
+  // buggy call (stage0Style=136, smokeScale=76) drew only 264 cells.
+  const s0 = P.render(cp, 0, 10, 5, 1.0);
+  check('share: canonical stage-0 render is dense (not the 264-cell bug)',
+    countCells(s0) > 600, `${countCells(s0)} non-blank cells`);
+  const s0buggy = P.render(cp, 0, 10, 5, 1.0, P.CONFIG.W, P.CONFIG.H);
+  check('share: the old arg order really was wrong (sparse stage 0)',
+    countCells(s0buggy) < countCells(s0) / 2, `${countCells(s0buggy)} vs ${countCells(s0)}`);
 }
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);

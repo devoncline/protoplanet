@@ -724,10 +724,11 @@ check('ext: sun shading is a graded warm ramp (smooth granulation, small steps)'
   && extSrc.includes('smoothGn'));
 check('ext: star has no stamped white-rectangle core',
   !extSrc.includes("['@', 231]"));
-check('ext: sun renders finer (84x42 grid, smaller cells, same display size)',
-  extSrc.includes('var W = 84, H = 42') && extSrc.includes('P.gridToHtml(grid, 3.67, 6.6)'));
+check('ext: sun defaults to the finer 84x42 grid (smaller cells, same display size)',
+  extSrc.includes('cols = 84') && extSrc.includes('rows = 42')
+  && extSrc.includes('P.gridToHtml(grid, cellW, cellH)'));
 check('ext: sun granulation churns over time (sec-dependent)',
-  extSrc.includes('function starHtml(sec)') && extSrc.includes('Math.sin(sec * 0.9'));
+  extSrc.includes('function starHtml(sec, cols, rows, cellW, cellH)') && extSrc.includes('Math.sin(sec * 0.9'));
 check('ext: sun has solar flares',
   extSrc.includes('FLARES') && extSrc.includes('Solar flares'));
 check('ext: sun is bright (lifted floor + gamma lift, 229 peaks, no white core)',
@@ -752,7 +753,7 @@ check('ext: limb flames fizzle on their own fast phase (not the old slow halo wi
 // (d2rel with the real edgeRadius), not the fixed geometric radius —
 // flame-tongue disc cells would otherwise pollute the band.
 (function () {
-  const starSrc = extSrc.slice(extSrc.indexOf('function starHtml(sec) {'), extSrc.indexOf('// --- orrery'));
+  const starSrc = extSrc.slice(extSrc.indexOf('function starHtml(sec, cols, rows, cellW, cellH) {'), extSrc.indexOf('// --- orrery'));
   const starHtml = new Function('P', starSrc + '\nreturn starHtml;')({
     noise2: Planet.noise2,
     gridToHtml: (grid) => grid,
@@ -798,7 +799,7 @@ check('ext: limb flames fizzle on their own fast phase (not the old slow halo wi
 // seconds later, and vary in shape (taller/shorter, wider/narrower),
 // not one bump shape stamped around the rim.
 (function () {
-  const starSrc = extSrc.slice(extSrc.indexOf('function starHtml(sec) {'), extSrc.indexOf('// --- orrery'));
+  const starSrc = extSrc.slice(extSrc.indexOf('function starHtml(sec, cols, rows, cellW, cellH) {'), extSrc.indexOf('// --- orrery'));
   const starHtml = new Function('P', starSrc + '\nreturn starHtml;')({
     noise2: Planet.noise2,
     gridToHtml: (grid) => grid,
@@ -885,7 +886,7 @@ check('ext: sun edge carries flames (tongues grow/die at different angles, not a
 // must flip lit/blank as the edge passes over it, while the disc
 // interior stays solid.
 (function () {
-  const starSrc = extSrc.slice(extSrc.indexOf('function starHtml(sec) {'), extSrc.indexOf('// --- orrery'));
+  const starSrc = extSrc.slice(extSrc.indexOf('function starHtml(sec, cols, rows, cellW, cellH) {'), extSrc.indexOf('// --- orrery'));
   const starHtml = new Function('P', starSrc + '\nreturn starHtml;')({
     noise2: Planet.noise2,
     gridToHtml: (grid) => grid,
@@ -927,6 +928,32 @@ check('ext: sun edge carries flames (tongues grow/die at different angles, not a
 })();
 check('ext: sun re-renders on the tick (never frozen)',
   extSrc.includes('renderStar()') && extSrc.includes('tick % 2 === 0'));
+// The sun re-renders at a resolution matching its on-screen size
+// (Devon, Nov 12 — continuous zoom detail): starHtml takes
+// cols/rows/cell size, defaulting to the old 84x42. Run the real
+// starHtml at a small and a large resolution and check the grid size
+// and the brightness rules (brightest 229, never 231) hold at both.
+(function () {
+  const starSrc = extSrc.slice(extSrc.indexOf('function starHtml(sec, cols, rows, cellW, cellH) {'), extSrc.indexOf('// --- orrery'));
+  const starHtml = new Function('P', starSrc + '\nreturn starHtml;')({
+    noise2: Planet.noise2,
+    gridToHtml: (grid) => grid,
+  });
+  const small = starHtml(5, 42, 21);
+  const large = starHtml(5, 168, 84);
+  const def = starHtml(5);
+  check('sun resolution: starHtml renders the requested grid size',
+    small.length === 21 && small[0].length === 42 && large.length === 84 && large[0].length === 168
+    && def.length === 42 && def[0].length === 84,
+    `${small[0].length}x${small.length} / ${large[0].length}x${large.length} / default ${def[0].length}x${def.length}`);
+  let maxCol = 0, has231 = false, lit = 0;
+  for (const row of small) for (const [ch, col] of row) {
+    if (col !== null) { maxCol = Math.max(maxCol, col); if (col === 231) has231 = true; if (ch !== ' ') lit++; }
+  }
+  check('sun resolution: brightest color is 229, never 231, at small size too',
+    maxCol <= 229 && !has231 && maxCol >= 208 && lit > 50,
+    'max ' + maxCol + ', ' + lit + ' lit cells');
+})();
 // Sidebar (Devon, Nov 11): trimmed to the stage line, the grown-from
 // line, and the XP bar. No flavor description, no world details —
 // those live in the detail panel / Pokedex, which still shows them.
@@ -937,18 +964,18 @@ check('sidebar: meta is only the grown-from line',
   && !extSrc.includes('msg.summary'));
 check('sidebar: XP bar has a visible track and a numbers label',
   extSrc.includes('#xplabel') && extSrc.includes("getElementById('xplabel')"));
-check('ext: orrery discs render from the discDetail tiers (46x24 base, not 68x38)',
+check('ext: orrery discs render from the continuous detail grid (not tiers, not 68x38)',
   extSrc.includes('P.renderCozy(d.planet.planet, d.planet.stageIdx, 10, sec, discZoom, detail.cols, detail.rows, undefined, 0.5, true), detail.cellW, detail.cellH')
-  && !extSrc.includes('68, 38), 3.4, 6.12'));
+  && !extSrc.includes('68, 38), 3.4, 6.12') && !extSrc.includes('discTier'));
 check('ext: detail panel uses the full render, not the cozy downsample',
-  extSrc.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5), 2.35, 4.23'));
+  extSrc.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5, true), 2.35, 4.23'));
 // The detail sheet uses the full render, not the cozy downsample —
 // the 4.4/7.92 cells now belong to the Index tiles, so this scopes
 // the check to renderDetail itself instead of the whole file.
 (function () {
   const detailSrc = extSrc.slice(extSrc.indexOf('function renderDetail() {'), extSrc.indexOf('function indexSignature() {'));
   check('ext: detail sheet uses the full render, not the cozy downsample',
-    detailSrc.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5)')
+    detailSrc.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5, true)')
     && !detailSrc.includes('renderCozy'), detailSrc.slice(0, 200));
 })();
 check('ext: card mutation badge keeps the full MUTATION label',
@@ -958,6 +985,28 @@ check('ext: card shows the stage', extSrc.includes('esc(p.stageName)'));
 check('ext: discs share one z-index — no depth sorting (separation is geometric)',
   extSrc.includes("d.el.style.zIndex = '100'") && !extSrc.includes('10 + Math.round(pos.y)'));
 check('ext: no name labels on the orrery', !extSrc.includes('discName'));
+// --- Continuous zoom detail + F5 feedback (Nov 12) -----------------------
+// The orrery planet was a pixelated blob while the detail sheet looked
+// good (stepped tiers + CSS-scaled glyphs); the sun was a blob at any
+// zoom; hiding the UI left no way back; the sidebar pet sat small in
+// a black box; the Index showed a gray rectangle with a speck.
+check('ext: disc detail follows the camera zoom directly (continuous, not stepped)',
+  extSrc.includes('return P.discDetail(zoom);') && extSrc.includes('P.sunDetail(zoom)'));
+check('ext: discs + star counter-scale so glyphs stay at final size',
+  extSrc.includes('scale(var(--inv-zoom, 1))') && extSrc.includes("setProperty('--inv-zoom'"));
+check('ext: hide-UI pill exists, hidden by default, shown while hidden',
+  extSrc.includes('id="showUiPill"') && extSrc.includes('#showUiPill { display: none;')
+  && extSrc.includes('body.hide-ui #showUiPill { display: block; }'));
+check('ext: hide-UI pill click brings the UI back',
+  extSrc.includes("getElementById('showUiPill')") && extSrc.includes("classList.remove('hide-ui')"));
+check('ext: Index grid has no gray background (panel black, hairline tiles)',
+  extSrc.includes('#tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 0; background: #050505; }'));
+check('ext: sidebar pet floats on the VS Code gray (transparent wrap, no black box)',
+  extSrc.includes('#wrap { background: transparent; border: none;'));
+check('ext: sidebar pet renders cropped + star-free',
+  extSrc.includes('P.sidebarCrop(state.planet, state.stageIdx, t)')
+  && extSrc.includes('P.cropGrid(full, lastCrop)')
+  && extSrc.includes('P.render(state.planet, state.stageIdx, t, sec, 1.0, undefined, 1, true)'));
 check('ext: no "+" buttons on empty rings (ringHit hit-areas instead)',
   !extSrc.includes('ringBtn') && extSrc.includes("className = 'ringHit'"));
 
@@ -994,7 +1043,7 @@ check('ext: no Sol label under the sun',
 // (4) No standing-still stars stamped around the sun: the six fixed
 // speck assignments are gone from starHtml.
 (function () {
-  const starSrc = extSrc.slice(extSrc.indexOf('function starHtml(sec) {'), extSrc.indexOf('// --- orrery'));
+  const starSrc = extSrc.slice(extSrc.indexOf('function starHtml(sec, cols, rows, cellW, cellH) {'), extSrc.indexOf('// --- orrery'));
   const specks = ['grid[4][12]', 'grid[6][73]', 'grid[36][10]', 'grid[37][75]', 'grid[3][58]', 'grid[39][30]'];
   check('ext: no fixed star specks stamped around the sun',
     specks.every((s) => !starSrc.includes(s)),
@@ -1028,11 +1077,11 @@ check('ext: no Sol label under the sun',
     nearHalf > 0, nearHalf + ' hits at radN 1.2, scale 0.5');
   check('ext: solar-system renders pass the reduced smoke scale (orrery, detail, index, tick)',
     extSrc.includes('P.renderCozy(d.planet.planet, d.planet.stageIdx, 10, sec, discZoom, detail.cols, detail.rows, undefined, 0.5, true)')
-    && extSrc.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5)')
+    && extSrc.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5, true)')
     && extSrc.includes('P.renderCozy(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx), 68, 38, undefined, 0.5, true)'));
   check('ext: sidebar pet and prestige renders keep the full smoke (default scale)',
-    extSrc.includes('P.render(state.planet, state.stageIdx, t, sec), cellW, cellH)')
-    && extSrc.includes('P.renderCozy(p.planet, p.stageIdx, 10, 5, 1.0, 34, 19), 3.4, 6.12)'));
+    extSrc.includes('P.render(state.planet, state.stageIdx, t, sec, 1.0, undefined, 1, true)')
+    && extSrc.includes('P.renderCozy(p.planet, p.stageIdx, 10, 5, 1.0, 34, 19, undefined, 1, true), 3.4, 6.12)'));
 })();
 
 // 13j. No overlap (Devon, Nov 11 — he takes back the overlap note:
@@ -1242,7 +1291,12 @@ check('ext: share writes the PNG bytes to disk', extSrc.includes('workspace.fs.w
 check('ext: share copies the seed through the host clipboard', extSrc.includes("msg.type === 'copySeed'") && extSrc.includes('env.clipboard.writeText'));
 check('ext: share copies the markdown through the host clipboard', extSrc.includes("msg.type === 'copyMarkdown'"));
 check('ext: share panel draws the PNG on a canvas', extSrc.includes('pngCanvas') && extSrc.includes('toBlob'));
-check('ext: share canvas uses the full-density render (same grid as the panel)', extSrc.includes('P.render(state.planet, state.stageIdx,') && extSrc.includes('P.CONFIG.W, P.CONFIG.H)'));
+check('ext: share canvas uses the full-density render (same grid as the panel)', extSrc.includes('P.render(state.planet, state.stageIdx,') && extSrc.includes('sec, 1.0);'));
+// drawPng passed P.CONFIG.W/H as stage0Style/smokeScale (Nov 12 —
+// stage 0 drew as a sparse 264-cell core instead of 670). The fix
+// calls render with just the zoom and lets the defaults apply.
+check('ext: share PNG render call passes no stage0Style/smokeScale args',
+  extSrc.includes('Math.max(0, sec - stageStartSec), sec, 1.0);') && !extSrc.includes('P.CONFIG.W, P.CONFIG.H)'));
 check('ext: share canvas colors cells from the ANSI palette', extSrc.includes('P.ansi256ToRgb'));
 check('ext: share panel shows the seed', extSrc.includes('id="seedText"'));
 check('ext: share panel shows the README block', extSrc.includes('id="markdownBlock"'));
@@ -1362,8 +1416,8 @@ check('ext: hatchFromSeed confirms with a modal warning', extSrc.includes('Yes, 
   check('ext: orrery/index mode tabs exist', sysHtml.includes('id="tabOrrery"') && sysHtml.includes('id="tabIndex"'));
   check('ext: mode switch toggles the body class', sysHtml.includes("document.body.classList.toggle('mode-index', m === 'index')"));
   check('ext: index is its own full-screen section', sysHtml.includes('id="index"') && sysHtml.includes('id="tiles"'));
-  check('ext: index tiles are big (340px min, 1px hairline gaps)',
-    sysHtml.includes('grid-template-columns: repeat(auto-fill, minmax(340px, 1fr))') && sysHtml.includes('gap: 1px'));
+  check('ext: index tiles are big (340px min, hairline-separated, no gray box)',
+    sysHtml.includes('grid-template-columns: repeat(auto-fill, minmax(340px, 1fr))') && sysHtml.includes('gap: 0; background: #050505;'));
   check('ext: index tiles use the big cozy art (68x38)',
     sysHtml.includes('P.renderCozy(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx), 68, 38, undefined, 0.5, true)'));
   check('ext: no card chrome in the system panel',
@@ -1403,40 +1457,152 @@ check('ext: hatchFromSeed confirms with a modal warning', extSrc.includes('Yes, 
   const sysHtml = extSrc.slice(extSrc.indexOf('  getSystemHtml(webview) {'), extSrc.indexOf('  getPrestigeHtml(webview) {'));
   check('ext: orrery discs scale with stage and fit their rings',
     sysHtml.includes('Math.min(P.stageScale(d.planet.stageIdx),')
-    && sysHtml.includes('P.ringFitZoom(d.planet.planet, d.planet.stageIdx, 46, 24)'));
+    && sysHtml.includes('P.ringFitZoom(d.planet.planet, d.planet.stageIdx, detail.cols, detail.rows)'));
   check('ext: index tiles scale with stage', sysHtml.includes('P.stageScale(p.stageIdx)'));
   check('ext: orrery discs and index tiles drop the per-planet stars',
     sysHtml.includes(', 0.5, true), detail.cellW, detail.cellH') && sysHtml.includes(', 0.5, true), 4.4, 7.92'));
-  check('ext: detail sheet keeps its stars (no noStars flag)',
-    sysHtml.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5)')
-    && !sysHtml.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5, true)'));
-  check('ext: sidebar pet keeps its stars',
-    extSrc.includes('P.render(state.planet, state.stageIdx, t, sec), cellW, cellH)'));
+  // The detail sheet keeps its stars — as a layer of the frame now,
+  // not baked into the planet render (Devon, Nov 12 — §21).
+  check('ext: detail sheet renders star-free with the starfield layer behind it',
+    sysHtml.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5, true)')
+    && sysHtml.includes('id="detailArt" class="pp-frame"'));
+  check('ext: sidebar pet is star-free (floats on the VS Code gray, no starfield box)',
+    extSrc.includes('P.render(state.planet, state.stageIdx, t, sec, 1.0, undefined, 1, true)'));
   check('ext: no shared starfield added to the panel (plain black, per Devon)',
     !sysHtml.includes('id="starfield"') && !sysHtml.includes('starLayer')
     && !sysHtml.includes('backgroundStars') && !sysHtml.includes('renderStars'));
 })();
 
 // 19. Zoom detail + Index de-box (Devon, Nov 12): the orrery discs get
-// denser as the camera zooms in (P.discDetail tiers, stepped, never
-// continuous); the Index tiles have no amber border — 1px hairline
+// denser as the camera zooms in (P.discDetail, continuous — glyph size
+// never changes); the Index tiles have no amber border — 1px hairline
 // gaps only, amber kept for the badges and the active tab; the Index
 // header is one slim line and the rank line is trimmed.
 (function () {
   const sysHtml = extSrc.slice(extSrc.indexOf('  getSystemHtml(webview) {'), extSrc.indexOf('  getPrestigeHtml(webview) {'));
-  check('ext: discs use the discDetail tiers',
-    sysHtml.includes('P.discDetail(') && sysHtml.includes('function discDetailNow()'));
+  check('ext: discs use the continuous discDetail (no tiers)',
+    sysHtml.includes('P.discDetail(') && sysHtml.includes('function discDetailNow()') && !sysHtml.includes('discTier'));
   check('ext: zoom gestures refresh the disc detail',
     (sysHtml.match(/refreshDiscDetail\(\)/g) || []).length >= 6);
   check('ext: index tiles have no amber border (hairline gaps only)',
     !sysHtml.includes('.tile.inSystem') && !sysHtml.includes('.tile.picking')
-    && sysHtml.includes('gap: 1px'));
+    && sysHtml.includes('gap: 0; background: #050505;'));
   check('ext: amber stays on badges and the active tab only',
     sysHtml.includes('.badge.sys') && sysHtml.includes('.tab.active') && sysHtml.includes('#e8b64c'));
   check('ext: index header is one slim line, no heading',
     !sysHtml.includes('<h2>Index</h2>') && sysHtml.includes('id="indexCount"'));
   check('ext: rank line is trimmed (rank + rings + to-next only)',
     sysHtml.includes("'Rank ' + state.rank") && !sysHtml.includes('finished planet'));
+})();
+
+// 20. Prestige Instrument restyle (Devon, Nov 12): the fusion panel gets
+// the same Instrument chrome as the solar system panel — near-black,
+// hairline rules, mono type, one amber accent, flat areas instead of
+// rounded cards, hairline-outline buttons, no eyebrow microcopy. The
+// collision, inheritance preview, two-step confirm, and picking are
+// untouched — only the chrome changes.
+(function () {
+  const prestigeHtml = extSrc.slice(extSrc.indexOf('  getPrestigeHtml(webview) {'), extSrc.indexOf('  getShareHtml(webview) {'));
+  // Instrument style: mono type, hairline rules, one amber accent.
+  check('ext: prestige panel uses a monospace stack', prestigeHtml.includes('ui-monospace, SFMono-Regular, Menlo'));
+  check('ext: prestige topbar is one thin line (36px, hairline bottom)',
+    prestigeHtml.includes('height: 36px') && prestigeHtml.includes('border-bottom: 1px solid #1e1e1e'));
+  check('ext: prestige panel has no centered max-width column',
+    !prestigeHtml.includes('max-width: 1100px') && prestigeHtml.includes('main { padding: 18px 28px 48px'));
+  // No rounded cards: flat areas separated by hairlines.
+  check('ext: prestige panel has no border-radius rules', !prestigeHtml.includes('border-radius:'));
+  check('ext: parent slots are flat areas with hairline gaps',
+    prestigeHtml.includes('#slotsRow') && prestigeHtml.includes('gap: 1px') && prestigeHtml.includes('background: #1e1e1e'));
+  check('ext: picker cards are flat tiles with hairline gaps',
+    prestigeHtml.includes('#cards') && prestigeHtml.includes('gap: 1px'));
+  check('ext: picked slot/card is an amber outline, not a border',
+    prestigeHtml.includes('.parentSlot.picked { outline: 1px solid #e8b64c')
+    && prestigeHtml.includes('.card.pickedA, .card.pickedB { outline: 1px solid #e8b64c'));
+  // No VS Code blue buttons.
+  check('ext: prestige buttons are hairline-outline, not VS Code blue',
+    !prestigeHtml.includes('var(--vscode-button-background)')
+    && prestigeHtml.includes('button { background: transparent; color: #d4d4d4;')
+    && prestigeHtml.includes('border: 1px solid #333'));
+  // No eyebrow microcopy: no uppercase letter-spaced labels, no sub-line.
+  // (The .pp-grid fixed-cell rule keeps its own letter-spacing: 0.)
+  check('ext: prestige panel has no uppercase letter-spaced labels',
+    !prestigeHtml.includes('text-transform: uppercase')
+    && !prestigeHtml.includes('letter-spacing: .12em')
+    && !prestigeHtml.includes('letter-spacing: .08em'));
+  check('ext: prestige topbar has no sub-line', !prestigeHtml.includes('id="subLine"'));
+  // One amber accent: no green badge left.
+  check('ext: no green badge left in the prestige panel', !prestigeHtml.includes('#7ee2a8'));
+  // Mechanics untouched: collision, inheritance preview, confirm, picking.
+  check('ext: prestige still plays the collision', prestigeHtml.includes('P.collisionFrame('));
+  check('ext: prestige still shows the inheritance preview',
+    prestigeHtml.includes('state.inheritBoth') && prestigeHtml.includes('state.inheritOne')
+    && prestigeHtml.includes('× odds'));
+  check('ext: prestige still asks for confirmation before fusing', prestigeHtml.includes('confirmFuseBtn'));
+  check('ext: prestige still shows the offspring lineage', prestigeHtml.includes('Born from'));
+})();
+
+// 21. Starfield layer (Devon, Nov 12): the stars are a layer of the
+// FRAME, not part of the planet — a .pp-frame fills its own box with
+// sky (P.starfieldHtml) and the planet render inside it is star-free
+// (noStars), transparent where there is no planet. The copy line in
+// the fusion middle agrees with retire now.
+(function () {
+  const prestigeHtml = extSrc.slice(extSrc.indexOf('  getPrestigeHtml(webview) {'), extSrc.indexOf('  getShareHtml(webview) {'));
+  const sysHtml = extSrc.slice(extSrc.indexOf('  getSystemHtml(webview) {'), extSrc.indexOf('  getPrestigeHtml(webview) {'));
+  const shareHtml = extSrc.slice(extSrc.indexOf('  getShareHtml(webview) {'));
+  const sidebarHtml = extSrc.slice(extSrc.indexOf('  getWebviewHtml(webview) {'), extSrc.indexOf('  getSystemHtml(webview) {'));
+  // The copy fix: the middle line agrees with retire.
+  check('ext: prestige middle line agrees with retire (no "will not survive")',
+    prestigeHtml.includes('Both stay — retired, never parents again.')
+    && !prestigeHtml.includes('will not survive'));
+  // The component exists in all three framed panels.
+  check('ext: starfield layer CSS exists in prestige, system and share panels',
+    prestigeHtml.includes('.pp-frame { position: relative; }')
+    && sysHtml.includes('.pp-frame { position: relative; }')
+    && shareHtml.includes('.pp-frame { position: relative; }'));
+  check('ext: starfield layer fills frames from their own size + cell size',
+    prestigeHtml.includes('function fillStars(frameEl, sec)')
+    && sysHtml.includes('function fillStars(frameEl, sec)')
+    && shareHtml.includes('function fillStars(frameEl, sec)'));
+  // Prestige: slots + picker tiles are frames with star-free art.
+  check('ext: prestige parent slots are starfield frames with star-free art',
+    prestigeHtml.includes('class="slotArt pp-frame"')
+    && prestigeHtml.includes('P.render(p.planet, p.stageIdx, 10, sec, 1.0, undefined, 1, true)'));
+  check('ext: prestige picker thumbs are starfield frames with star-free art',
+    prestigeHtml.includes('class="thumb pp-frame"')
+    && prestigeHtml.includes('P.renderCozy(p.planet, p.stageIdx, 10, 5, 1.0, 34, 19, undefined, 1, true)'));
+  check('ext: prestige slot art refresh targets the planet layer, not the stars',
+    prestigeHtml.includes("querySelector('.pp-planet .pp-grid')"));
+  check('ext: prestige tick refreshes the starfields (twinkle)',
+    prestigeHtml.includes('refreshStarfields()'));
+  // System: the detail sheet is a frame with star-free art; the
+  // orrery discs and Index tiles stay plain black (no layer there).
+  check('ext: detail sheet is a starfield frame with star-free art',
+    sysHtml.includes('id="detailArt" class="pp-frame"')
+    && sysHtml.includes('P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5, true)'));
+  check('ext: detail tick refreshes the planet layer + the stars',
+    sysHtml.includes("artEl.querySelector('.pp-planet .pp-grid')")
+    && sysHtml.includes('fillStars(artEl, sec)'));
+  check('ext: orrery discs and index tiles still have no starfield layer',
+    !sysHtml.includes('class="disc pp-frame"') && !sysHtml.includes('class="tile pp-frame"')
+    && !sysHtml.includes('class="art pp-frame"'));
+  // Share: the card is a frame with star-free art; the PNG still
+  // draws the starred render (a standalone image keeps its sky).
+  check('ext: share card is a starfield frame with star-free art',
+    shareHtml.includes('id="wrap" class="pp-frame"')
+    && shareHtml.includes('P.render(state.planet, state.stageIdx, t, sec, undefined, undefined, undefined, true)'));
+  check('ext: share PNG still draws the starred render',
+    shareHtml.includes('P.render(state.planet, state.stageIdx,')
+    && shareHtml.includes('Math.max(0, sec - stageStartSec), sec, 1.0);'));
+  // Sidebar: skipped on purpose — its grid already fills the frame
+  // exactly (layout() scales the cells to the wrap width).
+  check('ext: sidebar pet has no starfield layer (grid already fills the frame)',
+    !sidebarHtml.includes('.pp-frame') && !sidebarHtml.includes('fillStars'));
+  // Collision + result frames are inline-block shrink-wrapped to the
+  // grid, so their stars already fill them — no layer added there.
+  check('ext: collision and result art keep their starred renders',
+    prestigeHtml.includes('P.collisionFrame(fuseA.planet, fuseB.planet, state.result.offspring.planet, t, sec)')
+    && prestigeHtml.includes('P.render(off.planet, off.stageIdx, 10, sec, 1.2)'));
 })();
 
 console.log(`\n${passed} passed, ${failed} failed`);

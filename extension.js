@@ -736,8 +736,12 @@ class ProtoplanetApp {
   body { margin: 0; padding: 10px; background: transparent;
     color: var(--vscode-editor-foreground);
     font-family: var(--vscode-font-family); }
-  #wrap { background: #050505; border: 1px solid var(--vscode-widget-border, #222);
-    padding: 6px; overflow-x: auto; }
+  /* No black box (Devon, Nov 12 — F5 feedback): the pet floats on the
+     VS Code sidebar gray, like the Pokechi pokeball above it. The
+     planet render is cropped to its own extent and star-free (see the
+     tick below), so there is no dark space background at all — just
+     the planet, the stage line, and the XP bar. */
+  #wrap { background: transparent; border: none; padding: 0; overflow: hidden; }
   .pp-grid { margin: 0;
     font-family: ${FONT_STACK};
     font-size: var(--pp-fs, 10px); line-height: var(--pp-ch, 18px);
@@ -787,7 +791,7 @@ class ProtoplanetApp {
   const wrapEl = document.getElementById('wrap');
   const root = document.documentElement;
   const FONT_STACK = ${JSON.stringify(FONT_STACK)};
-  let cellW = 3, cellH = 5.4, state = null, sec = 0, stageStartSec = 0, lastStage = -1;
+  let cellW = 3, cellH = 5.4, state = null, sec = 0, stageStartSec = 0, lastStage = -1, lastCrop = null;
 
   // --- Fixed-cell layout (same approach as preview.html) ------------------
   // The sidebar is narrow, so cells scale down to fit the width — the
@@ -797,7 +801,12 @@ class ProtoplanetApp {
   // colors, rings and motion still read. (A full-size view is piece 4.)
   function layout() {
     const avail = Math.max(50, wrapEl.clientWidth - 12);
-    const scale = avail / (P.CONFIG.W * P.CONFIG.CELL_W); // full scale = grid width in px
+    // The planet is cropped to its own extent (P.sidebarCrop), so the
+    // cells size from the crop's width — the planet fills the sidebar
+    // instead of sitting small in a big black grid. Before the first
+    // state arrives there is no crop yet, so fall back to the full grid.
+    const cols = lastCrop ? lastCrop.cols : P.CONFIG.W;
+    const scale = avail / (cols * P.CONFIG.CELL_W); // full scale = grid width in px
     const newW = Math.max(1, +(10 * scale).toFixed(2));
     const newH = Math.max(1.8, +(18 * scale).toFixed(2));
     if (newW === cellW && newH === cellH && root.style.getPropertyValue('--pp-fs')) return;
@@ -859,7 +868,18 @@ class ProtoplanetApp {
     sec += 0.15;
     if (!state) return;
     const t = Math.max(0, sec - stageStartSec);
-    gridEl.innerHTML = P.gridToHtml(P.render(state.planet, state.stageIdx, t, sec), cellW, cellH);
+    // Crop to the planet's own extent and render it star-free, so the
+    // pet floats big on the VS Code gray instead of sitting small in
+    // a black starfield box (Devon, Nov 12 — F5 feedback). The crop
+    // only changes when the stage (or morph) changes, so layout()
+    // re-runs when it does — never every tick.
+    const crop = P.sidebarCrop(state.planet, state.stageIdx, t);
+    if (!lastCrop || crop.cols !== lastCrop.cols || crop.rows !== lastCrop.rows) {
+      lastCrop = crop;
+      layout();
+    }
+    const full = P.render(state.planet, state.stageIdx, t, sec, 1.0, undefined, 1, true);
+    gridEl.innerHTML = P.gridToHtml(P.cropGrid(full, lastCrop), cellW, cellH);
   }, 150);
 
   vscodeApi.postMessage({ type: 'ready' });
@@ -914,6 +934,15 @@ class ProtoplanetApp {
   button:hover { border-color: #e8b64c; color: #ffd75f; }
   button:disabled { opacity: .45; cursor: default; }
   button.ghost { background: transparent; border: 1px solid #333; color: #d4d4d4; }
+  /* Starfield layer (Devon, Nov 12): the stars are a layer of the
+     FRAME, not part of the planet. .pp-frame is the rectangle;
+     .pp-stars fills it with sky; .pp-planet is the star-free planet
+     render, centered, transparent where there is no planet — so the
+     stars show through around it and never stop at the planet's
+     edge. */
+  .pp-frame { position: relative; }
+  .pp-stars { position: absolute; inset: 0; overflow: hidden; z-index: 0; }
+  .pp-planet { position: relative; z-index: 1; width: fit-content; margin: 0 auto; }
   /* One thin top line: the title on the left, the mode tabs on the
      right. No eyebrow microcopy, no dashboard chrome (Devon, Nov 12). */
   #topbar { display: flex; align-items: center; gap: 16px;
@@ -951,10 +980,18 @@ class ProtoplanetApp {
   .lockLabel { position: absolute; transform: translate(-50%, -50%); font-size: 11px;
     color: rgba(255, 255, 255, 0.6); background: rgba(0, 0, 0, 0.65); padding: 3px 9px;
     border: 1px dashed rgba(255, 255, 255, 0.3); white-space: nowrap; }
-  .disc { position: absolute; transform: translate(-50%, -50%); cursor: pointer; }
+  /* Counter-scale (Devon, Nov 12 — continuous zoom detail): the
+     world scales by the camera zoom, but the planet discs and the sun
+     must keep their glyphs at the final on-screen size, rasterized
+     crisply — so each sprite scales back by 1/zoom (the --inv-zoom
+     var, set by applyTransform). Their grid resolution grows with the
+     zoom instead (discDetail / sunDetail), so zooming adds characters,
+     never bigger letters. Rings, hit areas and lock labels are world
+     geometry and do NOT counter-scale. */
+  .disc { position: absolute; transform: translate(-50%, -50%) scale(var(--inv-zoom, 1)); cursor: pointer; }
   .disc:hover { outline: 1px solid rgba(232, 182, 76, 0.7); outline-offset: 2px; border-radius: 4px; }
   .disc.sel { outline: 1px solid #e8b64c; outline-offset: 2px; border-radius: 4px; }
-  .star { position: absolute; transform: translate(-50%, -50%); text-align: center; }
+  .star { position: absolute; transform: translate(-50%, -50%) scale(var(--inv-zoom, 1)); text-align: center; }
   /* Bottom-centre strip: zoom controls + the one-line hint. Overlay
      chrome only — it never takes space from the orrery. */
   #bottomStrip { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
@@ -999,8 +1036,12 @@ class ProtoplanetApp {
     padding: 6px 9px; font-size: 12px; font-family: inherit; }
   #sort { background: #0a0a0a; color: #d4d4d4;
     border: 1px solid #333; padding: 6px; font-size: 12px; }
-  #tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 1px; background: #1e1e1e; }
-  .tile { background: #050505; padding: 14px 14px 12px; cursor: pointer; }
+  /* No gray rectangle (Devon, Nov 12 — F5 feedback): the grid's
+     #1e1e1e background showed as a big gray block wherever there was
+     no tile. The grid is panel black now; tiles are separated by
+     1px hairlines only. */
+  #tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 0; background: #050505; }
+  .tile { background: #050505; padding: 14px 14px 12px; cursor: pointer; border-bottom: 1px solid #1e1e1e; border-right: 1px solid #1e1e1e; }
   .tile:hover { background: #0a0a0a; }
   .tile .art { display: flex; justify-content: center; background: #050505; margin-bottom: 10px; overflow: hidden; }
   .tile .tname { font-size: 13px; font-weight: 600; }
@@ -1013,6 +1054,12 @@ class ProtoplanetApp {
   /* Hide-UI (H): only the orrery stays. */
   body.hide-ui #topbar, body.hide-ui #bottomStrip { display: none !important; }
   body.hide-ui #detail { visibility: hidden; }
+  /* The way back (Devon, Nov 12 — F5 feedback: he hid the UI and got
+     stuck with no visible way back). A minimal pill in the
+     bottom-left corner while the UI is hidden — click it, or press H
+     or Esc, to show the interface again. */
+  #showUiPill { display: none; position: fixed; left: 14px; bottom: 12px; z-index: 30; }
+  body.hide-ui #showUiPill { display: block; }
 </style>
 </head>
 <body>
@@ -1035,6 +1082,7 @@ class ProtoplanetApp {
 </div>
 <div id="detail" hidden></div>
 <div id="pickerBanner" hidden></div>
+<button id="showUiPill" class="ghost" title="Show the interface (H)">H &middot; show UI</button>
 <section id="index">
   <p id="indexCount"></p>
   <div id="indexBar">
@@ -1088,6 +1136,31 @@ class ProtoplanetApp {
   var bannerEl = document.getElementById('pickerBanner');
   var tilesEl = document.getElementById('tiles');
 
+  // Starfield layer (Devon, Nov 12): fill a .pp-frame with twinkling
+  // stars sized to the frame's own box. The frame carries its planet
+  // grid's cell size + atmosphere color in data attrs; the star grid
+  // is sized from the frame's pixel size (scroll size, so a frame
+  // wider than its box still gets sky under the scroll). Call after
+  // the frame is in the DOM, and on the tick so the stars twinkle.
+  function fillStars(frameEl, sec) {
+    var starsEl = frameEl.querySelector('.pp-stars');
+    if (!starsEl) return;
+    var cw = parseFloat(frameEl.getAttribute('data-cw')) || 3.4;
+    var ch = parseFloat(frameEl.getAttribute('data-ch')) || 6.12;
+    var atmo = parseInt(frameEl.getAttribute('data-atmo') || '244', 10);
+    var w = Math.max(frameEl.clientWidth || 0, frameEl.scrollWidth || 0);
+    var h = Math.max(frameEl.clientHeight || 0, frameEl.scrollHeight || 0);
+    var cols = Math.max(1, Math.ceil(w / cw));
+    var rows = Math.max(1, Math.ceil(h / ch));
+    starsEl.style.width = w + 'px';
+    starsEl.style.height = h + 'px';
+    starsEl.innerHTML = '<div class="pp-grid" style="--pp-fs:' + ch + 'px;--pp-ch:' + ch + 'px">'
+      + P.starfieldHtml(cols, rows, sec, atmo, cw, ch) + '</div>';
+  }
+  function refreshStarfields() {
+    var frames = document.querySelectorAll('.pp-frame');
+    for (var i = 0; i < frames.length; i++) fillStars(frames[i], sec);
+  }
   // --- modes: Orrery <-> Index ----------------------------------------------
   // Two full screens, not one crowded one (Devon, Nov 12 — the research's
   // strongest pattern): each mode gets 100% of the panel, so neither the
@@ -1109,6 +1182,11 @@ class ProtoplanetApp {
   document.getElementById('tabIndex').addEventListener('click', function () { setMode('index'); });
   document.getElementById('hideUiBtn').addEventListener('click', function () {
     document.body.classList.toggle('hide-ui');
+  });
+  // The way back from a hidden UI (Devon, Nov 12 — F5 feedback).
+  // H and Esc also bring it back (see the keydown handler below).
+  document.getElementById('showUiPill').addEventListener('click', function () {
+    document.body.classList.remove('hide-ui');
   });
 
   function esc(s) {
@@ -1205,9 +1283,20 @@ class ProtoplanetApp {
   // big flare erupts for ~2.2s on a long period (47/63/89s), so the
   // sites erupt roughly once every 20s between them — a short look
   // usually catches none, a longer watch catches one.
-  function starHtml(sec) {
+  // Continuous sun resolution (Devon, Nov 12 — F5 feedback): the sun
+  // used to render once at a fixed 84x42 and get CSS-scaled, so
+  // zoomed in it was a giant pixel blob and zoomed out a tiny one.
+  // Now it takes its resolution (cols/rows/cell size) from
+  // P.sunDetail(zoom) — fewer chars zoomed out, more zoomed in,
+  // glyph size constant. Defaults are the old 84x42, so the existing
+  // sun clips and tests still work unchanged.
+  function starHtml(sec, cols, rows, cellW, cellH) {
     if (sec === undefined) sec = 0;
-    var W = 84, H = 42, mx = 42, my = 21, mr = 21;
+    if (cols === undefined) cols = 84;
+    if (rows === undefined) rows = 42;
+    if (cellW === undefined) cellW = 3.67;
+    if (cellH === undefined) cellH = 6.6;
+    var W = cols, H = rows, mx = cols / 2, my = rows / 2, mr = rows / 2;
     var grid = [];
     for (var y = 0; y < H; y++) { var row = []; for (var x = 0; x < W; x++) row.push([' ', null]); grid.push(row); }
     // Smooth granule field: bilinear interpolation of the sin-hash
@@ -1407,7 +1496,7 @@ class ProtoplanetApp {
     // stamped cells used to sit at fixed grid spots and never move —
     // standing-still stars. The limb flames + halo already give the
     // sun its edge life; nothing static is stamped here anymore.
-    return P.gridToHtml(grid, 3.67, 6.6);
+    return P.gridToHtml(grid, cellW, cellH);
   }
 
   // --- orrery ------------------------------------------------------------
@@ -1503,9 +1592,15 @@ class ProtoplanetApp {
   }
 
   // Re-render just the star's art (the orrery itself only rebuilds on
-  // state changes). Called on the tick so the sun stays alive.
+  // state changes). Called on the tick so the sun stays alive — at a
+  // resolution matching its current on-screen size (P.sunDetail), so
+  // it is never a pixel blob at any zoom.
   function renderStar() {
-    if (starGridEl) starGridEl.innerHTML = starHtml(sec);
+    if (!starGridEl) return;
+    var sd = P.sunDetail(zoom);
+    starGridEl.style.setProperty('--pp-fs', sd.cellH + 'px');
+    starGridEl.style.setProperty('--pp-ch', sd.cellH + 'px');
+    starGridEl.innerHTML = starHtml(sec, sd.cols, sd.rows, sd.cellW, sd.cellH);
   }
 
   function layoutPlanets() {
@@ -1523,37 +1618,35 @@ class ProtoplanetApp {
   }
 
   function renderDiscs() {
-    // Zoom detail (Devon, Nov 12): the disc re-renders at a denser
-    // grid as the camera zooms in — the letters stay the same pixel
-    // size on screen, the planet just gets more detailed. The tier
-    // comes from P.discDetail (stepped, never continuous), and the
-    // cell sizes shrink in exact proportion, so the disc's DOM size
-    // never changes and the planet never jumps. The disc zoom itself
-    // stays computed at the base 46x24 (stage scale + ring fit) —
-    // the ring fit is slightly conservative at higher tiers, so the
-    // whole ring system still fits.
+    // Continuous zoom detail (Devon, Nov 12 — F5 feedback): the disc
+    // re-renders at a grid resolution computed from its current
+    // on-screen size divided by a fixed cell size — glyph size never
+    // changes, only the character count does (more detail in, cozier
+    // out). The disc is counter-scaled (see --inv-zoom), so the
+    // glyphs are rasterized at their final size. The disc zoom itself
+    // (stage scale + ring fit) is computed at the CURRENT grid size,
+    // so the whole ring system still fits.
+    // Small discs again (Devon, Nov 11 — the bigger ones made the
+    // orrery crowded and messy). 46x24 at 2.6px cells at fit zoom:
+    // the detail goes into the sun instead, and the detail panel
+    // still shows the full large render.
+    // Stage-driven scale + full rings (Devon, Nov 12): the planet
+    // grows with its stage, and the disc zoom shrinks just enough
+    // that the whole ring system fits — no clipped rings in the
+    // orrery. No per-planet starfield here either (the panel stays
+    // plain black).
     var detail = discDetailNow();
-    discTier = detail.tier;
+    discCols = detail.cols; discRows = detail.rows;
     for (var k = 0; k < discs.length; k++) {
       var d = discs[k];
       var gridEl = d.el.querySelector('.pp-grid');
-      // Small discs again (Devon, Nov 11 — the bigger ones made the
-      // orrery crowded and messy). 46x24 at 2.6px cells: the detail
-      // goes into the sun instead, and the detail panel still shows
-      // the full large render.
-      // Stage-driven scale + full rings (Devon, Nov 12): the planet
-      // grows with its stage (a newborn is half-size), and the disc
-      // zoom shrinks just enough that the whole ring system fits —
-      // no clipped rings in the orrery. No per-planet starfield here
-      // either (the panel stays plain black); stars stay in the
-      // sidebar pet and the zoom detail, where they twinkle.
       if (gridEl) {
-        // The font-size vars track the cell height, or the glyphs
-        // would stay 6.12px tall while the cells shrink.
+        // The cell size is constant now (the counter-scale handles
+        // the zoom), but keep the font-size vars in sync anyway.
         gridEl.style.setProperty('--pp-fs', detail.cellH + 'px');
         gridEl.style.setProperty('--pp-ch', detail.cellH + 'px');
         var discZoom = Math.min(P.stageScale(d.planet.stageIdx),
-          P.ringFitZoom(d.planet.planet, d.planet.stageIdx, 46, 24));
+          P.ringFitZoom(d.planet.planet, d.planet.stageIdx, detail.cols, detail.rows));
         gridEl.innerHTML = P.gridToHtml(
           // smokeScale 0.5 (Devon, Nov 12): stage-0 smoke stays close
           // to the core in the system view instead of filling the frame.
@@ -1562,17 +1655,19 @@ class ProtoplanetApp {
     }
   }
 
-  // The disc's current detail tier, from the camera zoom relative to
-  // the fit zoom. refreshDiscDetail re-renders only when the tier
-  // actually changed — the tick re-renders the discs every 450ms
-  // anyway, so this is just the prompt path after a zoom gesture.
-  var discTier = 0;
+  // The disc's detail follows the camera zoom directly (continuous,
+  // not stepped): the on-screen size is the world size times the
+  // zoom, so the resolution is discDetail(zoom). refreshDiscDetail
+  // re-renders only when the computed grid size actually changed by
+  // >= 1 cell — the tick re-renders the discs every 450ms anyway, so
+  // this is just the prompt path after a zoom gesture.
+  var discCols = 0, discRows = 0;
   function discDetailNow() {
-    var ratio = (fitZoom && isFinite(fitZoom) && fitZoom > 0) ? zoom / fitZoom : 1;
-    return P.discDetail(ratio);
+    return P.discDetail(zoom);
   }
   function refreshDiscDetail() {
-    if (discDetailNow().tier !== discTier) renderDiscs();
+    var d = discDetailNow();
+    if (d.cols !== discCols || d.rows !== discRows) renderDiscs();
   }
 
   // --- detail sheet + zoom-to-planet -----------------------------------------
@@ -1651,12 +1746,12 @@ class ProtoplanetApp {
     // fills more of the frame; the cells fit the 360px panel.
     // smokeScale 0.5 (Devon, Nov 12): stage-0 smoke stays close to
     // the core instead of filling the frame.
-    var art = P.gridToHtml(P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5), 2.35, 4.23);
+    var art = P.gridToHtml(P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5, true), 2.35, 4.23);
     var html = '<button id="detailClose" class="ghost" data-action="close" title="Close">&times;</button>'
       + '<h2>' + esc(planet.name) + '</h2>'
       + '<p class="sub">' + esc(planet.summary) + ' &middot; Seed ' + planet.seed + '</p>'
       + (planet.mutationLabel ? '<div class="mut">' + esc(planet.mutationLabel) + '</div>' : '')
-      + '<div id="detailArt"><div class="pp-grid" style="--pp-fs:4.23px;--pp-ch:4.23px">' + art + '</div></div>'
+      + '<div id="detailArt" class="pp-frame" data-cw="2.35" data-ch="4.23" data-atmo="' + planet.planet.atmosphere + '"><div class="pp-stars"></div><div class="pp-planet"><div class="pp-grid" style="--pp-fs:4.23px;--pp-ch:4.23px">' + art + '</div></div></div>'
       + '<table>'
       + '<tr><td class="k">Terrain</td><td>' + esc(planet.terrainLabel) + '</td></tr>'
       + '<tr><td class="k">Stage</td><td>' + esc(planet.stageName) + (planet.kind === 'current' ? ' &middot; growing now' : '') + '</td></tr>'
@@ -1682,6 +1777,8 @@ class ProtoplanetApp {
       html += '<p class="note">Removing a planet from the system never deletes it — it stays in the Index.</p>';
     }
     detailEl.innerHTML = html;
+    var da = document.getElementById('detailArt');
+    if (da) fillStars(da, sec);
   }
 
   // --- index -------------------------------------------------------------------
@@ -1791,6 +1888,10 @@ class ProtoplanetApp {
   // --- pan / zoom --------------------------------------------------------------
   function applyTransform() {
     worldEl.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + zoom + ')';
+    // Counter-scale the sprites (see the .disc / .star CSS): the
+    // world scales by zoom, but the planet/sun glyphs must stay at
+    // their final on-screen size.
+    worldEl.style.setProperty('--inv-zoom', (1 / zoom).toFixed(4));
   }
   function computeFit() {
     fitZoom = Math.min(orreryEl.clientWidth / WORLD_W, orreryEl.clientHeight / WORLD_H) * 0.98;
@@ -1976,9 +2077,10 @@ class ProtoplanetApp {
       if (artEl) {
         var planet = findPlanet(selected.seed, selected.generation);
         if (planet) {
-          var gridEl = artEl.querySelector('.pp-grid');
+          var gridEl = artEl.querySelector('.pp-planet .pp-grid');
           if (gridEl) gridEl.innerHTML = P.gridToHtml(
-            P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5), 2.35, 4.23);
+            P.render(planet.planet, planet.stageIdx, 10, sec, 1.2, undefined, 0.5, true), 2.35, 4.23);
+          fillStars(artEl, sec);
         }
       }
     }
@@ -2038,7 +2140,7 @@ class ProtoplanetApp {
   [hidden] { display: none !important; }
   html, body { -webkit-text-size-adjust: none; text-size-adjust: none; }
   body { margin: 0; background: #050505; color: var(--vscode-editor-foreground);
-    font-family: var(--vscode-font-family); }
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; }
   .pp-grid { margin: 0;
     font-family: ${FONT_STACK};
     font-size: var(--pp-fs, 10px); line-height: var(--pp-ch, 18px);
@@ -2047,44 +2149,56 @@ class ProtoplanetApp {
   .pp-run { display: inline-block; height: var(--pp-ch, 18px);
     line-height: var(--pp-ch, 18px); vertical-align: top; overflow: hidden;
     white-space: pre; font-kerning: none; }
-  button { background: var(--vscode-button-background); color: var(--vscode-button-foreground);
-    border: none; border-radius: 4px; padding: 5px 11px; cursor: pointer; font-size: 12px; }
-  button:hover { background: var(--vscode-button-hoverBackground); }
+  /* Buttons: hairline outline, square corners, amber on hover. No VS
+     Code blue, no border-radius (Devon, Nov 12 — Instrument). */
+  button { background: transparent; color: #d4d4d4;
+    border: 1px solid #333; padding: 5px 11px; cursor: pointer; font-size: 12px;
+    font-family: inherit; }
+  button:hover { border-color: #e8b64c; color: #ffd75f; }
   button:disabled { opacity: .45; cursor: default; }
-  button.ghost { background: transparent; border: 1px solid var(--vscode-widget-border, #444);
-    color: var(--vscode-editor-foreground); }
+  button.ghost { background: transparent; border: 1px solid #333; color: #d4d4d4; }
   button.big { font-size: 14px; padding: 9px 20px; font-weight: 600; }
-  #topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    padding: 10px 16px; border-bottom: 1px solid var(--vscode-widget-border, #222);
-    background: #080808; position: sticky; top: 0; z-index: 10; }
-  #topbar h1 { font-size: 15px; margin: 0 0 2px; }
-  #subLine { font-size: 12px; opacity: .75; }
-  #counts { font-size: 12px; opacity: .75; white-space: nowrap; }
-  #banner { background: #1a1405; border-bottom: 1px solid #e8b64c; color: #ffd75f;
+  /* Starfield layer (Devon, Nov 12): the stars are a layer of the
+     FRAME, not part of the planet. .pp-frame is the rectangle;
+     .pp-stars fills it with sky; .pp-planet is the star-free planet
+     render, centered, transparent where there is no planet — so the
+     stars show through around it and never stop at the planet's
+     edge. */
+  .pp-frame { position: relative; }
+  .pp-stars { position: absolute; inset: 0; overflow: hidden; z-index: 0; }
+  .pp-planet { position: relative; z-index: 1; width: fit-content; margin: 0 auto; }
+  /* One thin top line, like the solar system panel: title left,
+     counts right. No sub-line — the banner explains the locked state. */
+  #topbar { display: flex; align-items: center; gap: 16px;
+    height: 36px; padding: 0 14px; border-bottom: 1px solid #1e1e1e;
+    background: #050505; position: sticky; top: 0; z-index: 10; }
+  #topTitle { font-size: 12px; white-space: nowrap; }
+  #counts { font-size: 12px; opacity: .55; white-space: nowrap; margin-left: auto; }
+  #banner { background: #0a0a0a; border-bottom: 1px solid #e8b64c; color: #ffd75f;
     padding: 9px 16px; font-size: 12px; line-height: 1.5; }
-  main { padding: 18px 22px 48px; max-width: 1100px; margin: 0 auto; }
-  /* The fusion stage: two parent slots with the collision between them. */
-  #slotsRow { display: flex; gap: 14px; align-items: stretch; flex-wrap: wrap; }
-  .parentSlot { flex: 1 1 300px; min-width: 280px; background: #0b0b0b;
-    border: 1px solid #262626; border-radius: 8px; padding: 12px; }
-  .parentSlot.picked { border-color: #e8b64c; }
-  .parentSlot.empty { border-style: dashed; display: flex; flex-direction: column;
+  /* Full-bleed, no centered column — the panel is the page. */
+  main { padding: 18px 28px 48px; background: #050505; }
+  /* The fusion stage: two parent slots with the collision between them,
+     separated by 1px hairlines, not cards. */
+  #slotsRow { display: flex; gap: 1px; align-items: stretch; flex-wrap: wrap; background: #1e1e1e; }
+  .parentSlot { flex: 1 1 300px; min-width: 280px; background: #050505; padding: 14px; }
+  .parentSlot.picked { outline: 1px solid #e8b64c; outline-offset: -1px; }
+  .parentSlot.empty { border: 1px dashed #333; display: flex; flex-direction: column;
     align-items: center; justify-content: center; min-height: 320px; color: rgba(255,255,255,.55);
     font-size: 13px; text-align: center; line-height: 1.6; }
-  .parentSlot h3 { font-size: 14px; margin: 0 0 2px; }
+  .parentSlot h3 { font-size: 13px; font-weight: 600; margin: 0 0 2px; }
   .parentSlot .sub { font-size: 12px; opacity: .75; margin: 0 0 8px; line-height: 1.5; }
-  .slotArt { background: #050505; border: 1px solid #1c1c1c; padding: 4px; overflow-x: auto; margin-bottom: 8px; }
-  .slotTag { font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
-    color: #ffd75f; margin-bottom: 8px; }
-  .mut { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .12em;
-    text-transform: uppercase; color: #ffd75f; background: rgba(255, 215, 95, .12);
-    border: 1px solid rgba(255, 215, 95, 0.55); border-radius: 3px; padding: 2px 7px; margin: 0 0 8px; }
+  .slotArt { background: #050505; border: 1px solid #1e1e1e; padding: 4px; overflow-x: auto; margin-bottom: 8px; }
+  .slotTag { font-size: 11px; color: #e8b64c; margin-bottom: 4px; }
+  .mut { display: inline-block; font-size: 11px; font-weight: 700;
+    color: #ffd75f; background: transparent;
+    border: 1px solid rgba(255, 215, 95, 0.55); padding: 2px 7px; margin: 0 0 8px; }
   #fusionMid { flex: 0 0 170px; display: flex; flex-direction: column; align-items: center;
-    justify-content: center; gap: 8px; text-align: center; }
+    justify-content: center; gap: 8px; text-align: center; background: #050505; }
   #fusionGlyph { font-size: 44px; color: #e8b64c; line-height: 1; }
   #fusionMid .hint { font-size: 12px; opacity: .65; line-height: 1.5; }
   /* The collision stage: the smash itself, full width. */
-  #collisionWrap { background: #050505; border: 1px solid #3a3a3a; border-radius: 8px;
+  #collisionWrap { background: #050505; border: 1px solid #1e1e1e;
     padding: 14px; text-align: center; }
   #collisionCaption { font-size: 14px; font-weight: 600; color: #ffd75f; margin: 0 0 10px; }
   #collisionArt { background: #050505; overflow-x: auto; display: inline-block; }
@@ -2097,43 +2211,39 @@ class ProtoplanetApp {
   #confirmBar { margin: 16px 0 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   #confirmBar .warn { font-size: 12px; opacity: .8; line-height: 1.5; }
   #errorNote { margin: 12px 0 0; font-size: 12px; color: #ff9d9d; line-height: 1.5; }
-  /* The result: the offspring, hatched. */
-  #result { background: #0b0b0b; border: 1px solid #e8b64c; border-radius: 8px; padding: 16px; }
-  #result h2 { font-size: 18px; margin: 0 0 2px; }
+  /* The result: the offspring, hatched — an amber hairline frame, flat. */
+  #result { background: #050505; border: 1px solid #e8b64c; padding: 16px; }
+  #result h2 { font-size: 16px; margin: 0 0 2px; }
   #result .sub { font-size: 12px; opacity: .75; margin: 0 0 10px; line-height: 1.5; }
-  #resultArt { background: #050505; border: 1px solid #222; padding: 4px; overflow-x: auto;
+  #resultArt { background: #050505; border: 1px solid #1e1e1e; padding: 4px; overflow-x: auto;
     margin-bottom: 12px; display: inline-block; }
   #result .lineage { font-size: 13px; margin: 0 0 8px; line-height: 1.6; }
   #result .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
-  /* The parent picker. */
-  #parents { margin-top: 26px; }
-  #parents h2 { font-size: 15px; margin: 0 0 4px; }
+  /* The parent picker — a hairline above it, then flat tiles. */
+  #parents { margin-top: 26px; border-top: 1px solid #1e1e1e; padding-top: 14px; }
+  #parents h2 { font-size: 13px; font-weight: 600; margin: 0 0 4px; }
   #parentsCount { font-size: 12px; opacity: .75; margin: 0 0 12px; }
-  #cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(158px, 1fr)); gap: 12px; }
-  .card { background: #0b0b0b; border: 1px solid #262626; border-radius: 8px; padding: 10px;
-    cursor: pointer; }
-  .card:hover { border-color: #555; }
+  #cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(158px, 1fr)); gap: 1px; background: #1e1e1e; }
+  .card { background: #050505; padding: 10px; cursor: pointer; }
+  .card:hover { background: #0a0a0a; }
   .card.dim { opacity: .55; cursor: default; }
-  .card.dim:hover { border-color: #262626; }
-  .card.pickedA, .card.pickedB { border-color: #e8b64c; }
-  .card .thumb { background: #050505; border: 1px solid #1c1c1c; margin-bottom: 8px; overflow: hidden; }
+  .card.dim:hover { background: #050505; }
+  .card.pickedA, .card.pickedB { outline: 1px solid #e8b64c; outline-offset: -1px; }
+  .card .thumb { background: #050505; border: 1px solid #1e1e1e; margin-bottom: 8px; overflow: hidden; }
   .card .cname { font-size: 13px; font-weight: 600; }
   .card .cmeta { font-size: 11px; opacity: .7; line-height: 1.5; margin-top: 2px; }
-  .badge { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .08em;
-    text-transform: uppercase; border-radius: 3px; padding: 1px 6px; margin: 4px 4px 0 0; }
-  .badge.ok { color: #7ee2a8; background: rgba(126, 226, 168, 0.12); border: 1px solid rgba(126, 226, 168, 0.5); }
-  .badge.pick { color: #ffd75f; background: rgba(255, 215, 95, 0.14); border: 1px solid rgba(255, 215, 95, 0.5); }
-  .badge.mut { color: #ffd75f; background: rgba(255, 215, 95, 0.12); border: 1px solid rgba(255, 215, 95, 0.55); }
-  .badge.off { color: rgba(255,255,255,.6); background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.25); }
+  .badge { display: inline-block; font-size: 10px; font-weight: 700;
+    padding: 1px 6px; margin: 4px 4px 0 0; }
+  .badge.ok { color: #ffd75f; border: 1px solid rgba(255, 215, 95, 0.5); }
+  .badge.pick { color: #ffd75f; border: 1px solid rgba(255, 215, 95, 0.5); }
+  .badge.mut { color: #ffd75f; border: 1px solid rgba(255, 215, 95, 0.55); }
+  .badge.off { color: rgba(255,255,255,.6); border: 1px solid rgba(255,255,255,.25); }
   .empty { font-size: 13px; opacity: .65; padding: 18px 0; }
 </style>
 </head>
 <body>
 <header id="topbar">
-  <div>
-    <h1>Prestige — Fusion</h1>
-    <div id="subLine">Two planets that reached Civilization make an offspring. Parents stay in your collection — each can only be a parent once.</div>
-  </div>
+  <div id="topTitle">PRESTIGE</div>
   <div id="counts"></div>
 </header>
 <div id="banner" hidden></div>
@@ -2192,6 +2302,31 @@ class ProtoplanetApp {
   function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
+  // Starfield layer (Devon, Nov 12): fill a .pp-frame with twinkling
+  // stars sized to the frame's own box. The frame carries its planet
+  // grid's cell size + atmosphere color in data attrs; the star grid
+  // is sized from the frame's pixel size (scroll size, so a frame
+  // wider than its box still gets sky under the scroll). Call after
+  // the frame is in the DOM, and on the tick so the stars twinkle.
+  function fillStars(frameEl, sec) {
+    var starsEl = frameEl.querySelector('.pp-stars');
+    if (!starsEl) return;
+    var cw = parseFloat(frameEl.getAttribute('data-cw')) || 3.4;
+    var ch = parseFloat(frameEl.getAttribute('data-ch')) || 6.12;
+    var atmo = parseInt(frameEl.getAttribute('data-atmo') || '244', 10);
+    var w = Math.max(frameEl.clientWidth || 0, frameEl.scrollWidth || 0);
+    var h = Math.max(frameEl.clientHeight || 0, frameEl.scrollHeight || 0);
+    var cols = Math.max(1, Math.ceil(w / cw));
+    var rows = Math.max(1, Math.ceil(h / ch));
+    starsEl.style.width = w + 'px';
+    starsEl.style.height = h + 'px';
+    starsEl.innerHTML = '<div class="pp-grid" style="--pp-fs:' + ch + 'px;--pp-ch:' + ch + 'px">'
+      + P.starfieldHtml(cols, rows, sec, atmo, cw, ch) + '</div>';
+  }
+  function refreshStarfields() {
+    var frames = document.querySelectorAll('.pp-frame');
+    for (var i = 0; i < frames.length; i++) fillStars(frames[i], sec);
+  }
   function pickKey(p) { return p.kind + ':' + p.index; }
   function findPlanet(seed, generation) {
     if (!state) return null;
@@ -2206,12 +2341,12 @@ class ProtoplanetApp {
     return (pickA && pickKey(pickA) === k) || (pickB && pickKey(pickB) === k);
   }
   function slotHtml(p, tag) {
-    var art = P.gridToHtml(P.render(p.planet, p.stageIdx, 10, sec, 1.0), 2.2, 3.96);
+    var art = P.gridToHtml(P.render(p.planet, p.stageIdx, 10, sec, 1.0, undefined, 1, true), 2.2, 3.96);
     return '<div class="slotTag">' + esc(tag) + '</div>'
       + '<h3>' + esc(p.name) + '</h3>'
       + '<p class="sub">' + esc(p.summary) + ' &middot; Seed ' + p.seed + '</p>'
       + (p.mutationLabel ? '<div class="mut">' + esc(p.mutationLabel) + '</div>' : '')
-      + '<div class="slotArt"><div class="pp-grid" style="--pp-fs:3.96px;--pp-ch:3.96px">' + art + '</div></div>'
+      + '<div class="slotArt pp-frame" data-cw="2.2" data-ch="3.96" data-atmo="' + p.planet.atmosphere + '"><div class="pp-stars"></div><div class="pp-planet"><div class="pp-grid" style="--pp-fs:3.96px;--pp-ch:3.96px">' + art + '</div></div></div>'
       + '<div class="sub">' + esc(p.terrainLabel) + ' &middot; ' + esc(p.stageName)
       + ' &middot; ' + p.chars + ' characters &middot; Gen ' + p.generation + '</div>';
   }
@@ -2231,16 +2366,18 @@ class ProtoplanetApp {
       slotBEl.innerHTML = '<div><b>Parent B</b><br>Pick a planet below.</div>';
     }
     document.getElementById('fusionHint').innerHTML =
-      (pickA && pickB) ? 'Two worlds, ready.<br>One of them will not survive the meeting.'
+      (pickA && pickB) ? 'Two worlds, ready.<br>Both stay — retired, never parents again.'
       : 'Pick two parents below —<br>then fuse them.';
   }
   function refreshSlotArt() {
-    var grids = slotAEl.querySelectorAll('.pp-grid');
-    if (pickA && grids.length) grids[0].innerHTML = P.gridToHtml(
-      P.render(pickA.planet, pickA.stageIdx, 10, sec, 1.0), 2.2, 3.96);
-    var gridsB = slotBEl.querySelectorAll('.pp-grid');
-    if (pickB && gridsB.length) gridsB[0].innerHTML = P.gridToHtml(
-      P.render(pickB.planet, pickB.stageIdx, 10, sec, 1.0), 2.2, 3.96);
+    // The slot now holds TWO .pp-grid layers (the starfield + the
+    // planet) — target the planet layer, never the stars.
+    var gridA = slotAEl.querySelector('.pp-planet .pp-grid');
+    if (pickA && gridA) gridA.innerHTML = P.gridToHtml(
+      P.render(pickA.planet, pickA.stageIdx, 10, sec, 1.0, undefined, 1, true), 2.2, 3.96);
+    var gridB = slotBEl.querySelector('.pp-planet .pp-grid');
+    if (pickB && gridB) gridB.innerHTML = P.gridToHtml(
+      P.render(pickB.planet, pickB.stageIdx, 10, sec, 1.0, undefined, 1, true), 2.2, 3.96);
   }
   function renderInherit() {
     if (!pickA || !pickB) { inheritBarEl.innerHTML = ''; return; }
@@ -2386,10 +2523,10 @@ class ProtoplanetApp {
       var p = list[i];
       var picked = isPicked(p);
       var tag = picked ? (pickA && pickKey(pickA) === pickKey(p) ? 'Parent A' : 'Parent B') : null;
-      var thumb = P.gridToHtml(P.renderCozy(p.planet, p.stageIdx, 10, 5, 1.0, 34, 19), 3.4, 6.12);
+      var thumb = P.gridToHtml(P.renderCozy(p.planet, p.stageIdx, 10, 5, 1.0, 34, 19, undefined, 1, true), 3.4, 6.12);
       html += '<div class="card' + (!p.eligible ? ' dim' : '') + (picked ? (tag === 'Parent A' ? ' pickedA' : ' pickedB') : '') + '"'
         + ' data-seed="' + p.seed + '" data-gen="' + p.generation + '">'
-        + '<div class="thumb"><div class="pp-grid" style="--pp-fs:6.12px;--pp-ch:6.12px">' + thumb + '</div></div>'
+        + '<div class="thumb pp-frame" data-cw="3.4" data-ch="6.12" data-atmo="' + p.planet.atmosphere + '"><div class="pp-stars"></div><div class="pp-planet"><div class="pp-grid" style="--pp-fs:6.12px;--pp-ch:6.12px">' + thumb + '</div></div></div>'
         + '<div class="cname">' + esc(p.name) + '</div>'
         + '<div class="cmeta">' + esc(p.terrainLabel) + ' &middot; ' + esc(p.stageName) + ' &middot; ' + p.chars + ' chars &middot; Gen ' + p.generation + '</div>'
         + (p.kind === 'current' ? '<span class="badge ok">Growing now</span>' : '')
@@ -2437,6 +2574,7 @@ class ProtoplanetApp {
       errorNoteEl.hidden = true;
     }
     renderCards();
+    refreshStarfields();
   }
   function togglePick(p) {
     if (!p.eligible) return;
@@ -2478,6 +2616,7 @@ class ProtoplanetApp {
     if (tick % 3 === 0) {
       refreshSlotArt();
       refreshResultArt();
+      refreshStarfields();
     }
   }, 150);
 
@@ -2547,6 +2686,15 @@ class ProtoplanetApp {
   .pp-run { display: inline-block; height: var(--pp-ch, 18px);
     line-height: var(--pp-ch, 18px); vertical-align: top; overflow: hidden;
     white-space: pre; font-kerning: none; }
+  /* Starfield layer (Devon, Nov 12): the stars are a layer of the
+     FRAME, not part of the planet. .pp-frame is the rectangle;
+     .pp-stars fills it with sky; .pp-planet is the star-free planet
+     render, centered, transparent where there is no planet — so the
+     stars show through around it and never stop at the planet's
+     edge. */
+  .pp-frame { position: relative; }
+  .pp-stars { position: absolute; inset: 0; overflow: hidden; z-index: 0; }
+  .pp-planet { position: relative; z-index: 1; width: fit-content; margin: 0 auto; }
   h1 { font-size: 20px; margin: 14px 0 4px; }
   #mutationLabel { display: inline-block; font-size: 11px; font-weight: 700;
     letter-spacing: .12em; text-transform: uppercase; color: #ffd75f;
@@ -2573,7 +2721,7 @@ class ProtoplanetApp {
 </head>
 <body>
 <div id="card">
-  <div id="wrap"><pre class="pp-grid" id="grid"></pre></div>
+  <div id="wrap" class="pp-frame"><div class="pp-stars"></div><div class="pp-planet"><pre class="pp-grid" id="grid"></pre></div></div>
   <h1 id="planetName">Your planet</h1>
   <div id="mutationLabel" style="display:none"></div>
   <p id="meta"></p>
@@ -2610,6 +2758,8 @@ class ProtoplanetApp {
     var newH = Math.max(1.8, +(18 * scale).toFixed(2));
     if (newW === cellW && newH === cellH && root.style.getPropertyValue('--pp-fs')) return;
     cellW = newW; cellH = newH;
+    wrapEl.setAttribute('data-cw', cellW);
+    wrapEl.setAttribute('data-ch', cellH);
     var probe = document.createElement('span');
     probe.style.cssText = 'position:absolute;visibility:hidden;font-family:' + FONT_STACK +
       ';font-size:16px;letter-spacing:0;white-space:pre;';
@@ -2626,6 +2776,31 @@ class ProtoplanetApp {
   window.addEventListener('resize', layout);
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(layout);
 
+  // Starfield layer (Devon, Nov 12): fill a .pp-frame with twinkling
+  // stars sized to the frame's own box. The frame carries its planet
+  // grid's cell size + atmosphere color in data attrs; the star grid
+  // is sized from the frame's pixel size (scroll size, so a frame
+  // wider than its box still gets sky under the scroll). Call after
+  // the frame is in the DOM, and on the tick so the stars twinkle.
+  function fillStars(frameEl, sec) {
+    var starsEl = frameEl.querySelector('.pp-stars');
+    if (!starsEl) return;
+    var cw = parseFloat(frameEl.getAttribute('data-cw')) || 3.4;
+    var ch = parseFloat(frameEl.getAttribute('data-ch')) || 6.12;
+    var atmo = parseInt(frameEl.getAttribute('data-atmo') || '244', 10);
+    var w = Math.max(frameEl.clientWidth || 0, frameEl.scrollWidth || 0);
+    var h = Math.max(frameEl.clientHeight || 0, frameEl.scrollHeight || 0);
+    var cols = Math.max(1, Math.ceil(w / cw));
+    var rows = Math.max(1, Math.ceil(h / ch));
+    starsEl.style.width = w + 'px';
+    starsEl.style.height = h + 'px';
+    starsEl.innerHTML = '<div class="pp-grid" style="--pp-fs:' + ch + 'px;--pp-ch:' + ch + 'px">'
+      + P.starfieldHtml(cols, rows, sec, atmo, cw, ch) + '</div>';
+  }
+  function refreshStarfields() {
+    var frames = document.querySelectorAll('.pp-frame');
+    for (var i = 0; i < frames.length; i++) fillStars(frames[i], sec);
+  }
   function renderMeta() {
     document.getElementById('planetName').textContent = state.name;
     var mutEl = document.getElementById('mutationLabel');
@@ -2644,6 +2819,7 @@ class ProtoplanetApp {
       if (!state || msg.stageIdx !== lastStage) stageStartSec = sec;
       lastStage = msg.stageIdx;
       state = msg;
+      wrapEl.setAttribute('data-atmo', state.planet.atmosphere);
       layout();
       renderMeta();
     } else if (msg.type === 'copied') {
@@ -2670,7 +2846,8 @@ class ProtoplanetApp {
     sec += 0.15;
     if (!state) return;
     var t = Math.max(0, sec - stageStartSec);
-    gridEl.innerHTML = P.gridToHtml(P.render(state.planet, state.stageIdx, t, sec), cellW, cellH);
+    gridEl.innerHTML = P.gridToHtml(P.render(state.planet, state.stageIdx, t, sec, undefined, undefined, undefined, true), cellW, cellH);
+    fillStars(wrapEl, sec);
   }, 150);
 
   // --- PNG: the same planet, drawn cell by cell on a canvas ------------------
@@ -2683,8 +2860,14 @@ class ProtoplanetApp {
   var PNG_CELL_W = 8, PNG_CELL_H = PNG_CELL_W * (P.CONFIG.CELL_H / P.CONFIG.CELL_W);
   function drawPng() {
     if (!state) return null;
+    // The render takes (zoom, stage0Style, smokeScale) after sec —
+    // P.CONFIG.W/H are NOT stage0Style/smokeScale. Passing them drew
+    // stage 0 as a sparse non-exploded core (264 cells instead of
+    // 670) with a smokeScale of 76; stage 6+ was unaffected. The
+    // defaults are what the panel shows: exploded core, smoke 1,
+    // stars on.
     var grid = P.render(state.planet, state.stageIdx,
-      Math.max(0, sec - stageStartSec), sec, 1.0, P.CONFIG.W, P.CONFIG.H);
+      Math.max(0, sec - stageStartSec), sec, 1.0);
     var canvas = document.getElementById('pngCanvas');
     var captionH = 56;
     canvas.width = P.CONFIG.W * PNG_CELL_W;
