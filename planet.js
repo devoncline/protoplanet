@@ -2064,6 +2064,12 @@ function render(planet, stageIdx, t, sec, zoom, stage0Style, smokeScale, noStars
 function downsampleGrid(grid, outW, outH) {
   const inH = grid.length, inW = grid[0].length;
   const { RAMP } = CONFIG;
+  // Glyph brightness lookup for the dense-block re-read below: each
+  // input glyph already encodes its brightness (the full renderer
+  // picks glyphs from b), so the average index of a block's non-null
+  // cells says whether the block really holds visible content.
+  const rampIdx = { ' ': 0 };
+  for (let i = 1; i < RAMP.length; i++) rampIdx[RAMP[i]] = i;
   const out = [];
   for (let oy = 0; oy < outH; oy++) {
     const y0 = Math.floor(oy * inH / outH);
@@ -2072,10 +2078,17 @@ function downsampleGrid(grid, outW, outH) {
     for (let ox = 0; ox < outW; ox++) {
       const x0 = Math.floor(ox * inW / outW);
       const x1 = Math.max(x0 + 1, Math.floor((ox + 1) * inW / outW));
-      let sr = 0, sg = 0, sb = 0, n = 0;
+      let sr = 0, sg = 0, sb = 0, n = 0, nn = 0, sidxNN = 0, glyphCells = 0;
       for (let y = y0; y < y1; y++) {
         for (let x = x0; x < x1; x++) {
-          const col = grid[y][x][1];
+          const cell = grid[y][x];
+          const col = cell[1];
+          if (col !== null) {
+            nn++;
+            const idx = rampIdx[cell[0]] || 0;
+            sidxNN += idx;
+            if (idx > 0) glyphCells++;
+          }
           const [r, g, b] = col === null ? [0, 0, 0] : ansi256ToRgb(col);
           sr += r; sg += g; sb += b; n++;
         }
@@ -2084,6 +2097,42 @@ function downsampleGrid(grid, outW, outH) {
       const lum = (0.2126 * ar + 0.7152 * ag + 0.0722 * ab) / 255;
       if (lum < 0.02) { row.push([' ', null]); continue; }
       const ch = RAMP[Math.min(RAMP.length - 1, Math.trunc(lum * RAMP.length))];
+      // Round 3 (pixel blocks, Nov 12): a block that averages to a
+      // space with a dark color becomes an opaque dark rectangle in
+      // gridToHtml — the location-blind bg rule paints it exactly as
+      // it paints the night side. The night side is the ONLY place a
+      // dark space belongs, and it is DENSELY non-null: every disc
+      // cell has a color, so a block inside the night side is ~100%
+      // non-null. A fringe block is never dense — the smoke fringe is
+      // ~22-27 of 30 cells null, and an icy limb block of 8 'f' + 2
+      // '+' glyphs is 11/30 — and at high zoom the blocks are only
+      // 2x2, so a <25%-null rule never fires there at all (measured:
+      // it left 25 dark cells on the 69x47 disc). So: a dark space is
+      // kept ONLY when the block is (nearly) fully covered (nn/n >=
+      // 0.9); anything sparser is sky with a few dim cells in it and
+      // stays transparent. The night side keeps its opaque background
+      // over the starfield layer — verified by the night-side test.
+      // One more case: a DENSE block of dim smoke — 2x2 cells, both
+      // ',' in color 232 — is 100% non-null, so the rule above keeps
+      // it as a dark space (measured: 7 left on the disc). But those
+      // cells HAVE glyphs (','); only the night side is all spaces.
+      // So a dense block that averages to a space is re-read from the
+      // glyphs of its non-null cells — but ONLY when nearly all of
+      // them carry a glyph (glyphCells/nn > 0.8). Measured separation
+      // across 41 frames: the stage-0 smoke blocks are ALL at 1.00,
+      // the stage-6 night-side blocks top out at 0.78 (mostly spaces
+      // with a few dim noise glyphs). A block that passes the gate
+      // emits its average glyph instead (faint, in the dark average
+      // color — and a glyph cell gets no background fill, so no
+      // rectangle); a block that fails it is the night side and the
+      // dark space stays.
+      if (ch === ' ' && nn / n < 0.9) { row.push([' ', null]); continue; }
+      if (ch === ' ') {
+        const avgIdx = nn > 0 ? Math.trunc(sidxNN / nn) : 0;
+        if (avgIdx > 0 && glyphCells / nn > 0.8) {
+          row.push([RAMP[Math.min(RAMP.length - 1, avgIdx)], rgbToAnsi256(ar, ag, ab)]); continue;
+        }
+      }
       row.push([ch, rgbToAnsi256(ar, ag, ab)]);
     }
     out.push(row);
@@ -2643,8 +2692,24 @@ function gridToHtml(grid, cellW, cellH) {
         // invisible, not disc. On a #050505 page the dark backgrounds
         // (#000000–#303030) are imperceptible, so baked-in renders
         // look exactly as before.
+        // BUT only for runs of 4+ cells (round 3, Nov 12 — black
+        // squares at stage 1+): the night side is speckled, not
+        // solid — pattern noise pushes the brightness across the
+        // space threshold cell by cell, so the terminator is a mix
+        // of dark spaces and dim glyphs. A 1-3 cell dark run painted
+        // with a background is a small sharp rectangle — a "black
+        // square" — visible at full-res sizes (the detail sheet)
+        // because #000000/#080808 edges read against #050505.
+        // Measured run histogram, stage 1 full render (5 frames):
+        // len 1: 105, 2: 30, 3: 13, 4: 10, 5: 2, 6: 2 — the speckle
+        // is 1-3 cells; the solid deep night side is 4+. Short runs
+        // stay transparent (on black they read as black anyway, no
+        // rectangle); the solid night side keeps its opaque
+        // background, so the starfield protection stands where the
+        // night side is actually solid. Stage 0 has no night side
+        // (0 dark-space cells), so this changes nothing there.
         let bg = '';
-        if (/^ +$/.test(buf)) {
+        if (/^ +$/.test(buf) && buf.length >= 4) {
           const [r, g, b] = ansi256ToRgb(cur);
           if ((r + g + b) / 3 < 96) bg = `;background:${ansi256ToHex(cur)}`;
         }

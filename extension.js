@@ -350,7 +350,19 @@ class ProtoplanetApp {
       // apply the stored mutations. Best effort — a tilted birth
       // roll's mutation-granted traits (e.g. a green moon's tint)
       // can't be fully rebuilt from the seed alone.
-      traits = Planet.generatePlanet(record.seed);
+      // The stored terrain MUST be passed as the starter terrain:
+      // the seed alone does not encode a starter pick. Without it the
+      // re-roll does a weighted terrain pick, so a starter-picked icy
+      // planet (GJ-364c, seed 948502300) came back LAVA in the panel —
+      // red/orange disc + red moon while the sidebar (which renders
+      // the live object) stayed icy blue. The label said "Icy world"
+      // because it reads record.terrain, but the pixels used the
+      // re-rolled lava traits. Passing the stored terrain reproduces
+      // the exact planet: the starter pick consumes one rng draw, so
+      // moons/rings/size are identical either way (verified Nov 12).
+      // Records with no stored terrain (pre-step-4) fall back to the
+      // weighted pick, as before.
+      traits = Planet.generatePlanet(record.seed, record.terrain);
       traits.mutations = (record.mutations || []).slice();
     }
     // Display stage: CAPPED at Civilization — the final stage
@@ -736,15 +748,24 @@ class ProtoplanetApp {
   body { margin: 0; padding: 10px; background: transparent; overflow: hidden;
     color: var(--vscode-editor-foreground);
     font-family: var(--vscode-font-family); }
-  /* Dark card (Devon, Nov 12 — round 2): the round-1 guess was
-     transparent — the pet floating on the VS Code gray. Devon wants
-     Pokechi's card: a flat dark panel behind the planet so it stands
-     out on the gray. Square corners, 1px hairline, no glow —
-     Instrument. */
-  #wrap { background: #171717; border: 1px solid #2e2e2e; padding: 8px; overflow: hidden; }
+  /* Dark card (Devon, Nov 12 — round 2, restyled round 3): the
+     round-1 guess was transparent — the pet floating on the VS Code
+     gray. Devon wants Pokechi's card: a gray rounded-corner card
+     holding the planet AND the XP bar, so it reads as one tidy unit
+     at any size. Round 3: rounded corners (10px) and a lighter gray
+     (#2b2b2b) — Devon explicitly asked for the rounded card here;
+     that overrides the Instrument no-radius rule, which applies to
+     the full-screen panels, not this card. No glow. */
+  #wrap { background: #2b2b2b; border: 1px solid #3d3d3d; border-radius: 10px; padding: 8px; overflow: hidden; }
   /* Compact (collapsed sidebar): tighter margins so the XP bar stays
-     visible in a short view. */
-  body.compact #stageName { margin-top: 2px; }
+     visible in a short view. Round 3: the stage line hides entirely
+     at minimum sizes (Devon: the stage doesn't need saying at this
+     size — it's in the detail sheet / Index) and the body + card
+     padding shrink, so the art gets ~20px back and the planet stops
+     being a tiny icon at 150px tall. The XP bar + number always stay. */
+  body.compact { padding: 6px; }
+  body.compact #stageName { display: none; }
+  body.compact #wrap { padding: 6px; }
   body.compact #xplabel { margin: 2px 0 3px; }
   body.compact #meta { margin-top: 2px; }
   /* No scrollbar, ever (Devon, Nov 12 — round 2): the content fits
@@ -786,12 +807,10 @@ class ProtoplanetApp {
 </style>
 </head>
 <body>
-<div id="wrap"><pre class="pp-grid" id="grid"></pre></div>
+<div id="wrap"><pre class="pp-grid" id="grid"></pre><div id="xpbar"><div id="xpfill"></div></div><div id="xplabel">XP 0 / 100</div></div>
 <div id="stageName">Your planet is hatching&hellip;</div>
 <div id="mutationLabel" style="display:none"></div>
 <p id="stageDesc">Pick a starter and start typing &mdash; every character grows it.</p>
-<div id="xpbar"><div id="xpfill"></div></div>
-<div id="xplabel">XP 0 / 100</div>
 <div id="meta"></div>
 <script nonce="${nonce}" src="${planetJsUri}"></script>
 <script nonce="${nonce}">
@@ -802,7 +821,7 @@ class ProtoplanetApp {
   const wrapEl = document.getElementById('wrap');
   const root = document.documentElement;
   const FONT_STACK = ${JSON.stringify(FONT_STACK)};
-  let cellW = 3, cellH = 5.4, state = null, sec = 0, stageStartSec = 0, lastStage = -1, lastCrop = null, lastDims = null;
+  let cellW = 3, cellH = 5.4, state = null, sec = 0, stageStartSec = 0, lastStage = -1, lastCrop = null, lastDims = null, lastLayoutAt = -1e9, layoutPending = false;
 
   // --- Fixed-cell layout (same approach as preview.html) ------------------
   // The sidebar is narrow, so cells scale down to fit the width — the
@@ -837,8 +856,9 @@ class ProtoplanetApp {
     // Height fit (Devon, Nov 12 — round 2): the collapsed sidebar
     // showed a scrollbar — the grid + text were taller than the view.
     // The grid shrinks to fit the view height, and the grown-from
-    // line hides first when space is tight; the stage line, XP bar
-    // and XP numbers always stay. Compact margins under 200px.
+    // line hides first when space is tight; in compact mode the stage
+    // line hides too (round 3) — the XP bar and XP numbers always
+    // stay. Compact margins under 200px.
     // Coarse fallback: if the fitted cells would drop below ~4px the
     // glyphs are dots, so the crop renders downsampled (half, then
     // quarter resolution) — a chunky mini planet with readable
@@ -853,9 +873,16 @@ class ProtoplanetApp {
       newH = Math.max(1.8, +(18 * scale).toFixed(2));
       if (viewH <= 0) break;
       document.body.classList.toggle('compact', viewH < 200);
-      let reserve = 24; // body padding top+bottom + 4px safety for rounding
-      // The dark card's own padding + border (16 + 2) — measured, not
-      // guessed: the first round-2 pass forgot it and still scrolled.
+      // Round 3: the body padding is measured (10px, 6px in compact),
+      // not hardcoded — the old 24 (= 20 + 4 safety) over-reserved
+      // once compact shrank the padding, stealing art height.
+      const bodyCs = getComputedStyle(document.body);
+      let reserve = parseFloat(bodyCs.paddingTop) + parseFloat(bodyCs.paddingBottom) + 4;
+      // The dark card's own padding + border — measured, not guessed:
+      // the first round-2 pass forgot it and still scrolled. The XP
+      // bar + label live INSIDE the card now (round 3, Pokechi-style),
+      // so their heights are already inside this term — do NOT add
+      // them again below.
       const gridEl0 = wrapEl.querySelector('.pp-grid');
       reserve += wrapEl.offsetHeight - (gridEl0 ? gridEl0.offsetHeight : 0);
       // Text heights are measured with their real margins — hardcoded
@@ -868,13 +895,11 @@ class ProtoplanetApp {
       };
       const sn = document.getElementById('stageName');
       const ml = document.getElementById('mutationLabel');
-      const xb = document.getElementById('xpbar');
-      const xl = document.getElementById('xplabel');
       const mt = document.getElementById('meta');
+      // In compact mode #stageName is display:none, so outerH is 0
+      // and the stage line's height goes back to the art for free.
       if (sn) reserve += outerH(sn);
       if (ml && ml.style.display !== 'none') reserve += outerH(ml);
-      if (xb) reserve += outerH(xb);
-      if (xl) reserve += outerH(xl);
       let metaH = (mt && mt.textContent) ? outerH(mt) : 0;
       const fitH = viewH - reserve;
       if (mt && mt.textContent && newH * dims.rows + metaH > fitH) {
@@ -912,7 +937,22 @@ class ProtoplanetApp {
   window.addEventListener('message', (e) => {
     const msg = e.data;
     if (!msg || msg.type !== 'state') return;
-    if (!state || msg.stageIdx !== lastStage) stageStartSec = sec; // morph replays
+    // The birth morph (Devon, Nov 12 — round 3): it replays ONLY on a
+    // real birth or level-up, never on webview load. The old line reset
+    // stageStartSec on the first state, so every sidebar open replayed
+    // the 3s birth — and at t=0 the planet renders at the previous
+    // (Civilization) stage's radius 28.5 with a full ring, so the
+    // double ring spans the whole 136-col grid (Devon's "huge ring",
+    // like the black-hole onboarding), then condenses over 3s. A planet
+    // at 79/100 XP has been in this stage for days; opening the
+    // sidebar must show it settled. A brand-new planet (0 chars) still
+    // gets its birth on first sight; a new planet (seed changed) or a
+    // level-up while the sidebar is live replays it too.
+    if (!state) {
+      stageStartSec = msg.chars === 0 ? sec : sec - 10; // settled unless newborn
+    } else if ((msg.planet && state.planet && msg.planet.seed !== state.planet.seed) || msg.stageIdx !== lastStage) {
+      stageStartSec = sec;
+    }
     lastStage = msg.stageIdx;
     state = msg;
     document.getElementById('stageName').textContent =
@@ -959,6 +999,20 @@ class ProtoplanetApp {
     const crop = P.sidebarCrop(state.planet, state.stageIdx, t);
     if (!lastCrop || crop.cols !== lastCrop.cols || crop.rows !== lastCrop.rows) {
       lastCrop = crop;
+      layoutPending = true;
+    }
+    // Debounced layout (round 3): during the 3s birth morph the crop
+    // changes ~every tick, and each layout() forces a synchronous
+    // layout (getComputedStyle + offsetHeight reads) on top of the
+    // render. Re-fit at most every 0.5s, plus once when the morph
+    // settles (t >= 3) so the final size is exact. The grid keeps
+    // rendering from the last fitted dims in between — it only ever
+    // gets coarser, never overflows. The first tick runs layout()
+    // immediately (lastLayoutAt starts at -1e9), so the first paint is
+    // at the correct measured size.
+    if (layoutPending && (sec - lastLayoutAt >= 0.5 || t >= 3)) {
+      layoutPending = false;
+      lastLayoutAt = sec;
       layout();
     }
     const full = P.render(state.planet, state.stageIdx, t, sec, 1.0, undefined, 1, true);
@@ -1767,14 +1821,21 @@ class ProtoplanetApp {
       if (gridEl) {
         var discZoom = Math.min(P.stageScale(d.planet.stageIdx),
           P.ringFitZoom(d.planet.planet, d.planet.stageIdx, detail.cols, detail.rows));
-        // The zoomed-in disc (Devon, Nov 12 — round 2): the full-grid
-        // disc keeps the planet small even at 3x — stage 0's body is
-        // 18% of the grid, ~66px in a 359px box. The selected disc,
-        // while zoomed into, renders CROPPED to the planet + its
-        // whole ring system and 1.4x bigger than its world footprint,
-        // so the zoomed planet fills the view with readable glyphs
-        // instead of sitting small in a big empty box.
-        if (zoomed && selected && selected.seed === d.planet.seed && selected.generation === d.planet.generation) {
+        // The zoomed-in disc (Devon, Nov 12 — round 2, generalized
+        // round 3): the full-grid disc keeps the planet small even at
+        // 3x — stage 0's body is 18% of the grid, ~66px in a 359px
+        // box. A disc at high zoom renders CROPPED to the planet +
+        // its whole ring system and 1.4x bigger than its world
+        // footprint, so the zoomed planet fills the view with readable
+        // glyphs instead of sitting small in a big empty box — the
+        // same full planet the detail sheet shows. Round 2 this was
+        // selected-disc-only; round 3 it applies to ANY disc at 2x+,
+        // because a wheel-zoomed disc had the same half-detail gap
+        // vs its sheet. Same cost as the cozy path: both render the
+        // full grid once per disc per tick; the crop skips the
+        // downsample instead of adding work.
+        var isSel = zoomed && selected && selected.seed === d.planet.seed && selected.generation === d.planet.generation;
+        if (zoom >= 2 || isSel) {
           var zcrop = P.sidebarCrop(d.planet.planet, d.planet.stageIdx, 10, 2.5);
           var zCellW = (detail.cols * detail.cellW * 1.4) / zcrop.cols;
           var zCellH = zCellW * 1.8;
@@ -1840,7 +1901,12 @@ class ProtoplanetApp {
     if (!zoomed) prevView = { zoom: zoom, panX: panX, panY: panY };
     var pos = planetPos({ index: disc.ring }, angles[disc.ring]);
     var ow = orreryEl.clientWidth, oh = orreryEl.clientHeight;
-    var zoomT = Math.min(3, Math.max(1.6, fitZoom * 2.6));
+    // Round 3 (Devon, Nov 12): land near full detail — the detail
+    // sheet shows the full 136-col planet, but the disc capped at 3x
+    // only reached 69 cols, so the zoomed planet looked half as
+    // detailed as its own sheet. fitZoom x 5 (capped at 6x) lands at
+    // ~136 cols, and the 6x cap lets the wheel reach it too.
+    var zoomT = Math.min(6, Math.max(1.6, fitZoom * 5));
     // Land the planet left of centre (the sheet takes the right side).
     var tx = ow * 0.34, ty = oh * 0.5;
     var panTX = tx - ow / 2 - (pos.x - CX) * zoomT;
@@ -2160,7 +2226,9 @@ class ProtoplanetApp {
     // mode, reached from the tabs), so there is no page to scroll.
     if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
-    zoom = Math.max(0.3, Math.min(3, zoom * Math.exp(-e.deltaY * 0.001)));
+    // Round 3: cap 6x (was 3x) — discDetail needs 5.91x for the full
+    // 136 cols, and 3x only ever reached 69.
+    zoom = Math.max(0.3, Math.min(6, zoom * Math.exp(-e.deltaY * 0.001)));
     applyTransform();
     scheduleZoomRefresh();
   }, { passive: false });
@@ -2242,7 +2310,7 @@ class ProtoplanetApp {
 
   // --- top bar -----------------------------------------------------------------
   document.getElementById('zoomIn').addEventListener('click', function () {
-    zoom = Math.min(3, zoom * 1.25); applyTransform(); scheduleZoomRefresh();
+    zoom = Math.min(6, zoom * 1.25); applyTransform(); scheduleZoomRefresh();
   });
   document.getElementById('zoomOut').addEventListener('click', function () {
     zoom = Math.max(0.3, zoom / 1.25); applyTransform(); scheduleZoomRefresh();
@@ -3041,7 +3109,15 @@ class ProtoplanetApp {
     var msg = e.data;
     if (!msg) return;
     if (msg.type === 'share') {
-      if (!state || msg.stageIdx !== lastStage) stageStartSec = sec;
+      // Same rule as the sidebar (round 3): the birth morph replays
+      // only on a real birth/level-up, never on panel load — the share
+      // panel re-renders the full 136x76 grid every tick, so replaying
+      // the t=0 explosion on open is its most expensive first render.
+      if (!state) {
+        stageStartSec = msg.chars === 0 ? sec : sec - 10; // settled unless newborn
+      } else if ((msg.planet && state.planet && msg.planet.seed !== state.planet.seed) || msg.stageIdx !== lastStage) {
+        stageStartSec = sec;
+      }
       lastStage = msg.stageIdx;
       state = msg;
       wrapEl.setAttribute('data-atmo', state.planet.atmosphere);

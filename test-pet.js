@@ -1009,9 +1009,27 @@ check('ext: hide-UI pill click brings the UI back',
   extSrc.includes("getElementById('showUiPill')") && extSrc.includes("classList.remove('hide-ui')"));
 check('ext: Index grid has no gray background (panel black, hairline tiles)',
   extSrc.includes('#tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 0; background: #050505; }'));
-check('ext: sidebar pet sits in a flat dark card (Devon, Nov 12 — round 2; the transparent wrap was the round-1 guess)',
-  extSrc.includes('#wrap { background: #171717; border: 1px solid #2e2e2e;')
-  && !extSrc.includes('#wrap { background: transparent; border: none;'));
+check('ext: sidebar pet sits in a rounded gray card (Devon, Nov 12 — round 3 Pokechi-style; the flat #171717 square card was round 2)',
+  extSrc.includes('#wrap { background: #2b2b2b; border: 1px solid #3d3d3d; border-radius: 10px;')
+  && !extSrc.includes('#wrap { background: transparent; border: none;')
+  && !extSrc.includes('#wrap { background: #171717;'));
+check('ext: sidebar XP bar + label live inside the card (Pokechi-style, round 3)',
+  extSrc.includes('<div id="wrap"><pre class="pp-grid" id="grid"></pre><div id="xpbar">')
+  && extSrc.includes('</div><div id="xplabel">XP 0 / 100</div></div>'));
+check('ext: sidebar stage line hides at minimum sizes (round 3 — the stage is in the detail sheet / Index)',
+  extSrc.includes('body.compact #stageName { display: none; }'));
+check('ext: sidebar reserve measures the body padding (round 3 — compact shrinks it, a hardcoded 24 over-reserved)',
+  extSrc.includes('getComputedStyle(document.body)') && extSrc.includes('parseFloat(bodyCs.paddingTop)'));
+check('ext: sidebar does NOT replay the birth morph on webview load (round 3 — Devon: huge ring on every open)',
+  !extSrc.includes('if (!state || msg.stageIdx !== lastStage) stageStartSec = sec;')
+  && extSrc.includes('stageStartSec = msg.chars === 0 ? sec : sec - 10;'));
+check('ext: sidebar replays the morph on a new planet or a level-up (round 3 — births still play live)',
+  extSrc.includes('msg.planet.seed !== state.planet.seed') && extSrc.includes('msg.stageIdx !== lastStage'));
+check('ext: share panel does NOT replay the birth morph on load (round 3 — same bug, full-grid re-render)',
+  extSrc.includes("if (msg.type === 'share')") && (extSrc.match(/stageStartSec = msg\.chars === 0 \? sec : sec - 10;/g) || []).length === 2);
+check('ext: sidebar tick debounces layout during the morph (round 3 — crop changes every tick for 3s)',
+  extSrc.includes('layoutPending = true') && extSrc.includes('sec - lastLayoutAt >= 0.5')
+  && extSrc.includes('layoutPending && (sec - lastLayoutAt >= 0.5 || t >= 3)'));
 check('ext: sidebar never scrolls (height-aware layout, XP always visible)',
   extSrc.includes('body.compact') && extSrc.includes("mt.style.display = 'none'")
   && extSrc.includes('body { margin: 0; padding: 10px; background: transparent; overflow: hidden;'));
@@ -1055,8 +1073,8 @@ check('ext: no "+" buttons on empty rings (ringHit hit-areas instead)',
     wheelSrc.indexOf('if (!e.ctrlKey && !e.metaKey) return;') !== -1
     && wheelSrc.indexOf('if (!e.ctrlKey && !e.metaKey) return;') < wheelSrc.indexOf('e.preventDefault()'),
     wheelSrc.slice(0, 220));
-  check('ext: ctrl/cmd+wheel still zooms',
-    wheelSrc.includes('zoom = Math.max(0.3, Math.min(3, zoom * Math.exp(-e.deltaY * 0.001)))'));
+  check('ext: ctrl/cmd+wheel still zooms (cap 6x, round 3 — was 3x)',
+    wheelSrc.includes('zoom = Math.max(0.3, Math.min(6, zoom * Math.exp(-e.deltaY * 0.001)))'));
   check('ext: zoom hint names Ctrl+Scroll', extSrc.includes('Ctrl+Scroll to zoom'));
 })();
 // (2) Ring hover highlights the ring itself.
@@ -1249,6 +1267,26 @@ check('ext: builds a prestige view model', extSrc.includes('prestigeViewModel'))
 check('ext: handles prestige messages', extSrc.includes('onPrestigeMessage'));
 check('ext: panel fuses through petLogic', extSrc.includes('Logic.prestige('));
 check('ext: panel reuses the shared renderable helper', extSrc.includes('renderablePlanet'));
+// Round 3 (Devon, Nov 12 — red/orange Accretion in the panel): the
+// fallback re-roll in renderablePlanet must pass the stored starter
+// terrain, or a starter-picked planet comes back with the wrong
+// terrain (GJ-364c: icy by pick, lava by weighted re-roll).
+check('ext: panel re-roll passes the stored starter terrain',
+  extSrc.includes('generatePlanet(record.seed, record.terrain)'));
+// The invariant the fix relies on: the starter pick consumes one rng
+// draw, so the re-roll with the stored terrain reproduces the planet
+// exactly — only the terrain differs without it.
+const gjLive = L.makePlanet(948502300, 'icy');
+const gjReroll = Planet.generatePlanet(948502300);
+const gjFixed = Planet.generatePlanet(948502300, 'icy');
+check('panel: re-roll without the starter terrain picks the wrong terrain (lava, not icy)',
+  gjReroll.terrain === 'lava' && gjLive.terrain === 'icy',
+  `reroll=${gjReroll.terrain} live=${gjLive.terrain}`);
+check('panel: re-roll WITH the stored terrain reproduces the planet exactly',
+  gjFixed.terrain === 'icy' && JSON.stringify(gjFixed.bands) === JSON.stringify(gjLive.bands)
+    && JSON.stringify(gjFixed.moons) === JSON.stringify(gjLive.moons)
+    && gjFixed.ringType === gjLive.ringType && gjFixed.size === gjLive.size,
+  `fixed=${gjFixed.terrain}`);
 check('ext: panel posts the fusion result for the result view', extSrc.includes('recordPrestigeResult'));
 check('ext: panel has a dedicated webview panel (not a QuickPick)', extSrc.includes("'protoplanet.prestige'"));
 check('ext: panel keeps context when hidden', extSrc.includes('retainContextWhenHidden'));
@@ -1520,9 +1558,27 @@ check('ext: hatchFromSeed confirms with a modal warning', extSrc.includes('Yes, 
     (sysHtml.match(/scheduleZoomRefresh\(\)/g) || []).length >= 7
     && sysHtml.includes('function scheduleZoomRefresh()')
     && sysHtml.includes('refreshDiscDetail();'));
+  // Round 3 (Devon, Nov 12): the zoomed disc showed half the detail
+  // of its own sheet — the panel capped zoom at 3x, where discDetail
+  // only reaches 69 cols, and clicking a planet landed at ~1.8x
+  // (~41 cols). The cap is 6x everywhere now, clicking lands at
+  // fitZoom x 5, and any disc at 2x+ renders cropped to the planet
+  // (the selected-disc-only path, generalized) so the zoomed disc
+  // matches its sheet.
+  check('ext: zoom cap is 6x at all three clamp sites (wheel, zoom-in button, zoomToPlanet)',
+    sysHtml.includes('zoom = Math.max(0.3, Math.min(6, zoom * Math.exp(-e.deltaY * 0.001)))')
+    && sysHtml.includes('zoom = Math.min(6, zoom * 1.25)')
+    && sysHtml.includes('var zoomT = Math.min(6, Math.max(1.6, fitZoom * 5));')
+    && !sysHtml.includes('Math.min(3, zoom') && !sysHtml.includes('fitZoom * 2.6'));
+  check('ext: any disc at high zoom renders cropped to the planet (not selected-only)',
+    sysHtml.includes('if (zoom >= 2 || isSel)') && sysHtml.includes('var isSel = zoomed && selected'));
   check('ext: index tiles have no amber border (hairline gaps only)',
     !sysHtml.includes('.tile.inSystem') && !sysHtml.includes('.tile.picking')
     && sysHtml.includes('gap: 0; background: #050505;'));
+  check('ext: Index tiles use the cropped full render, no downsample (round 3 — the tile path must be clean of the pixel-block source)',
+    sysHtml.includes('P.cropGrid(P.render(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx)')
+    && !sysHtml.slice(sysHtml.indexOf('function fillTileArt'), sysHtml.indexOf('function fillTileArt') + 900).includes('downsampleGrid')
+    && !sysHtml.slice(sysHtml.indexOf('function fillTileArt'), sysHtml.indexOf('function fillTileArt') + 900).includes('renderCozy'));
   check('ext: amber stays on badges and the active tab only',
     sysHtml.includes('.badge.sys') && sysHtml.includes('.tab.active') && sysHtml.includes('#e8b64c'));
   check('ext: index header is one slim line, no heading',

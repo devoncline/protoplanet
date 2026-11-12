@@ -1880,10 +1880,22 @@ check('name: generatePlanet carries the seed name',
   // their color as a background, so the starfield layer behind never
   // shows through the dark disc. Bright space cells (a city light
   // swallowed by a dark belt) stay transparent.
-  const nightGrid = [[[' ', 16], [' ', 16], ['.', 232]], [[' ', 229], [' ', null], ['*', 250]]];
+  // Round 3 (Nov 12 — black squares at stage 1+): the night side is
+  // speckled, not solid — pattern noise pushes the brightness across
+  // the space threshold cell by cell — so a 1-3 cell dark run painted
+  // with a background is a small sharp rectangle ("black square") at
+  // full-res sizes. Only runs of 4+ cells (the solid deep night side)
+  // get a background; the 1-3 cell speckle stays transparent (on
+  // black it reads as black anyway, no rectangle). The 4-cell run
+  // below still paints; the 2-cell run in the second row does not.
+  const nightGrid = [[[' ', 16], [' ', 16], [' ', 16], [' ', 16], ['.', 232]], [[' ', 229], [' ', null], ['*', 250]]];
   const nightHtml = P.gridToHtml(nightGrid, 10, 18);
   check('stars: dark space runs paint their background (opaque night side)',
     nightHtml.includes('background:#000000'));
+  const speckleGrid = [[['.', 232], [' ', 16], [' ', 16], ['.', 232]], [[' ', 16], ['.', 232], [' ', 16], [' ', 16]]];
+  const speckleHtml = P.gridToHtml(speckleGrid, 10, 18);
+  check('stars: short dark runs (1-3 cells, terminator speckle) stay transparent — no black squares',
+    !speckleHtml.includes('background:'));
   check('stars: bright space runs stay transparent (no background)',
     !nightHtml.includes('background:#ffffaf') && !nightHtml.includes('background:#ffffd7'));
   check('stars: glyph runs are untouched by the background rule',
@@ -2070,6 +2082,98 @@ check('name: generatePlanet carries the seed name',
   const s0buggy = P.render(cp, 0, 10, 5, 1.0, P.CONFIG.W, P.CONFIG.H);
   check('share: the old arg order really was wrong (sparse stage 0)',
     countCells(s0buggy) < countCells(s0) / 2, `${countCells(s0buggy)} vs ${countCells(s0)}`);
+}
+
+// --- 22. Round-3 pixel blocks (Devon, Nov 12 — F5 feedback) --------------
+// The composed visual, not just the pieces: a downsampled stage-0
+// render must contain NO opaque dark-space cells — those are what
+// gridToHtml paints as solid rectangles in the smoke fringe. The
+// diagnosis (41 frames on Devon's real planet GJ-364c, seed
+// 948502300) found them at every frame in every downsampled view;
+// the fix lives in downsampleGrid (dense-block rule + glyph re-read).
+// The night side is the one place dark spaces belong, so a mature
+// planet's downsample must KEEP some.
+{
+  function darkSpaceCells(grid) {
+    let n = 0;
+    for (const row of grid) for (const [ch, col] of row) {
+      if (ch === ' ' && col !== null && col !== undefined) {
+        const [r, g, b] = P.ansi256ToRgb(col);
+        if ((r + g + b) / 3 < 96) n++;
+      }
+    }
+    return n;
+  }
+  const gj = P.generatePlanet(948502300);
+  // Devon's planet is icy by starter pick; the smoke fringe is a
+  // stage-0 feature on any terrain, so the base seed is enough here.
+  let worst = 0, worstLabel = '';
+  for (const [ow, oh, label] of [[69, 47, 'disc@3x'], [46, 24, 'disc@2x'], [23, 16, 'fit'], [34, 19, 'thumb']]) {
+    let max = 0;
+    for (let i = 0; i <= 40; i++) {
+      const sec = +(i * 0.15).toFixed(2);
+      const dz = Math.min(P.stageScale(0), P.ringFitZoom(gj, 0, ow, oh));
+      max = Math.max(max, darkSpaceCells(P.renderCozy(gj, 0, 10, sec, dz, ow, oh, undefined, 0.5, true)));
+    }
+    if (max > worst) { worst = max; worstLabel = label; }
+  }
+  check('pixel-blocks: downsampled stage-0 renders have 0 dark-space cells (41 frames, 4 sizes)',
+    worst === 0, `worst ${worst} at ${worstLabel}`);
+  // Sidebar coarse fallback: crop, then downsample half and quarter.
+  const crop = P.sidebarCrop(gj, 0, 10);
+  let worstCoarse = 0;
+  for (let i = 0; i <= 40; i++) {
+    const sec = +(i * 0.15).toFixed(2);
+    const g = P.cropGrid(P.render(gj, 0, 10, sec, 1.0, undefined, 0.5, true), crop);
+    worstCoarse = Math.max(worstCoarse,
+      darkSpaceCells(P.downsampleGrid(g, Math.max(1, Math.floor(g[0].length / 2)), Math.max(1, Math.floor(g.length / 2)))),
+      darkSpaceCells(P.downsampleGrid(g, Math.max(1, Math.floor(g[0].length / 4)), Math.max(1, Math.floor(g.length / 4)))));
+  }
+  check('pixel-blocks: sidebar coarse fallback has 0 dark-space cells (41 frames)',
+    worstCoarse === 0, `worst ${worstCoarse}`);
+  // Night side preserved: a mature planet's downsample still has
+  // opaque dark-space cells (the disc's dark half over the starfield).
+  let nightKept = true, nightDetail = '';
+  for (const seed of [40059, 805839337, 948502300, 12345]) {
+    const pl = P.generatePlanet(seed);
+    const full6 = P.render(pl, 6, 10, 5, 1.0, undefined, 0.5, true);
+    const d46 = darkSpaceCells(P.downsampleGrid(full6, 46, 24));
+    nightDetail += `${seed}:${d46} `;
+    if (d46 === 0) nightKept = false;
+  }
+  check('pixel-blocks: night side keeps opaque dark-space cells in the downsample',
+    nightKept, nightDetail.trim());
+  // Stage 1+ (Devon, Nov 12 — black squares in the panel): the full
+  // render DOES have dark-space cells from stage 1 on (the night side
+  // exists once the planet has a disc — 75 at stage 1 on GJ-364c,
+  // vs 0 at stage 0), so the grid-level count can't be 0 there. What
+  // must hold is the HTML: the detail sheet may only paint a
+  // background on the solid night side (runs of 4+ cells), never on
+  // the 1-3 cell terminator speckle. Measured on GJ-364c over 41
+  // frames: stage 1 max 5 bg spans/frame, stage 6 max 10 — vs ~30
+  // before the run-length rule.
+  function sheetBgSpans(planet, stageIdx) {
+    let worst = 0;
+    for (let i = 0; i <= 40; i++) {
+      const sec = +(i * 0.15).toFixed(2);
+      const g = P.render(planet, stageIdx, 10, sec, 1.0, undefined, 0.5, true);
+      const sheet = P.cropGrid(g, P.sidebarCrop(planet, stageIdx, 10));
+      const html = P.gridToHtml(sheet, 5.2, 9.36);
+      worst = Math.max(worst, (html.match(/background:/g) || []).length);
+    }
+    return worst;
+  }
+  const gj1 = P.generatePlanet(948502300, 'icy');
+  const s1spans = sheetBgSpans(gj1, 1), s6spans = sheetBgSpans(gj1, 6);
+  check('pixel-blocks: stage-1 detail sheet paints only the solid night side (<=8 bg spans/frame)',
+    s1spans <= 8, `stage1 worst ${s1spans}`);
+  check('pixel-blocks: stage-6 detail sheet paints only the solid night side (<=12 bg spans/frame)',
+    s6spans <= 12, `stage6 worst ${s6spans}`);
+  // FIX 2's resolution half: discDetail reaches the full 136 cols at
+  // ~5.91x zoom (the 6x cap), so the zoomed disc can match the sheet.
+  check('zoom: discDetail reaches the full 136 cols at ~5.91x (6x cap)',
+    P.discDetail(5.91).cols === 136 && P.discDetail(6).cols === 136 && P.discDetail(3).cols === 69,
+    `5.91->${P.discDetail(5.91).cols} 6->${P.discDetail(6).cols} 3->${P.discDetail(3).cols}`);
 }
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);
