@@ -118,10 +118,15 @@ class ProtoplanetApp {
     const res = Logic.applyXp(this.state, n, Logic.randomSeed);
     // Stage-up toast (round 6 — Devon): edge-triggered — applyXp
     // reports the crossing exactly once, so ordinary typing inside a
-    // stage never toasts, and a reload never replays one (no XP is
-    // applied on load). A big paste that jumps two stages toasts once,
-    // for the stage it landed in.
+    // stage never toasts, and a reload never replays one. A big paste
+    // earns no XP at all (round 11), so it never jumps stages.
     if (res.stageChanged) this.notifyStageUp(res.stageIdx);
+    // Round 11 — a story event is a rare surprise worth one toast:
+    // "✦ Something happened on GJ-364c: Meteor Impact".
+    // Edge-triggered like the stage-up toast (applyXp reports it
+    // exactly once), and the event itself is journal-only — no
+    // visual change to the planet.
+    if (res.event) this.notify(`✦ Something happened on ${Logic.nameForPlanet(this.state.current)}: ${res.event.title}`);
     this.pushState();
     // Stage changes save immediately; plain typing is debounced so
     // we don't write to disk on every keystroke.
@@ -149,6 +154,13 @@ class ProtoplanetApp {
     const cur = this.state.current;
     if (!cur) return;
     this.notify(Logic.stageUpMessage(cur, stageIdx));
+  }
+
+  // Round 11 — the archive is full (200/200): archiving refuses
+  // instead of silently deleting the oldest planet. One shared
+  // message for every birth / switch / fuse path that hits it.
+  notifyArchiveFull() {
+    this.notify(`Archive is full (${(this.state.past || []).length}/${Logic.CONFIG.PAST_LIMIT}) — salvage an archived planet from the Index to make room.`);
   }
 
   // The identity of the living planet — seed:generation. A new life
@@ -197,7 +209,11 @@ class ProtoplanetApp {
       'Yes, new planet'
     );
     if (answer !== 'Yes, new planet') return;
-    Logic.newPlanet(this.state, Logic.randomSeed);
+    const res = Logic.newPlanet(this.state, Logic.randomSeed);
+    if (!res.ok) {
+      if (res.reason === 'archive full') this.notifyArchiveFull();
+      return;
+    }
     this.saveNow();
     this.pushState();
   }
@@ -232,7 +248,11 @@ class ProtoplanetApp {
       'Yes, hatch it'
     );
     if (answer !== 'Yes, hatch it') return;
-    Logic.hatchFromSeed(this.state, parsed.seed, parsed.terrain);
+    const hatchRes = Logic.hatchFromSeed(this.state, parsed.seed, parsed.terrain);
+    if (!hatchRes.ok) {
+      if (hatchRes.reason === 'archive full') this.notifyArchiveFull();
+      return;
+    }
     this.saveNow();
     this.pushState();
   }
@@ -250,7 +270,11 @@ class ProtoplanetApp {
       'Keep growing'
     );
     if (answer !== 'Start a new planet') return;
-    Logic.newPlanet(this.state, Logic.randomSeed);
+    const maxedRes = Logic.newPlanet(this.state, Logic.randomSeed);
+    if (!maxedRes.ok) {
+      if (maxedRes.reason === 'archive full') this.notifyArchiveFull();
+      return;
+    }
     this.saveNow();
     this.pushState();
   }
@@ -435,7 +459,10 @@ class ProtoplanetApp {
       });
       if (!planetPick) return;
       const res = Logic.makeCurrent(this.state, planetPick.index);
-      if (!res.ok) return;
+      if (!res.ok) {
+        if (res.reason === 'archive full') this.notifyArchiveFull();
+        return;
+      }
       // A switch is NOT a birth — tell the birth detector the new
       // key is already seen, or pushState would toast "X was born!"
       // for a planet that has been alive for weeks (round 7).
@@ -444,7 +471,11 @@ class ProtoplanetApp {
       this.saveNow();
       this.pushState();
     } else if (pick.kind === 'birth') {
-      Logic.newPlanet(this.state, Logic.randomSeed);
+      const birthRes = Logic.newPlanet(this.state, Logic.randomSeed);
+      if (!birthRes.ok) {
+        if (birthRes.reason === 'archive full') this.notifyArchiveFull();
+        return;
+      }
       this.saveNow();
       this.pushState();
     } else if (pick.kind === 'birthMineral') {
@@ -457,7 +488,11 @@ class ProtoplanetApp {
         ignoreFocusOut: true,
       });
       // Dismissing the pick is fine — the planet is fully random then.
-      Logic.newPlanet(this.state, Logic.randomSeed, terrainPick ? terrainPick.id : undefined);
+      const birthMineralRes = Logic.newPlanet(this.state, Logic.randomSeed, terrainPick ? terrainPick.id : undefined);
+      if (!birthMineralRes.ok) {
+        if (birthMineralRes.reason === 'archive full') this.notifyArchiveFull();
+        return;
+      }
       this.saveNow();
       this.pushState();
     }
@@ -503,7 +538,10 @@ class ProtoplanetApp {
       { kind: a.kind, index: a.index },
       { kind: b.kind, index: b.index },
       Logic.randomSeed);
-    if (!res.ok) return; // state changed between picks (shouldn't happen)
+    if (!res.ok) {
+      if (res.reason === 'archive full') this.notifyArchiveFull();
+      return; // state changed between picks (shouldn't happen), or the archive is full
+    }
     this.recordPrestigeResult(res);
     this.saveNow();
     this.pushState();
@@ -609,6 +647,12 @@ class ProtoplanetApp {
       }),
       parents: record.parents || null,
       usedAsParent: !!record.usedAsParent,
+      // Round 11 — the Discovery Journal travels with the planet:
+      // the live planet carries it directly; an archived planet
+      // carries it in its snapshot (flat records predate it).
+      journal: (record.journal || (traits && traits.journal) || []).map((e) => ({
+        t: e.t, kind: e.kind, title: e.title || null, text: e.text,
+      })),
       kind,
       stageIdx: dStage,
       stageName: Planet.STAGES[dStage].name,
@@ -685,6 +729,9 @@ class ProtoplanetApp {
       toNext: rank.toNext,
       ringsUsed,
       totalPlanets: index.length,
+      // Round 11 — the archive cap is visible: N/200 in the Index.
+      archiveCount: (this.state.past || []).length,
+      archiveLimit: Logic.CONFIG.PAST_LIMIT,
       slots,
       index,
       mutationIndex,
@@ -699,7 +746,7 @@ class ProtoplanetApp {
   // or grow an archived planet again. The panel never mutates state
   // itself — it asks, the logic decides, and the fresh state is
   // pushed back.
-  onSystemMessage(msg) {
+  async onSystemMessage(msg) {
     if (!msg || typeof msg !== 'object') return;
     if (msg.type === 'place' && Number.isInteger(msg.ring)) {
       const res = Logic.placePlanet(this.state, msg.ring, msg.seed, msg.generation);
@@ -722,7 +769,24 @@ class ProtoplanetApp {
         this.notify(`${Logic.nameForPlanet(res.planet)} is growing again!`);
         this.saveNow();
         this.pushState();
+      } else if (res.reason === 'archive full') {
+        this.notifyArchiveFull();
       }
+    } else if (msg.type === 'salvage' && Number.isInteger(msg.seed) && Number.isInteger(msg.generation)) {
+      // Salvage an archived planet from its detail sheet (round 11):
+      // destroying it for minerals is also how a full archive frees
+      // a slot. Same confirm as the salvage command.
+      const idx = this.state.past.findIndex((p) => p.seed === msg.seed && p.generation === msg.generation);
+      if (idx < 0) return;
+      const answer = await vscode.window.showWarningMessage(
+        'Salvage this planet from your collection? It will be destroyed for minerals.',
+        { modal: true },
+        'Yes, salvage it'
+      );
+      if (answer !== 'Yes, salvage it') return;
+      Logic.salvageArchived(this.state, idx);
+      this.saveNow();
+      this.pushState();
     }
   }
 
@@ -831,6 +895,8 @@ class ProtoplanetApp {
         this.recordPrestigeResult(res);
         this.saveNow();
         this.pushState();
+      } else if (res.reason === 'archive full') {
+        this.notifyArchiveFull();
       }
     } else if (msg.type === 'dismissResult') {
       this.prestigeResult = null;
@@ -1513,6 +1579,15 @@ class ProtoplanetApp {
   #detail td.k { opacity: .6; white-space: nowrap; }
   #detail .actions { display: flex; gap: 6px; flex-wrap: wrap; }
   #detail .note { font-size: 11px; opacity: .65; margin: 8px 0 0; line-height: 1.5; }
+  /* Round 11 — the Discovery Journal: the planet's own history on
+     its detail sheet. Plain lines, one date + one story beat each. */
+  #detail h3 { font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+    color: #ffd75f; margin: 0 0 6px; }
+  #detail .journal { font-size: 11px; line-height: 1.5; margin: 0 0 12px; }
+  #detail .jentry { padding: 3px 0; border-top: 1px solid #1c1c1c; }
+  #detail .jentry:first-child { border-top: none; }
+  #detail .jdate { opacity: .55; margin-right: 6px; }
+  #detail .jtitle { font-weight: 700; color: #ffd75f; }
   #detailClose { position: absolute; top: 8px; right: 8px; padding: 2px 8px; }
   /* Picker banner (choosing a planet for a ring). */
   #pickerBanner { background: #0a0a0a;
@@ -1570,6 +1645,8 @@ class ProtoplanetApp {
   .tile .art { display: flex; justify-content: center; background: #050505; margin-bottom: 10px; overflow: hidden; }
   .tile .tname { font-size: 13px; font-weight: 600; }
   .tile .tmeta { font-size: 11px; opacity: .7; line-height: 1.5; margin-top: 2px; }
+  /* Round 11 — the tile's one-line journal: the planet's latest story beat. */
+  .tile .jline { font-size: 11px; opacity: .85; line-height: 1.5; margin-top: 2px; font-style: italic; }
   .badge { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .08em;
     text-transform: uppercase; padding: 1px 6px; margin: 4px 4px 0 0; }
   .badge.sys, .badge.cur { color: #ffd75f; border: 1px solid rgba(255, 215, 95, 0.5); }
@@ -1602,7 +1679,7 @@ class ProtoplanetApp {
     <button id="zoomOut" title="Zoom out">&minus;</button>
     <button id="zoomIn" title="Zoom in">+</button>
     <button id="fitBtn" title="Fit the whole system">Fit</button>
-    <span>Drag to pan &middot; Ctrl+Scroll to zoom &middot; Click a planet to zoom in &middot; H hides the UI</span>
+    <span>Drag to pan &middot; Scroll to zoom &middot; Click a planet to zoom in &middot; H hides the UI</span>
   </div>
 </div>
 <div id="detail" hidden></div>
@@ -2360,6 +2437,22 @@ class ProtoplanetApp {
     (planet.sets || []).forEach(function (s) {
       setCards += '<div class="setCard">✦ ' + esc(s.name) + ' — a whole mutation family on one planet</div>';
     });
+    // Round 11 — the Discovery Journal: the planet's own history,
+    // oldest first. Events show their title (✦ Meteor Impact);
+    // everything else is one line of story.
+    var journalHtml = '';
+    var journal = planet.journal || [];
+    if (journal.length > 0) {
+      journalHtml = '<h3>Journal</h3><div class="journal">';
+      for (var ji = 0; ji < journal.length; ji++) {
+        var je = journal[ji];
+        var d = je.t ? new Date(je.t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+        journalHtml += '<div class="jentry"><span class="jdate">' + esc(d) + '</span> '
+          + (je.kind === 'event' && je.title ? '<span class="jtitle">✦ ' + esc(je.title) + '</span> — ' : '')
+          + esc(je.text) + '</div>';
+      }
+      journalHtml += '</div>';
+    }
     var html = '<button id="detailClose" class="ghost" data-action="close" title="Close">&times;</button>'
       + '<h2>' + esc(planet.name) + '</h2>'
       + '<p class="sub">' + esc(planet.summary) + ' &middot; Seed ' + planet.seed + '</p>'
@@ -2373,6 +2466,7 @@ class ProtoplanetApp {
       + (planet.parents ? '<tr><td class="k">Parents</td><td>' + esc(planet.parents.map(function (p) { return p.name || ('Seed ' + p.seed); }).join(' + ')) + '</td></tr>' : '')
       + (planet.usedAsParent ? '<tr><td class="k">Prestige</td><td>Already a parent</td></tr>' : '')
       + '</table>'
+      + journalHtml
       + '<div class="actions">';
     // Grow this planet again (round 7 — Devon): an archived planet
     // in the Index can become the living one — typing grows it
@@ -2381,6 +2475,9 @@ class ProtoplanetApp {
     // its Stage row, so it gets no button.
     if (planet.kind !== 'current') {
       html += '<button data-action="makeCurrent">Grow this planet</button>';
+      // Round 11 — salvaging an archived planet destroys it for
+      // minerals, and it is also how a full archive frees a slot.
+      html += '<button class="ghost" data-action="salvage">Salvage this planet</button>';
     }
     if (ring >= 0) {
       html += '<button data-action="remove" data-ring="' + ring + '">Remove from system</button>'
@@ -2499,12 +2596,22 @@ class ProtoplanetApp {
     var cols = Math.max(1, Math.floor(w / 340));
     return Math.max(200, w / cols - 28); // tile padding 14px each side
   }
+  // Round 11 — the Index tile's one-line journal: the latest entry.
+  // An event shows its title; anything else shows its text, cut
+  // short so the tile stays a tile.
+  function journalLine(journal) {
+    if (!journal || journal.length === 0) return '';
+    var last = journal[journal.length - 1];
+    var text = (last.kind === 'event' && last.title) ? '✦ ' + last.title : last.text;
+    return text.length > 64 ? text.slice(0, 63) + '…' : text;
+  }
   function renderIndex() {
     if (!state) return;
     var list = filteredIndex();
     if (pickerRing !== null) list = list.filter(function (p) { return slotOf(p.seed, p.generation) < 0; });
     document.getElementById('indexCount').textContent =
-      state.totalPlanets + ' planet' + (state.totalPlanets === 1 ? '' : 's') + ' — ' + state.ringsUsed + ' in system';
+      state.totalPlanets + ' planet' + (state.totalPlanets === 1 ? '' : 's') + ' — ' + state.ringsUsed + ' in system'
+      + ' · Archive ' + (state.archiveCount || 0) + '/' + (state.archiveLimit || 200);
     if (list.length === 0) {
       tilesEl.innerHTML = '<div class="empty">' + (state.totalPlanets === 0
         ? 'No planets yet — type to grow your first one, and it will show up here when you start a new planet.'
@@ -2516,12 +2623,14 @@ class ProtoplanetApp {
       var p = list[i];
       var inSys = slotOf(p.seed, p.generation) >= 0;
       var mutCount = (p.mutations || []).length;
+      var jline = journalLine(p.journal);
       html += '<div class="tile' + (inSys ? ' inSystem' : '') + (pickerRing !== null ? ' picking' : '') + (mutCount > 0 ? ' mutated' : '') + '"'
         + ' data-seed="' + p.seed + '" data-gen="' + p.generation + '">'
         + (mutCount > 0 ? '<div class="corner">✦' + (mutCount > 1 ? '×' + mutCount : '') + '</div>' : '')
         + '<div class="art"><div class="pp-grid"></div></div>'
         + '<div class="tname">' + esc(p.name) + '</div>'
         + '<div class="tmeta">' + esc(p.terrainLabel) + ' &middot; ' + esc(p.stageName) + ' &middot; ' + p.chars + ' chars &middot; Gen ' + p.generation + '</div>'
+        + (jline ? '<div class="jline">' + esc(jline) + '</div>' : '')
         + (inSys ? '<span class="badge sys">In system</span>' : '')
         + (p.kind === 'current' ? '<span class="badge cur">Growing now</span>' : '')
         // The mutation badge keeps its full label ("MUTATION · Glitch")
@@ -2697,10 +2806,8 @@ class ProtoplanetApp {
     panning = null;
   });
   orreryEl.addEventListener('wheel', function (e) {
-    // Ctrl+scroll (Cmd+scroll on Mac) zooms. A plain scroll does
-    // nothing — the panel is one viewport now (the Index is its own
-    // mode, reached from the tabs), so there is no page to scroll.
-    if (!e.ctrlKey && !e.metaKey) return;
+    // Scroll zooms, no Ctrl needed (Devon, Nov 13 — the Index is its
+    // own screen now, so there is no page to scroll on this panel).
     e.preventDefault();
     // Round 3: cap 6x (was 3x) — discDetail needs 5.91x for the full
     // 136 cols, and 3x only ever reached 69. Round 4: halved the
@@ -2764,6 +2871,9 @@ class ProtoplanetApp {
     if (action === 'close') { closeDetail(); return; }
     if (action === 'makeCurrent') {
       vscodeApi.postMessage({ type: 'makeCurrent', seed: selected.seed, generation: selected.generation });
+      closeDetail();
+    } else if (action === 'salvage') {
+      vscodeApi.postMessage({ type: 'salvage', seed: selected.seed, generation: selected.generation });
       closeDetail();
     } else if (action === 'remove') {
       vscodeApi.postMessage({ type: 'remove', ring: +t.getAttribute('data-ring') });

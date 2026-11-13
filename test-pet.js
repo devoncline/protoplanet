@@ -41,7 +41,12 @@ eq('count: multiple changes in one event', L.countInsertedChars([
   { text: 'ab', rangeLength: 0 }, { text: 'c', rangeLength: 0 }, { text: '', rangeLength: 9 },
 ]), 3);
 eq('count: empty change list', L.countInsertedChars([]), 0);
-eq('count: paste counts', L.countInsertedChars([{ text: 'x'.repeat(500), rangeLength: 0 }]), 500);
+eq('count: big paste earns nothing (round 11 — block big pastes only)', L.countInsertedChars([{ text: 'x'.repeat(500), rangeLength: 0 }]), 0);
+eq('count: multi-line paste earns nothing', L.countInsertedChars([{ text: 'line1\nline2\nline3', rangeLength: 0 }]), 0);
+eq('count: long single-line insert earns nothing', L.countInsertedChars([{ text: 'x'.repeat(51), rangeLength: 0 }]), 0);
+eq('count: 50-char insert still counts', L.countInsertedChars([{ text: 'x'.repeat(50), rangeLength: 0 }]), 50);
+eq('count: lone Enter counts 1', L.countInsertedChars([{ text: '\n', rangeLength: 0 }]), 1);
+eq('count: autocomplete word counts', L.countInsertedChars([{ text: 'console', rangeLength: 0 }]), 7);
 
 // --- 2. Which documents earn XP --------------------------------------------
 eq('scheme: file counts', L.shouldCountDocument('file'), true);
@@ -260,7 +265,8 @@ eq('new planet: archived chars 500', st.past[0].chars, 500);
 eq('new planet: generation 2', st.generation, 2);
 eq('new planet: xp reset', st.current.xp, 0);
 eq('new planet: seed changed', st.current.seed !== beforeSeed, true);
-eq('new planet: returned planet is current', np, st.current);
+eq('new planet: ok', np.ok, true);
+eq('new planet: returned planet is current', np.planet, st.current);
 
 // --- 9. Persistence round-trip (mock globalState) ------------------------------
 class MockState {
@@ -788,7 +794,7 @@ eq('overflow: the new planet is not forced into the system',
 const np2 = L.newPlanet(st, seedSeq(23000));
 eq('overflow: manual new planet also archives with a full system',
   st.past.length, beforePast + 2);
-check('overflow: the new planet is the current one', np2 === st.current);
+check('overflow: the new planet is the current one', np2.planet === st.current);
 
 // 13f. Persistence: the system survives a round-trip, and old saves
 // (from before step 4) get an empty 4-ring system.
@@ -1218,22 +1224,24 @@ check('ext: no "+" buttons on empty rings (ringHit hit-areas instead)',
 // 13l. Batch #9 (Devon, Nov 11, 11:36 PM — queued notes, fixed Nov 12):
 // (1) plain scroll does nothing (the panel is one viewport now — the
 // Index is its own mode, reached from the tabs — so there is no page
-// to scroll); only Ctrl/Cmd+scroll zooms; (2) hovering a ring
+// to scroll); plain scroll zooms, no Ctrl needed (Devon, Nov 13 — the
+// Index is its own screen now, so there is no page to scroll); (2) hovering a ring
 // highlights the ring itself, no separate gold ring drawn above it;
 // (3) no 'Sol' label under the sun; (4) no standing-still stars
 // around the sun; (5) Shattered birth smoke stays close to the core
 // in the solar-system renders.
-// (1) Wheel gating: the handler returns before preventDefault on a
-// plain wheel; only Ctrl/Cmd+scroll zooms.
+// (1) Wheel zoom: plain scroll zooms, no Ctrl needed (Devon, Nov 13 —
+// the Index is its own screen now, so there is no page to scroll).
 (function () {
   const wheelSrc = extSrc.slice(extSrc.indexOf("addEventListener('wheel'"), extSrc.indexOf("addEventListener('wheel'") + 1000);
-  check('ext: plain wheel does not zoom (returns before preventDefault)',
-    wheelSrc.indexOf('if (!e.ctrlKey && !e.metaKey) return;') !== -1
-    && wheelSrc.indexOf('if (!e.ctrlKey && !e.metaKey) return;') < wheelSrc.indexOf('e.preventDefault()'),
+  check('ext: plain scroll zooms (no ctrl/meta gate before preventDefault)',
+    wheelSrc.indexOf('if (!e.ctrlKey') === -1
+    && wheelSrc.indexOf('e.preventDefault()') !== -1
+    && wheelSrc.indexOf('e.preventDefault()') < wheelSrc.indexOf('zoom = Math.max'),
     wheelSrc.slice(0, 220));
-  check('ext: ctrl/cmd+wheel still zooms (cap 6x, round 3 — was 3x; round 4 halved the per-event step)',
+  check('ext: scroll zooms (cap 6x, round 3 — was 3x; round 4 halved the per-event step)',
     wheelSrc.includes('zoom = Math.max(0.3, Math.min(6, zoom * Math.exp(-e.deltaY * 0.0005)))'));
-  check('ext: zoom hint names Ctrl+Scroll', extSrc.includes('Ctrl+Scroll to zoom'));
+  check('ext: zoom hint names Scroll to zoom', extSrc.includes('Scroll to zoom'));
 })();
 // (2) Ring hover highlights the ring itself.
 check('ext: no separate gold ring drawn above a hovered ring',
@@ -1601,7 +1609,8 @@ check('seed input: tagged out-of-range rejected', L.parseSeedInput('1000000000-i
   check('seed planet: starts at 0 XP', hatched.xp === 0 && hatched.chars === 0);
   check('seed planet: not a parent, no lineage', hatched.usedAsParent === false && hatched.parents === null);
   check('seed planet: deterministic',
-    JSON.stringify(L.makeSeedPlanet(mutSeed, new Set())) === JSON.stringify(hatched));
+    JSON.stringify({ ...L.makeSeedPlanet(mutSeed, new Set()), journal: undefined })
+    === JSON.stringify({ ...hatched, journal: undefined }));
 }
 
 // Tagged hatch (Nov 12 seed-hatch fix): "948502300-icy" hatches the
@@ -1618,7 +1627,10 @@ check('seed input: tagged out-of-range rejected', L.parseSeedInput('1000000000-i
   check('seed planet tagged: same moons as the live planet', hatched.moons.length === live.moons.length && JSON.stringify(hatched.moons) === JSON.stringify(base.moons));
   check('seed planet tagged: no mutations', hatched.mutations.length === 0);
   check('seed planet tagged: deterministic',
-    JSON.stringify(L.makeSeedPlanet(948502300, new Set(), 'icy')) === JSON.stringify(hatched));
+    JSON.stringify({ ...L.makeSeedPlanet(948502300, new Set(), 'icy'), journal: undefined })
+    === JSON.stringify({ ...hatched, journal: undefined }));
+  check('seed planet tagged: journal seeds the same birth text',
+    L.makeSeedPlanet(948502300, new Set(), 'icy').journal[0].text === hatched.journal[0].text);
 }
 // The bare seed keeps the old behavior: GJ-364c's seed without the
 // tag hatches the seed's canonical terrain (lava), not the pinned
@@ -1642,7 +1654,7 @@ check('seed input: tagged out-of-range rejected', L.parseSeedInput('1000000000-i
   const st = freshWithPlanet(mutSeed);
   const oldName = st.current.name;
   const oldMuts = st.current.mutations.slice();
-  const p = L.hatchFromSeed(st, 805839337);
+  const p = L.hatchFromSeed(st, 805839337).planet;
   check('seed hatch: current archived', st.past.length === 1 && st.past[0].seed === mutSeed);
   check('seed hatch: archived planet KEEPS its mutations', JSON.stringify(st.past[0].mutations) === JSON.stringify(oldMuts), oldMuts.join(','));
   check('seed hatch: generation +1', st.generation === 2);
@@ -1655,7 +1667,7 @@ check('seed input: tagged out-of-range rejected', L.parseSeedInput('1000000000-i
 {
   const live = L.makePlanet(948502300, 'icy');
   const st = freshWithPlanet(42);
-  const p = L.hatchFromSeed(st, 948502300, 'icy');
+  const p = L.hatchFromSeed(st, 948502300, 'icy').planet;
   check('seed hatch tagged: current is the pinned planet', st.current === p && p.seed === 948502300 && p.terrain === 'icy');
   check('seed hatch tagged: same name/size/rings as the live planet',
     p.name === live.name && p.size === live.size && p.ringType === live.ringType);
@@ -1688,7 +1700,7 @@ check('seed input: tagged out-of-range rejected', L.parseSeedInput('1000000000-i
 {
   const st = freshWithPlanet(42);
   const oldName = st.current.name;
-  const p = L.hatchFromSeed(st, 42);
+  const p = L.hatchFromSeed(st, 42).planet;
   check('seed hatch: same-seed name nudged (old name taken)', p.name !== oldName, `${oldName} -> ${p.name}`);
   check('seed hatch: seed still the input seed', p.seed === 42);
   check('seed hatch: past keeps the original name', st.past.length === 1 && st.past[0].name === oldName);
@@ -2117,14 +2129,14 @@ check('ext: sidebar always shows the planet settled',
   check('r9: minerals yielded (mutation + bonus)', dc.minerals.length === 2 && st.minerals.some((m) => m.source === 'salvage'));
   check('r9: destroy with no current is a no-op', L.destroyCurrent(st).ok === false);
   // Birth from the empty state: random, no archive crash.
-  const born = L.newPlanet(st, seedSeq(21000));
+  const born = L.newPlanet(st, seedSeq(21000)).planet;
   check('r9: birth from empty state works', st.current === born && born.xp === 0);
   check('r9: birth from empty is Gen 2', st.generation === 2 && born.generation === 2);
   check('r9: birth is a plain roll (no tilt, no fed mineral)', st.fedMineral === undefined);
   // Birth with a starter terrain (the prompt's pick): pinned, like
   // the first run.
   L.destroyCurrent(st);
-  const picked = L.newPlanet(st, seedSeq(22000), 'icy');
+  const picked = L.newPlanet(st, seedSeq(22000), 'icy').planet;
   check('r9: birth with a picked terrain is that terrain', picked.terrain === 'icy', picked.terrain);
   check('r9: birth with a pick is Gen 3', st.generation === 3);
   // makeCurrent still works from the empty state (grow an old planet).
@@ -2224,6 +2236,137 @@ check('ext: prestige shows the real % per parent mutation before fusing',
 check('ext: mutationChance view model carries the base chance for the panel',
   extSrc.includes('mutationChance: Planet.CONFIG.MUTATION_CHANCE')
   && extSrc.includes('state.mutationChance || 0.007'));
+
+// --- 21. Discovery Journal + events + paste fix + archive fix (round 11, Nov 13) ---
+// Journal: every planet carries its own history (born, stage, mutation,
+// event, prestige, grow); events are journal-only, no visual change;
+// pastes earn no XP ("block big pastes only"); the 200 archive cap is
+// visible and hard — full means refuse, never silent-delete.
+{
+  // Journal seeding: a newborn's journal starts with its birth entry.
+  // (Seed 777001 is plain — seed 42 is born with Glowing Oceans.)
+  st = freshWithPlanet(777001);
+  eq('journal: newborn has one born entry', st.current.journal.length, 1);
+  eq('journal: born entry kind', st.current.journal[0].kind, 'born');
+  check('journal: born entry names the world', st.current.journal[0].text.includes('Born —'));
+  eq('journal: plain birth says no mutations', st.current.journal[0].text.includes('no mutations'), true);
+  // A mutated birth names its mutations in the birth entry.
+  st = freshWithPlanet(carrierSeed('glitch'));
+  check('journal: mutated birth names the mutation', st.current.journal[0].text.includes('Glitch'));
+  // Stage entry: crossing a threshold appends "Reached <Stage>".
+  // (rng stub 0.99 so no event fires and the count stays exact.)
+  st = freshWithPlanet(42);
+  L.applyXp(st, 100, seedSeq(), () => 0.99);
+  eq('journal: stage entry appended', st.current.journal.length, 2);
+  eq('journal: stage entry kind', st.current.journal[1].kind, 'stage');
+  eq('journal: stage entry names Accretion', st.current.journal[1].text, 'Reached Accretion');
+  // No stage change, no stage entry.
+  st = freshWithPlanet(42);
+  L.applyXp(st, 50, seedSeq());
+  eq('journal: no stage entry without a stage-up', st.current.journal.length, 1);
+  // Events: rng stub 0.0 fires (0.0 < 0.25), 0.99 does not.
+  st = freshWithPlanet(42);
+  const evRes = L.applyXp(st, 100, seedSeq(), () => 0.0);
+  check('journal: event fires on a low roll', evRes.event !== null);
+  eq('journal: event entry kind', st.current.journal[2].kind, 'event');
+  check('journal: event entry has a title', typeof st.current.journal[2].title === 'string' && st.current.journal[2].title.length > 0);
+  st = freshWithPlanet(42);
+  const noEv = L.applyXp(st, 100, seedSeq(), () => 0.99);
+  eq('journal: no event on a high roll', noEv.event, null);
+  eq('journal: no event entry on a high roll', st.current.journal.length, 2);
+  // No repeats: two forced events on one planet have different titles.
+  st = freshWithPlanet(42);
+  const e1 = L.applyXp(st, 100, seedSeq(), () => 0.0);
+  const e2 = L.applyXp(st, 200, seedSeq(), () => 0.0);
+  check('journal: two forced events differ', e1.event && e2.event && e1.event.title !== e2.event.title);
+  // Mutation entry: a landed mineral writes "Gained <Mutation>".
+  st = freshWithPlanet(42);
+  st.current.mutations = [];
+  const gm = L.makeMineral(st, { family: 'moon', mutation: 'green-moon', source: 'salvage' });
+  st.minerals.push(gm);
+  const okM = L.attemptMutation(st, gm.id, () => 0.1);
+  eq('journal: mutation applied', okM.success, true);
+  check('journal: mutation entry appended', st.current.journal.some((e) => e.kind === 'mutation' && e.text.includes('Green Moon')));
+  // Prestige entries: parents record it, offspring is born of them.
+  st = prestigeReadyState();
+  const pres = L.prestige(st, { kind: 'past', index: 0 }, { kind: 'current', index: -1 }, seedSeq(9000));
+  eq('journal: prestige ok', pres.ok, true);
+  check('journal: offspring born of its parents', pres.planet.journal.some((e) => e.kind === 'prestige' && e.text.includes('Born of')));
+  check('journal: archived parent recorded it', st.past.some((p) => (p.planet.journal || []).some((e) => e.kind === 'prestige' && e.text === 'Became a parent')));
+  // Grow entry: growing an old planet again writes "Grew again".
+  st = freshWithPlanet(42);
+  L.applyXp(st, 500, seedSeq());
+  L.newPlanet(st, seedSeq(8000));
+  const grow = L.makeCurrent(st, 0);
+  eq('journal: grow ok', grow.ok, true);
+  check('journal: grow entry appended', grow.planet.journal.some((e) => e.kind === 'grow' && e.text === 'Grew again'));
+  // Migration: an old save without journals gets a seeded birth entry.
+  st = freshWithPlanet(42);
+  L.applyXp(st, 500, seedSeq());
+  L.newPlanet(st, seedSeq(8000));
+  delete st.current.journal;
+  delete st.past[0].journal;
+  delete st.past[0].planet.journal;
+  const loaded = L.deserializeState(L.serializeState(st));
+  check('journal: migration seeds the current planet', loaded.current.journal.length === 1 && loaded.current.journal[0].kind === 'born');
+  check('journal: migration seeds archived snapshots', loaded.past[0].planet.journal.length === 1 && loaded.past[0].planet.journal[0].kind === 'born');
+}
+{
+  // Archive cap (round 11): 200 is visible and hard — full means
+  // refuse, never silent-delete. Fill the archive to exactly 200.
+  st = freshWithPlanet(42);
+  const firstSeed = st.current.seed;
+  for (let i = 0; i < 200; i++) {
+    L.applyXp(st, 2500, seedSeq(30000 + i * 100));
+    const r = L.newPlanet(st, seedSeq(40000 + i * 100));
+    eq('archive: birth ' + i + ' ok', r.ok, true);
+  }
+  eq('archive: past holds exactly 200', st.past.length, 200);
+  check('archive: the oldest planet is still there (no silent delete)',
+    st.past.some((p) => p.seed === firstSeed));
+  eq('archive: archiveCurrent refuses when full', L.archiveCurrent(st).ok, false);
+  eq('archive: refusal reason', L.archiveCurrent(st).reason, 'archive full');
+  const cur = st.current;
+  const refused = L.newPlanet(st, seedSeq(99999));
+  eq('archive: newPlanet refuses when full', refused.ok, false);
+  eq('archive: newPlanet refusal reason', refused.reason, 'archive full');
+  eq('archive: refused birth keeps the current planet', st.current, cur);
+  eq('archive: makeCurrent refuses when full', L.makeCurrent(st, 0).ok, false);
+  eq('archive: makeCurrent refusal reason', L.makeCurrent(st, 0).reason, 'archive full');
+  eq('archive: hatchFromSeed refuses when full', L.hatchFromSeed(st, 12345).ok, false);
+  // Prestige refuses too (two Civilization parents are available) —
+  // and the refusal mutates nothing: the parents stay eligible.
+  const presFull = L.prestige(st, { kind: 'past', index: 0 }, { kind: 'past', index: 1 }, seedSeq(88888));
+  eq('archive: prestige refuses when full', presFull.ok, false);
+  eq('archive: refused prestige leaves parents eligible', st.past[0].usedAsParent, false);
+  // Freeing a slot lets births work again.
+  const salv = L.salvageArchived(st, 0);
+  eq('archive: salvage frees a slot', salv.ok, true);
+  eq('archive: past is 199 after salvage', st.past.length, 199);
+  const reborn = L.newPlanet(st, seedSeq(77777));
+  eq('archive: birth works again after freeing a slot', reborn.ok, true);
+  eq('archive: past back to 200', st.past.length, 200);
+}
+
+// Host wiring (round 11): the journal renders on the detail sheet,
+// the Index shows N/200 and a one-line journal per tile, the
+// archive-full toast fires on every refused birth/switch/fuse, an
+// event toasts once, and an archived planet can be salvaged from its
+// detail sheet to free a slot.
+check('ext: detail sheet renders the journal',
+  extSrc.includes('Journal</h3>') && extSrc.includes('journalHtml') && extSrc.includes('jentry'));
+check('ext: Index header shows the archive count',
+  extSrc.includes('archiveCount') && extSrc.includes('Archive ') && extSrc.includes('archiveLimit'));
+check('ext: Index tiles show a one-line journal',
+  extSrc.includes('journalLine') && extSrc.includes('jline'));
+check('ext: view model carries the journal and the archive count',
+  extSrc.includes('journal: (record.journal') && extSrc.includes('archiveCount: (this.state.past'));
+check('ext: archive-full toast on refused births',
+  extSrc.includes('notifyArchiveFull') && extSrc.includes('Archive is full') && extSrc.includes('salvage an archived planet'));
+check('ext: event toasts once on a stage-up event',
+  extSrc.includes('Something happened on') && extSrc.includes('res.event'));
+check('ext: archived planet can be salvaged from its detail sheet',
+  extSrc.includes('data-action="salvage"') && extSrc.includes("type: 'salvage'"));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) {

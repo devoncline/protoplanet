@@ -38,9 +38,37 @@ const CONFIG = {
   // Starter terrains offered on first run (first planet only).
   STARTER_TERRAINS: ['icy', 'lava', 'jungle', 'rocky', 'ocean'],
 
-  // How many finished planets the collection record keeps (oldest are
-  // dropped first). 200 is generous; the panel (piece 4) shows them.
+  // How many finished planets the collection record keeps (round 11
+  // — Devon, Nov 13): 200 is generous, and the cap is now VISIBLE
+  // (the Index shows N/200) and HARD — when it is full, archiving
+  // refuses instead of silently deleting the oldest planet. The
+  // player frees a slot by salvaging an archived planet.
   PAST_LIMIT: 200,
+
+  // Paste rule (round 11 — Devon picked "block big pastes only"):
+  // a single content change whose inserted text is longer than this
+  // many characters earns no XP. Typing (1 char), auto-close pairs
+  // (2), and autocomplete words all still count; a pasted file does
+  // not. A pasted single short line can still slip through — it
+  // can't jump a stage, accepted tradeoff of the rule.
+  PASTE_CHAR_LIMIT: 50,
+
+  // Discovery Journal events (round 11): on a stage-up, a planet
+  // has this chance of a rare story event — a journal entry only,
+  // NO visual change, so an event never ruins a planet someone
+  // loves the look of. One event max per stage-up, and a planet
+  // never repeats an event it already had.
+  EVENT_CHANCE: 0.25,
+  EVENTS: [
+    { id: 'meteor-impact', title: 'Meteor Impact', text: 'A meteor struck the northern plains, leaving a crater that will outlast the civilization.' },
+    { id: 'strange-signal', title: 'Strange Signal', text: 'A strange signal rose from the southern hemisphere — no one knows what sent it.' },
+    { id: 'crystal-bloom', title: 'Crystal Bloom', text: 'Luminous crystals bloomed across the surface overnight.' },
+    { id: 'solar-storm', title: 'Solar Storm', text: 'A solar storm painted the sky with light for three nights.' },
+    { id: 'ancient-ruins', title: 'Ancient Ruins', text: 'Explorers found ruins older than the planet\u2019s own oceans.' },
+    { id: 'comet-passing', title: 'Comet Passing', text: 'A comet passed close enough to light the night side.' },
+    { id: 'aurora', title: 'Aurora', text: 'Auroras rippled over the poles, visible from orbit.' },
+    { id: 'deep-tremor', title: 'Deep Tremor', text: 'A deep tremor reshaped the coastline.' },
+  ],
 
   // How often the pet's state is written to disk while typing (ms).
   // Saves also happen immediately on stage change / new planet, so
@@ -89,8 +117,9 @@ const CONFIG = {
   PRESTIGE_MIN_CHARS: 2200,
 
   // --- Solar system (step 4, Nov 11) ------------------------------------
-  // The collection is unlimited, but the solar system only DISPLAYS a
-  // limited number of planets — one per orbit ring. The player picks
+  // The collection is capped at PAST_LIMIT (round 11 — the cap is
+  // visible and hard now, never a silent delete); the solar system
+  // only DISPLAYS a limited number of planets — one per orbit ring. The player picks
   // which planets occupy the rings. A "System Rank" rises as the player
   // grows finished planets; each rank unlocks +1 ring. Locked rings
   // stay visible (dashed, with their unlock requirement) — they are
@@ -120,14 +149,24 @@ function shouldCountDocument(scheme) {
 // Count net inserted characters from one event's contentChanges.
 // Each change: text.length chars were inserted, rangeLength chars were
 // removed. Only the positive difference counts (deletions never grow
-// the planet, and they never shrink it either). A big paste counts —
-// you did type it (or paste it), and the planet is made of characters.
+// the planet, and they never shrink it either).
+// Paste rule (round 11 — Devon picked "block big pastes only"): a
+// single change that looks like a paste earns nothing — its inserted
+// text contains a newline (and is longer than 1 char, so the Enter
+// key itself still counts 1 XP) or is longer than PASTE_CHAR_LIMIT.
+// Typing, auto-close pairs, and autocomplete words all still count;
+// a pasted file does not. The check is on c.text (what was inserted),
+// not the net difference — a paste-over-selection has big text with
+// a nonzero rangeLength.
 function countInsertedChars(contentChanges) {
   let n = 0;
   for (const c of contentChanges) {
     // .length counts UTF-16 units, same as VS Code's offsets — so an
     // emoji counts as 2 XP. Harmless, and consistent with rangeLength.
-    const inserted = c.text.length - c.rangeLength;
+    const text = c.text || '';
+    if (text.length > 1 && text.includes('\n')) continue; // multi-line insert = paste
+    if (text.length > CONFIG.PASTE_CHAR_LIMIT) continue; // long insert = paste
+    const inserted = text.length - c.rangeLength;
     if (inserted > 0) n += inserted;
   }
   return n;
@@ -293,6 +332,7 @@ function makePlanet(seed, starterTerrain, tilt, takenNames, generation) {
   // read through currentGeneration() instead, which falls back to
   // state.generation.
   if (Number.isInteger(generation)) p.generation = generation;
+  seedBornJournal(p);
   return p;
 }
 
@@ -305,6 +345,54 @@ function makePlanet(seed, starterTerrain, tilt, takenNames, generation) {
 function currentGeneration(state) {
   if (state.current && Number.isInteger(state.current.generation)) return state.current.generation;
   return state.generation;
+}
+
+// ---------------------------------------------------------------------------
+// Discovery Journal (round 11) — every planet's own history.
+// A journal is an array of { t, kind, text } on the planet record
+// (event entries also carry `title`): born, stage, mutation, event,
+// prestige, grow. It travels with the planet — the archived snapshot
+// carries it, so a planet grown again keeps its whole story. Events
+// are journal-only: no visual change, ever, in v1.
+// ---------------------------------------------------------------------------
+
+function journalEntry(kind, text, title) {
+  const e = { t: Date.now(), kind, text };
+  if (title) e.title = title;
+  return e;
+}
+
+function addJournal(planet, kind, text, title) {
+  if (!planet) return;
+  if (!Array.isArray(planet.journal)) planet.journal = [];
+  planet.journal.push(journalEntry(kind, text, title));
+}
+
+function bornJournalText(planet) {
+  const terrain = planet.terrainLabel || planet.terrain || 'unknown';
+  const names = (planet.mutations || []).map((id) => {
+    const def = Planet.mutationDef(id);
+    return def ? def.name : id;
+  });
+  return `Born — ${terrain} world` + (names.length > 0 ? ` · born with ${names.join(', ')}` : ' · no mutations');
+}
+
+// Seed a newborn's journal with its birth entry. Called by makePlanet
+// and makeSeedPlanet (the seed hatch builds its planet directly).
+function seedBornJournal(planet) {
+  planet.journal = [journalEntry('born', bornJournalText(planet))];
+}
+
+// Roll a rare story event for a stage-up: EVENT_CHANCE, one max per
+// stage-up, never a repeat on the same planet. Returns the event def
+// or null. rng is injectable for tests.
+function rollEvent(planet, rng) {
+  const roll = typeof rng === 'function' ? rng : Math.random;
+  if (roll() >= CONFIG.EVENT_CHANCE) return null;
+  const seen = new Set((planet.journal || []).filter((e) => e.kind === 'event').map((e) => e.title));
+  const fresh = CONFIG.EVENTS.filter((ev) => !seen.has(ev.title));
+  if (fresh.length === 0) return null;
+  return fresh[Math.trunc(roll() * fresh.length)];
 }
 
 // A planet's name: stored on the record when it was born (step 4),
@@ -523,6 +611,7 @@ function attemptMutation(state, mineralId, rng) {
   state.current.mutations = [...(state.current.mutations || []), targetId];
   Planet.applyMutationToPlanet(state.current, targetId, Planet.applyRng(state.current.seed, targetId));
   recordDiscovery(state, state.current);
+  addJournal(state.current, 'mutation', `Gained ${def ? def.name : targetId}`);
   const setsCompleted = setsForPlanet(state.current).filter((id) => !setsBefore.has(id));
   return { ok: true, success: true, mutationId: targetId, mutationName: def ? def.name : targetId, setsCompleted };
 }
@@ -736,6 +825,14 @@ function prestige(state, parentA, parentB, nextSeed) {
   const genB = parentB.kind === 'current' ? currentGeneration(state) : b.generation;
   const parents = [lineageRecord(a, genA), lineageRecord(b, genB)];
   const currentIsParent = parentA.kind === 'current' || parentB.kind === 'current';
+  // Round 11: the archive check comes FIRST — a refused fusion must
+  // not mutate anything. The old current planet is archived below
+  // (unless destroyed as a parent); when the archive is full the
+  // fusion refuses before any parent is marked or journaled.
+  const willArchive = state.current && !(CONFIG.PRESTIGE_CONSUMES_PARENTS && currentIsParent);
+  if (willArchive && (state.past || []).length >= CONFIG.PAST_LIMIT) {
+    return { ok: false, reason: 'archive full' };
+  }
   if (CONFIG.PRESTIGE_CONSUMES_PARENTS) {
     // Destroy the parents: remove their collection records (a current
     // parent is destroyed below instead of archived). The offspring's
@@ -750,13 +847,26 @@ function prestige(state, parentA, parentB, nextSeed) {
     a.usedAsParent = true;
     b.usedAsParent = true;
   }
+  // The parents' journals record the fusion — added BEFORE the
+  // archive below, so a current parent's entry travels in its
+  // snapshot. A past parent's entry goes on its SNAPSHOT (that is
+  // what survives a later revive); snapshot-less records take it
+  // flat. (The full-check above already passed, so the archive
+  // cannot refuse after this point.)
+  const journalTarget = (desc, planet) => (desc.kind === 'current' ? planet : (planet.planet || planet));
+  addJournal(journalTarget(parentA, a), 'prestige', 'Became a parent');
+  addJournal(journalTarget(parentB, b), 'prestige', 'Became a parent');
   // The old current planet leaves the stage — archived (retired if it
   // was a parent) — unless it was just destroyed as a parent.
-  if (state.current && !(CONFIG.PRESTIGE_CONSUMES_PARENTS && currentIsParent)) archiveCurrent(state);
+  if (willArchive) {
+    const archived = archiveCurrent(state);
+    if (!archived.ok) return { ok: false, reason: archived.reason };
+  }
   const tilt = prestigeTilt(inheritanceBoosts(mutsA, mutsB));
   state.generation += 1;
   const offspring = makePlanet(nextSeed ? nextSeed() : randomSeed(), null, tilt, takenNamesFor(state), state.generation);
   offspring.parents = parents;
+  addJournal(offspring, 'prestige', `Born of ${nameForPlanet(a)} + ${nameForPlanet(b)}`);
   state.current = offspring;
   recordDiscovery(state, offspring);
   return { ok: true, planet: offspring, parents };
@@ -767,9 +877,17 @@ function prestige(state, parentA, parentB, nextSeed) {
 // renderer needs (rings, moons, size, mutation-granted traits like
 // ringHue) — because re-rolling from the seed alone cannot reproduce
 // a tilted birth roll. Flat fields stay for backwards compatibility
-// and for the tests that read them.
+// and for the tests that read them. The snapshot carries the
+// planet's journal, so the story travels with it.
+// Returns { ok } — round 11: when the archive is full (PAST_LIMIT)
+// archiving REFUSES instead of silently deleting the oldest planet.
+// Callers surface 'archive full' and the player frees a slot by
+// salvaging an archived planet.
 function archiveCurrent(state) {
-  if (!state.current) return;
+  if (!state.current) return { ok: true };
+  if ((state.past || []).length >= CONFIG.PAST_LIMIT) {
+    return { ok: false, reason: 'archive full' };
+  }
   const c = state.current;
   state.past.push({
     seed: c.seed,
@@ -789,8 +907,8 @@ function archiveCurrent(state) {
     usedAsParent: !!c.usedAsParent,
     planet: JSON.parse(JSON.stringify(c)),
   });
-  while (state.past.length > CONFIG.PAST_LIMIT) state.past.shift();
   normalizeSystem(state);
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -925,24 +1043,38 @@ function removeFromSystem(state, slotIndex) {
 // caller to decide what to refresh. rebirthed is always false now
 // (kept so callers don't change); becameMax is true exactly once,
 // on the transition into Civilization (2200+ XP).
-function applyXp(state, n, nextSeed) {
+function applyXp(state, n, nextSeed, rng) {
   if (!state.current || n <= 0) {
     return {
       stageChanged: false,
       rebirthed: false,
       becameMax: false,
       stageIdx: state.current ? stageForXp(state.current.xp) : 0,
+      event: null,
     };
   }
   const before = stageForXp(state.current.xp);
   state.current.xp += n;
   state.current.chars += n;
   const after = stageForXp(state.current.xp);
+  // Round 11 — the Discovery Journal: a stage-up is a journal entry,
+  // and a stage-up is also when a rare story event can happen
+  // (journal-only, no visual change).
+  let event = null;
+  if (before !== after) {
+    addJournal(state.current, 'stage', `Reached ${Planet.STAGES[after].name}`);
+    const ev = rollEvent(state.current, rng);
+    if (ev) {
+      addJournal(state.current, 'event', ev.text, ev.title);
+      event = { title: ev.title, text: ev.text };
+    }
+  }
   return {
     stageChanged: before !== after,
     rebirthed: false,
     becameMax: before < DISPLAY_STAGE_MAX && after >= DISPLAY_STAGE_MAX,
     stageIdx: after,
+    event,
   };
 }
 
@@ -954,11 +1086,14 @@ function applyXp(state, n, nextSeed) {
 // post-destroy prompt can still offer the pick — pass the picked
 // terrain here and the birth is tilted toward it, like the first run.
 function newPlanet(state, nextSeed, starterTerrain) {
-  if (state.current) archiveCurrent(state);
+  if (state.current) {
+    const archived = archiveCurrent(state);
+    if (!archived.ok) return { ok: false, reason: archived.reason };
+  }
   state.generation += 1;
   state.current = makePlanet(nextSeed ? nextSeed() : randomSeed(), starterTerrain || null, undefined, takenNamesFor(state), state.generation);
   recordDiscovery(state, state.current);
-  return state.current;
+  return { ok: true, planet: state.current };
 }
 
 // "Grow this planet again" (round 7 — Devon): make an ARCHIVED
@@ -984,10 +1119,12 @@ function makeCurrent(state, index) {
   }
   const seed = record.seed;
   const gen = record.generation;
-  if (state.current) archiveCurrent(state);
+  if (state.current) {
+    const archived = archiveCurrent(state);
+    if (!archived.ok) return { ok: false, reason: archived.reason };
+  }
   // Remove by identity, not by position: archiveCurrent appends to
-  // the end of past (and, at the PAST_LIMIT cap, can shift the oldest
-  // record off the front) — the target's index may have moved.
+  // the end of past — the target's index may have moved.
   const at = state.past.findIndex((p) => p.seed === seed && p.generation === gen);
   if (at < 0) {
     return { ok: false, reason: 'planet left the collection' };
@@ -999,6 +1136,7 @@ function makeCurrent(state, index) {
   // record's generation is the authoritative birth order.
   planet.generation = revived.generation;
   state.current = planet;
+  addJournal(state.current, 'grow', 'Grew again');
   normalizeSystem(state);
   return { ok: true, planet: state.current };
 }
@@ -1078,6 +1216,7 @@ function makeSeedPlanet(seed, takenNames, terrain, generation) {
   p.usedAsParent = false;
   p.parents = null;
   if (Number.isInteger(generation)) p.generation = generation;
+  seedBornJournal(p);
   return p;
 }
 
@@ -1091,7 +1230,8 @@ function makeSeedPlanet(seed, takenNames, terrain, generation) {
 // pops up afterwards.
 function hatchFromSeed(state, seed, terrain) {
   if (state.current) {
-    archiveCurrent(state);
+    const archived = archiveCurrent(state);
+    if (!archived.ok) return { ok: false, reason: archived.reason };
     state.generation += 1;
   } else if (!state.starterDone) {
     state.starterDone = true;
@@ -1100,7 +1240,7 @@ function hatchFromSeed(state, seed, terrain) {
     state.generation += 1;
   }
   state.current = makeSeedPlanet(seed, takenNamesFor(state), terrain, state.generation);
-  return state.current;
+  return { ok: true, planet: state.current };
 }
 
 // ---------------------------------------------------------------------------
@@ -1201,6 +1341,21 @@ function deserializeState(json) {
     delete s.fedMineral;
     // Step 4 fields: old saves get an empty 4-ring system.
     if (!Array.isArray(s.system)) s.system = [null, null, null, null];
+    // Round 11: the Discovery Journal. Old saves get a seeded birth
+    // entry on every planet (timestamp = archivedAt for past records,
+    // now for the current one) — the story starts from the migration;
+    // earlier history is lost, but the planet keeps its birth. The
+    // entry lives on the snapshot when there is one (that is what
+    // the panels render); snapshot-less records keep it flat.
+    const seedJournalFor = (planet, when) => {
+      if (!planet || Array.isArray(planet.journal)) return;
+      planet.journal = [{ t: when, kind: 'born', text: bornJournalText(planet) }];
+    };
+    if (s.current) seedJournalFor(s.current, Date.now());
+    for (const p of s.past) {
+      if (p.planet) seedJournalFor(p.planet, p.archivedAt || Date.now());
+      else seedJournalFor(p, p.archivedAt || Date.now());
+    }
     normalizeSystem(s);
     return s;
   } catch (e) {
