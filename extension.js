@@ -935,7 +935,7 @@ class ProtoplanetApp {
   const wrapEl = document.getElementById('wrap');
   const root = document.documentElement;
   const FONT_STACK = ${JSON.stringify(FONT_STACK)};
-  let cellW = 3, cellH = 5.4, state = null, sec = 0, stageStartSec = 0, lastStage = -1, lastCrop = null, lastDims = null, lastLayoutAt = -1e9, layoutPending = false;
+  let cellW = 3, cellH = 5.4, state = null, sec = 0, stageStartSec = 0, lastCrop = null, lastDims = null, lastLayoutAt = -1e9, layoutPending = false;
 
   // --- Fixed-cell layout (same approach as preview.html) ------------------
   // The sidebar is narrow, so cells scale down to fit the width — the
@@ -1051,23 +1051,14 @@ class ProtoplanetApp {
   window.addEventListener('message', (e) => {
     const msg = e.data;
     if (!msg || msg.type !== 'state') return;
-    // The birth morph (Devon, Nov 12 — round 3): it replays ONLY on a
-    // real birth or level-up, never on webview load. The old line reset
-    // stageStartSec on the first state, so every sidebar open replayed
-    // the 3s birth — and at t=0 the planet renders at the previous
-    // (Civilization) stage's radius 28.5 with a full ring, so the
-    // double ring spans the whole 136-col grid (Devon's "huge ring",
-    // like the black-hole onboarding), then condenses over 3s. A planet
-    // at 79/100 XP has been in this stage for days; opening the
-    // sidebar must show it settled. A brand-new planet (0 chars) still
-    // gets its birth on first sight; a new planet (seed changed) or a
-    // level-up while the sidebar is live replays it too.
-    if (!state) {
-      stageStartSec = msg.chars === 0 ? sec : sec - 10; // settled unless newborn
-    } else if ((msg.planet && state.planet && msg.planet.seed !== state.planet.seed) || msg.stageIdx !== lastStage) {
-      stageStartSec = sec;
-    }
-    lastStage = msg.stageIdx;
+    // No birth morph in the sidebar (Devon, Nov 12 — round 8): the
+    // 3s condense read as a destroy animation when a planet was
+    // recycled, and the per-tick crop changes + layout re-fits during
+    // it lagged. A newborn shows settled immediately — its stage-0
+    // look is already an exploded debris field, so nothing is lost.
+    // The tick below still animates the living planet (orbiting
+    // fragments, shimmer); only the morph is gone.
+    stageStartSec = sec - 10; // settled — no birth morph
     state = msg;
     document.getElementById('stageName').textContent =
       'Stage ' + (msg.stageIdx + 1) + '/7 \\u00b7 ' + msg.stageName +
@@ -1114,18 +1105,19 @@ class ProtoplanetApp {
     // Crop to the planet's own extent and render it star-free, so the
     // pet floats big on the VS Code gray instead of sitting small in
     // a black starfield box (Devon, Nov 12 — F5 feedback). The crop
-    // only changes when the stage (or morph) changes, so layout()
-    // re-runs when it does — never every tick.
+    // only changes when the stage changes, so layout() re-runs when
+    // it does — never every tick.
     const crop = P.sidebarCrop(state.planet, state.stageIdx, t);
     if (!lastCrop || crop.cols !== lastCrop.cols || crop.rows !== lastCrop.rows) {
       lastCrop = crop;
       layoutPending = true;
     }
-    // Debounced layout (round 3): during the 3s birth morph the crop
-    // changes ~every tick, and each layout() forces a synchronous
-    // layout (getComputedStyle + offsetHeight reads) on top of the
-    // render. Re-fit at most every 0.5s, plus once when the morph
-    // settles (t >= 3) so the final size is exact. The grid keeps
+    // Debounced layout (round 3, morph removed round 8): the crop
+    // only changes on a stage change now, but each layout() still
+    // forces a synchronous layout (getComputedStyle + offsetHeight
+    // reads) on top of the render. Re-fit at most every 0.5s — t is
+    // always >= 3 with no morph, so a pending re-fit also lands on
+    // the next tick and the size is exact right away. The grid keeps
     // rendering from the last fitted dims in between — it only ever
     // gets coarser, never overflows. The first tick runs layout()
     // immediately (lastLayoutAt starts at -1e9), so the first paint is

@@ -1108,14 +1108,12 @@ check('ext: sidebar stage line hides at minimum sizes (round 3 — the stage is 
   extSrc.includes('body.compact #stageName { display: none; }'));
 check('ext: sidebar reserve measures the body padding (round 3 — compact shrinks it, a hardcoded 24 over-reserved)',
   extSrc.includes('getComputedStyle(document.body)') && extSrc.includes('parseFloat(bodyCs.paddingTop)'));
-check('ext: sidebar does NOT replay the birth morph on webview load (round 3 — Devon: huge ring on every open)',
+check('ext: sidebar never replays a birth morph, on load or on a new planet (round 8 — Devon: the morph read as a destroy animation and lagged)',
   !extSrc.includes('if (!state || msg.stageIdx !== lastStage) stageStartSec = sec;')
-  && extSrc.includes('stageStartSec = msg.chars === 0 ? sec : sec - 10;'));
-check('ext: sidebar replays the morph on a new planet or a level-up (round 3 — births still play live)',
-  extSrc.includes('msg.planet.seed !== state.planet.seed') && extSrc.includes('msg.stageIdx !== lastStage'));
-check('ext: share panel does NOT replay the birth morph on load (round 3 — same bug, full-grid re-render)',
-  extSrc.includes("if (msg.type === 'share')") && (extSrc.match(/stageStartSec = msg\.chars === 0 \? sec : sec - 10;/g) || []).length === 2);
-check('ext: sidebar tick debounces layout during the morph (round 3 — crop changes every tick for 3s)',
+  && extSrc.includes('stageStartSec = sec - 10; // settled — no birth morph'));
+check('ext: share panel does NOT replay the birth morph on load (round 3 — same bug, full-grid re-render; round 8: the sidebar no longer shares that line, so it appears once, in the share card)',
+  extSrc.includes("if (msg.type === 'share')") && (extSrc.match(/stageStartSec = msg\.chars === 0 \? sec : sec - 10;/g) || []).length === 1);
+check('ext: sidebar tick debounces layout on crop changes (round 3 — the morph is gone in round 8, so the crop only changes on a stage change)',
   extSrc.includes('layoutPending = true') && extSrc.includes('sec - lastLayoutAt >= 0.5')
   && extSrc.includes('layoutPending && (sec - lastLayoutAt >= 0.5 || t >= 3)'));
 check('ext: sidebar never scrolls (height-aware layout, XP always visible)',
@@ -1983,6 +1981,49 @@ check('ext: detail sheet button posts makeCurrent', extSrc.includes("data-action
 check('ext: system message handler handles makeCurrent', extSrc.includes("msg.type === 'makeCurrent'"));
 check('ext: switch suppresses the birth toast', extSrc.includes('this.lastBirthKey = this.birthKey();'));
 check('ext: birthKey reads the planet generation', extSrc.includes('cur.generation'));
+
+// --- 18. Recycle really destroys (round 8, Nov 12 — Devon) ----------------
+// "i just tried destroing a planet and it didnt destroy. it was
+// actively growing when i tried to do it."
+// The logic check: a grown, ring-placed planet recycled twice in a
+// row — the old seed must be gone everywhere (current, past, slots)
+// after each recycle, and the newborn must be a genuinely new planet.
+{
+  const st = freshWithPlanet(42);
+  L.applyXp(st, 350, seedSeq());
+  const oldSeed = st.current.seed;
+  const oldName = st.current.name;
+  const placed = L.placePlanet(st, 0, oldSeed, 1);
+  check('r8: grown planet placed on ring 0 before recycle', placed.ok === true, placed.reason);
+  const rc1 = L.recycleCurrent(st, seedSeq(11000));
+  check('r8: first recycle ok', rc1.ok === true, rc1.reason);
+  check('r8: old planet is NOT the current planet anymore', st.current.seed !== oldSeed);
+  check('r8: old planet is NOT archived (destroyed, not kept)', !st.past.some((p) => p.seed === oldSeed));
+  check('r8: old planet is NOT on any ring anymore', L.slotIndexForPlanet(st, oldSeed, 1) === -1);
+  check('r8: newborn is stage 0 with 0 XP', st.current.xp === 0 && L.stageForXp(st.current.xp) === 0);
+  check('r8: newborn has a different name', st.current.name !== oldName);
+  check('r8: newborn is Gen 2', st.current.generation === 2);
+  // Recycle the newborn too (Devon's case: the new planet is stage 0,
+  // an exploded debris field — recycling it must still destroy it).
+  const secondSeed = st.current.seed;
+  const rc2 = L.recycleCurrent(st, seedSeq(12000));
+  check('r8: second recycle ok', rc2.ok === true, rc2.reason);
+  check('r8: second newborn differs again', st.current.seed !== secondSeed);
+  check('r8: first newborn also gone everywhere',
+    st.current.seed !== oldSeed && !st.past.some((p) => p.seed === secondSeed));
+  check('r8: generation is 3 after two recycles', st.generation === 3);
+}
+
+// Host wiring: the sidebar has no birth morph anymore (Devon, Nov 12
+// — the morph read as a destroy animation and lagged). A newborn
+// shows settled immediately; the tick's ambient motion stays. The
+// share card keeps its own morph (different surface, Devon only
+// flagged the sidebar) — so the trigger must appear exactly once
+// in the file, in the share card.
+check('ext: sidebar never replays the birth morph on a new planet',
+  extSrc.split("msg.planet.seed !== state.planet.seed) || msg.stageIdx !== lastStage").length - 1 === 1);
+check('ext: sidebar always shows the planet settled',
+  extSrc.includes('stageStartSec = sec - 10; // settled — no birth morph'));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) {
