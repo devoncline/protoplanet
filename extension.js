@@ -283,6 +283,14 @@ class ProtoplanetApp {
         detail: mutLabel ? `Carries: ${mutLabel}` : 'No mutation — yields one plain mineral',
         kind: 'current',
       });
+      // Round 9 (Devon): a second choice — destroy it and grow
+      // NOTHING yet. The prompt after asks what grows next.
+      items.push({
+        label: `Destroy current planet — ${this.state.current.summary}`,
+        description: 'Destroy it for minerals (no new planet) — you pick what grows next',
+        detail: mutLabel ? `Carries: ${mutLabel}` : 'No mutation — yields one plain mineral',
+        kind: 'destroyCurrent',
+      });
     }
     this.state.past.forEach((p, i) => {
       items.push({
@@ -309,6 +317,18 @@ class ProtoplanetApp {
       );
       if (answer !== 'Yes, recycle it') return;
       Logic.recycleCurrent(this.state, Logic.randomSeed);
+    } else if (pick.kind === 'destroyCurrent') {
+      const answer = await vscode.window.showWarningMessage(
+        'Destroy your current planet? It will be destroyed for minerals and nothing grows until you pick what comes next.',
+        { modal: true },
+        'Yes, destroy it'
+      );
+      if (answer !== 'Yes, destroy it') return;
+      Logic.destroyCurrent(this.state);
+      this.saveNow();
+      this.pushState();
+      await this.promptAfterDestroy();
+      return;
     } else {
       const answer = await vscode.window.showWarningMessage(
         'Salvage this planet from your collection? It will be destroyed for minerals.',
@@ -320,6 +340,83 @@ class ProtoplanetApp {
     }
     this.saveNow();
     this.pushState();
+  }
+
+  // After a destroy-with-no-new-planet (round 9 — Devon): ask what
+  // grows next, in the VS Code dropdown. The starter pick is only
+  // for the first planet — later births are random by default — but
+  // the pick is still offered for when they want to tilt the birth.
+  // Dismissing the prompt is fine: nothing grows until they say so.
+  async promptAfterDestroy() {
+    if (this.state.current) return; // something is already growing
+    const items = [];
+    const revivable = (this.state.past || []).map((p, i) => ({ p, i })).filter(({ p }) => p.planet);
+    if (revivable.length > 0) {
+      items.push({
+        label: 'Grow an old planet',
+        description: 'Pick one from your collection',
+        detail: 'It comes back exactly as it was — same XP, stage, mutations',
+        kind: 'grow',
+      });
+    }
+    items.push({
+      label: 'Birth a new planet',
+      description: 'Fully random — no starter pick',
+      detail: 'The starter pick is only for your first planet',
+      kind: 'birth',
+    });
+    items.push({
+      label: 'Birth a new planet with a starter mineral',
+      description: 'Pick a terrain to tilt the birth',
+      detail: 'Icy, Lava, Jungle, Rocky or Ocean — like your first planet',
+      kind: 'birthMineral',
+    });
+    const pick = await vscode.window.showQuickPick(items, {
+      placeHolder: 'Protoplanet: your planet is gone — what grows next?',
+      ignoreFocusOut: true,
+    });
+    if (!pick) return;
+    if (pick.kind === 'grow') {
+      const planetItems = revivable.map(({ p, i }) => ({
+        label: `${p.summary} · Gen ${p.generation}`,
+        description: Logic.stageInfo(p.chars || 0).name,
+        detail: p.mutations && p.mutations.length > 0
+          ? `Carries: ${p.mutations.map((id) => (Planet.mutationDef(id) || {}).name || id).join(', ')}`
+          : 'No mutation',
+        index: i,
+      }));
+      const planetPick = await vscode.window.showQuickPick(planetItems, {
+        placeHolder: 'Protoplanet: grow an old planet again',
+        ignoreFocusOut: true,
+      });
+      if (!planetPick) return;
+      const res = Logic.makeCurrent(this.state, planetPick.index);
+      if (!res.ok) return;
+      // A switch is NOT a birth — tell the birth detector the new
+      // key is already seen, or pushState would toast "X was born!"
+      // for a planet that has been alive for weeks (round 7).
+      this.lastBirthKey = this.birthKey();
+      this.notify(`${Logic.nameForPlanet(res.planet)} is growing again!`);
+      this.saveNow();
+      this.pushState();
+    } else if (pick.kind === 'birth') {
+      Logic.newPlanet(this.state, Logic.randomSeed);
+      this.saveNow();
+      this.pushState();
+    } else if (pick.kind === 'birthMineral') {
+      const terrainItems = Logic.CONFIG.STARTER_TERRAINS.map((id) => {
+        const t = Planet.CONFIG.TERRAINS.find((t) => t.id === id);
+        return { label: t ? t.label : id, description: t ? t.desc : '', id };
+      });
+      const terrainPick = await vscode.window.showQuickPick(terrainItems, {
+        placeHolder: 'Protoplanet: pick a starter terrain',
+        ignoreFocusOut: true,
+      });
+      // Dismissing the pick is fine — the planet is fully random then.
+      Logic.newPlanet(this.state, Logic.randomSeed, terrainPick ? terrainPick.id : undefined);
+      this.saveNow();
+      this.pushState();
+    }
   }
 
   async prestige() {
@@ -707,7 +804,10 @@ class ProtoplanetApp {
   }
 
   postShareState() {
-    if (this.sharePanel) this.sharePanel.webview.postMessage(this.shareViewModel());
+    // No planet (destroyed with nothing growing yet): the card has
+    // nothing to render — skip the push instead of crashing in
+    // shareViewModel (round 9). The panel keeps its last card.
+    if (this.sharePanel && this.state.current) this.sharePanel.webview.postMessage(this.shareViewModel());
   }
 
   // Messages from the panel: copy the seed / markdown to the
@@ -1050,7 +1150,33 @@ class ProtoplanetApp {
 
   window.addEventListener('message', (e) => {
     const msg = e.data;
-    if (!msg || msg.type !== 'state') return;
+    if (!msg) return;
+    // No planet growing (round 9 — destroyed with nothing picked
+    // yet): clear back to the placeholder the webview started with.
+    if (msg.type === 'empty') {
+      state = null;
+      lastCrop = null;
+      gridEl.innerHTML = '';
+      const barEl0 = document.getElementById('xpbar');
+      const fillEl0 = document.getElementById('xpfill');
+      const labelEl0 = document.getElementById('xplabel');
+      barEl0.classList.remove('maxed');
+      fillEl0.classList.remove('maxed');
+      labelEl0.classList.remove('maxed');
+      fillEl0.style.width = '0%';
+      labelEl0.textContent = 'XP 0 / 100';
+      document.getElementById('stageName').textContent = 'Your planet is hatching\u2026';
+      document.getElementById('mutationLabel').style.display = 'none';
+      const descEl = document.getElementById('stageDesc');
+      descEl.style.display = '';
+      descEl.textContent = msg.destroyed
+        ? 'Nothing is growing \u2014 start a new planet from the Command Palette, or grow an old one from the Index.'
+        : 'Pick a starter and start typing \u2014 every character grows it.';
+      document.getElementById('meta').textContent = '';
+      layout();
+      return;
+    }
+    if (msg.type !== 'state') return;
     // No birth morph in the sidebar (Devon, Nov 12 — round 8): the
     // 3s condense read as a destroy animation when a planet was
     // recycled, and the per-tick crop changes + layout re-fits during
@@ -3375,9 +3501,16 @@ class PetViewProvider {
   }
 
   postState(viewModel) {
-    // Nothing to send until the first planet hatches — the webview
-    // shows its placeholder text until then.
-    if (this.view && viewModel) this.view.webview.postMessage(viewModel);
+    if (!this.view) return;
+    // No planet (first run, or destroyed with nothing growing yet):
+    // tell the webview explicitly, so a sidebar that was showing a
+    // planet clears back to its placeholder instead of keeping the
+    // dead planet on screen (round 9 — Devon). A fresh webview
+    // already shows the placeholder, so this is harmless there.
+    // `destroyed` tells the placeholder which words to use: after a
+    // destroy there is no starter pick anymore — the way back is the
+    // New Planet command or the Index.
+    this.view.webview.postMessage(viewModel || { type: 'empty', destroyed: !!this.state.starterDone });
   }
 }
 

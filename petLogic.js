@@ -546,6 +546,21 @@ function recycleCurrent(state, nextSeed) {
   return { ok: true, minerals, destroyedSeed: destroyed.seed, planet: state.current };
 }
 
+// Destroy the CURRENT planet (round 9 — Devon): destroy it for
+// minerals and grow NOTHING — the player picks what grows next.
+// The destroyed planet is NOT archived. Generation does NOT move
+// (no new life), and a fed mineral is NOT consumed — it still tilts
+// the next birth, whenever that happens.
+function destroyCurrent(state) {
+  if (!state.current) return { ok: false, reason: 'no current planet' };
+  const destroyed = state.current;
+  const minerals = addMinerals(state, yieldMineralsForPlanet(destroyed));
+  state.current = null;
+  // The destroyed planet may have been on a ring — clear that slot.
+  normalizeSystem(state);
+  return { ok: true, minerals, destroyedSeed: destroyed.seed };
+}
+
 // Salvage an ARCHIVED planet: destroy it for minerals, no new planet.
 // index is the position in state.past.
 function salvageArchived(state, index) {
@@ -864,10 +879,14 @@ function applyXp(state, n, nextSeed) {
 // "New planet" command: archive the living planet (if any) and hatch a
 // fresh one. Generation +1 — a manual new planet is a new life, on
 // demand. A fed mineral tilts the new planet's birth roll (consumed).
-function newPlanet(state, nextSeed) {
+// starterTerrain (round 9 — Devon): the mineral pick is only for the
+// first planet; later births are random by default, but the
+// post-destroy prompt can still offer the pick — pass the picked
+// terrain here and the birth is tilted toward it, like the first run.
+function newPlanet(state, nextSeed, starterTerrain) {
   if (state.current) archiveCurrent(state);
   state.generation += 1;
-  state.current = makePlanet(nextSeed ? nextSeed() : randomSeed(), null, takeTilt(state, null), takenNamesFor(state), state.generation);
+  state.current = makePlanet(nextSeed ? nextSeed() : randomSeed(), starterTerrain || null, takeTilt(state, null), takenNamesFor(state), state.generation);
   return state.current;
 }
 
@@ -1118,7 +1137,7 @@ module.exports = {
   mineralName, mineralTiltsText, makeMineral, grantStarterMineral,
   feedMineral, unfeedMineral, takeFedMineral, boostsForMineral, takeTilt,
   mineralSummary, yieldMineralsForPlanet, addMinerals,
-  recycleCurrent, salvageArchived,
+  recycleCurrent, salvageArchived, destroyCurrent,
   prestigeEligible, eligiblePrestigeParents, inheritanceBoosts,
   lineageRecord, prestige,
   shareCardFilename, shareCardMarkdown, SHARE_REPO_URL,

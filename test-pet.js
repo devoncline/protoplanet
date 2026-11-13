@@ -2025,6 +2025,70 @@ check('ext: sidebar never replays the birth morph on a new planet',
 check('ext: sidebar always shows the planet settled',
   extSrc.includes('stageStartSec = sec - 10; // settled — no birth morph'));
 
+// --- 19. Destroy with no new planet + prompt (round 9, Nov 12) -------
+// Devon: "add a second choice destroy and then ask" — the starter
+// pick is only for the first planet; later births are random by
+// default, but the prompt still offers the pick.
+{
+  const st = freshWithPlanet(42);
+  L.applyXp(st, 350, seedSeq());
+  const oldSeed = st.current.seed;
+  const placed = L.placePlanet(st, 0, oldSeed, 1);
+  check('r9: setup planet on ring 0', placed.ok === true, placed.reason);
+  const fedId = st.minerals[0].id;
+  L.feedMineral(st, fedId);
+  check('r9: setup mineral fed', st.fedMineral !== null);
+  const dc = L.destroyCurrent(st);
+  check('r9: destroy ok', dc.ok === true, dc.reason);
+  check('r9: current is null after destroy', st.current === null);
+  check('r9: destroyed planet NOT archived', !st.past.some((p) => p.seed === oldSeed));
+  check('r9: destroyed planet NOT on any ring anymore', L.slotIndexForPlanet(st, oldSeed, 1) === -1);
+  check('r9: generation does NOT move (no new life)', st.generation === 1);
+  check('r9: fed mineral NOT consumed by the destroy', st.fedMineral !== null && st.fedMineral.id === fedId);
+  check('r9: minerals yielded', dc.minerals.length === 1 && st.minerals.some((m) => m.source === 'salvage'));
+  check('r9: destroy with no current is a no-op', L.destroyCurrent(st).ok === false);
+  // Birth from the empty state: random, no archive crash.
+  const born = L.newPlanet(st, seedSeq(21000));
+  check('r9: birth from empty state works', st.current === born && born.xp === 0);
+  check('r9: birth from empty is Gen 2', st.generation === 2 && born.generation === 2);
+  check('r9: fed mineral consumed by the next birth', st.fedMineral === null);
+  // Birth with a starter terrain (the prompt's pick): pinned, like
+  // the first run.
+  L.destroyCurrent(st);
+  const picked = L.newPlanet(st, seedSeq(22000), 'icy');
+  check('r9: birth with a picked terrain is that terrain', picked.terrain === 'icy', picked.terrain);
+  check('r9: birth with a pick is Gen 3', st.generation === 3);
+  // makeCurrent still works from the empty state (grow an old planet).
+  L.applyXp(st, 150, seedSeq());
+  L.archiveCurrent(st);
+  L.destroyCurrent(st); // no current — no-op, state unchanged
+  check('r9: setup for grow-old: one archived, none growing', st.past.length === 1 && st.current === null);
+  const mc = L.makeCurrent(st, 0);
+  check('r9: grow-old from empty state works', mc.ok === true && st.current === mc.planet);
+  check('r9: grown-old planet keeps its XP', st.current.xp === 150);
+}
+
+// Host wiring: the salvage list offers the destroy choice, the
+// post-destroy prompt offers grow / birth / birth-with-pick, the
+// sidebar clears to its placeholder when nothing is growing, and the
+// share panel does not crash on a planet-less push.
+check('ext: salvage offers a destroy-with-no-new-planet choice',
+  extSrc.includes('Destroy current planet — ${this.state.current.summary}')
+  && extSrc.includes("kind: 'destroyCurrent'"));
+check('ext: post-destroy prompt offers grow old / birth / birth with pick',
+  extSrc.includes('async promptAfterDestroy()')
+  && extSrc.includes("label: 'Grow an old planet'")
+  && extSrc.includes("label: 'Birth a new planet'")
+  && extSrc.includes("label: 'Birth a new planet with a starter mineral'"));
+check('ext: sidebar clears to its placeholder on an empty push',
+  extSrc.includes("postMessage(viewModel || { type: 'empty', destroyed: !!this.state.starterDone })")
+  && extSrc.includes("if (msg.type === 'empty')")
+  && extSrc.includes("gridEl.innerHTML = '';")
+  && extSrc.includes("'Your planet is hatching\\u2026'")
+  && extSrc.includes("'Nothing is growing \\u2014 start a new planet from the Command Palette, or grow an old one from the Index.'"));
+check('ext: share panel does not crash on a planet-less push',
+  extSrc.includes('if (this.sharePanel && this.state.current) this.sharePanel.webview.postMessage(this.shareViewModel());'));
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) {
   console.log('Failures:\n- ' + failures.join('\n- '));
