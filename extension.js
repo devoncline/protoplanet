@@ -5,10 +5,12 @@
 // JS and tested in plain Node (test-pet.js). Keep it that way: if you
 // add a rule about how the pet behaves, it goes in petLogic.js, not here.
 //
-// Ambient rule: this extension NEVER interrupts coding. No popups while
-// typing — evolutions show in the pet window and status bar only. The
-// only popup is the one-time first-run starter pick, and the "New
-// planet" confirmation (which you asked for by running the command).
+// Ambient rule: this extension NEVER interrupts coding. Evolutions
+// show in the pet window and status bar. The exceptions (Devon,
+// Nov 12 — round 6): three short toasts — a stage-up, a birth, and a
+// mutation at birth — plus the one-time first-run starter pick, the
+// "New planet" confirmation, and the one-time maxed-planet prompt.
+// Everything else stays out of the way while typing.
 
 'use strict';
 
@@ -35,6 +37,11 @@ class ProtoplanetApp {
   constructor(context) {
     this.context = context;
     this.state = Logic.deserializeState(context.globalState.get(STATE_KEY, ''));
+    // Birth notifications (round 6): the key of the planet already
+    // notified — seed:generation — so a reload never re-toasts an old
+    // hatch. Set from the LOADED state before the first pushState();
+    // a first run starts at null (no planet yet).
+    this.lastBirthKey = this.state.current ? `${this.state.current.seed}:${this.state.generation}` : null;
     this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     this.statusBar.command = 'protoplanet.showPet';
     this.statusBar.tooltip = 'Protoplanet — click to show your planet';
@@ -108,6 +115,12 @@ class ProtoplanetApp {
     const n = Logic.countInsertedChars(e.contentChanges);
     if (n <= 0) return;
     const res = Logic.applyXp(this.state, n, Logic.randomSeed);
+    // Stage-up toast (round 6 — Devon): edge-triggered — applyXp
+    // reports the crossing exactly once, so ordinary typing inside a
+    // stage never toasts, and a reload never replays one (no XP is
+    // applied on load). A big paste that jumps two stages toasts once,
+    // for the stage it landed in.
+    if (res.stageChanged) this.notifyStageUp(res.stageIdx);
     this.pushState();
     // Stage changes save immediately; plain typing is debounced so
     // we don't write to disk on every keystroke.
@@ -117,6 +130,50 @@ class ProtoplanetApp {
     // so becameMax fires on the one transition. Optional: the maxed
     // planet keeps growing either way.
     if (res.becameMax) this.promptMaxedPlanet();
+  }
+
+  // -- notifications (round 6, Nov 12 — Devon) ------------------------------
+  // Three short toasts, each once per event. The text lives in
+  // petLogic.js (pure builders); this is only the showing.
+
+  notify(text) {
+    vscode.window.showInformationMessage(text);
+  }
+
+  // Stage-up: "GJ-364c reached Molten!". Fires from the typing path
+  // on applyXp's edge trigger. Reaching Civilization ALSO fires the
+  // one-time maxed-planet prompt below — separate toast, separate
+  // prompt, both once.
+  notifyStageUp(stageIdx) {
+    const cur = this.state.current;
+    if (!cur) return;
+    this.notify(Logic.stageUpMessage(cur, stageIdx));
+  }
+
+  // The identity of the living planet — seed:generation. A new life
+  // always bumps the generation, so the key changes on every birth
+  // even if a seed ever repeated.
+  birthKey() {
+    const cur = this.state.current;
+    return cur ? `${cur.seed}:${this.state.generation}` : null;
+  }
+
+  // Birth toasts: "GJ-364c was born!" plus "…was born with a mutation:
+  // Blood Moon!" when it was born with one. Detected HERE, in
+  // pushState, by planet identity — every birth path (first run,
+  // new planet, recycle, prestige, seed hatch) funnels through
+  // pushState right after the birth, so no path can miss it and no
+  // call site needs its own notify call. Reload-safe: lastBirthKey
+  // starts at the loaded planet's key (set in the constructor), so a
+  // restart never re-toasts an old birth.
+  maybeNotifyBirth() {
+    const key = this.birthKey();
+    if (key && key !== this.lastBirthKey) {
+      this.lastBirthKey = key;
+      for (const msg of Logic.birthNotifications(this.state.current)) this.notify(msg);
+    } else if (!key) {
+      this.lastBirthKey = null;
+    }
   }
 
   // -- commands --------------------------------------------------------------
@@ -703,6 +760,12 @@ class ProtoplanetApp {
       // 0: the window shows it right away, no tier, just the name.
       mutationLabel: Planet.mutationLabel(cur),
       stageStart: info.stageStart,
+      // Per-stage bar (round 6): the bar resets at every stage-up —
+      // inStage is the XP earned inside this stage, span is what the
+      // stage takes in total (null at Civilization). The sidebar label
+      // and the status bar read these, not the cumulative total.
+      inStage: info.inStage,
+      span: info.span,
       xp: cur.xp,
       nextXp: info.nextXp, // null at Civilization: no next stage
       isMax: info.isMax, // fully evolved (Civilization+) — orange XP bar
@@ -715,6 +778,9 @@ class ProtoplanetApp {
   }
 
   pushState() {
+    // Birth toasts first: a new planet's birth toast fires on the
+    // push right after the birth (see maybeNotifyBirth).
+    this.maybeNotifyBirth();
     const vm = this.viewModel();
     if (vm) {
       // viewModel() already computed the stage info — reuse it.
@@ -722,9 +788,12 @@ class ProtoplanetApp {
       // planet is unmissable even with the sidebar closed. The mineral
       // count rides along as well (◆N), so the inventory is visible
       // at a glance without opening the panel.
-      // Maxed (Civilization+): "· MAX" instead of a next threshold —
-      // past Civilization there is no next stage, and the bar is orange.
-      this.statusBar.text = `$(globe) ${vm.stageName} · ${vm.xp}${vm.nextXp === null ? '' : '/' + vm.nextXp} XP${vm.isMax ? ' · MAX' : ''}`
+      // Per-stage numbers (round 6): the status bar shows progress
+      // inside the stage (192/200), not the cumulative total.
+      // Maxed (Civilization+): total XP + "· MAX" instead of a
+      // threshold — past Civilization there is no next stage, and
+      // the bar is orange.
+      this.statusBar.text = `$(globe) ${vm.stageName} · ${vm.isMax ? vm.xp : vm.inStage + '/' + vm.span} XP${vm.isMax ? ' · MAX' : ''}`
         + (vm.mutationLabel ? ` · ${vm.mutationLabel}` : '')
         + (vm.minerals && vm.minerals.total > 0 ? ` · ◆${vm.minerals.total}` : '');
     } else {
@@ -995,12 +1064,18 @@ class ProtoplanetApp {
     barEl.classList.toggle('maxed', !!msg.isMax);
     fillEl.classList.toggle('maxed', !!msg.isMax);
     labelEl.classList.toggle('maxed', !!msg.isMax);
-    const span = msg.nextXp === null ? 1 : Math.max(1, msg.nextXp - msg.stageStart);
-    const pct = msg.nextXp === null ? 100 : Math.max(0, Math.min(100, (msg.xp - msg.stageStart) / span * 100));
+    // Per-stage bar (round 6 — Devon): the bar resets at every
+    // stage-up and shows progress inside the current stage plus the
+    // new goal — "XP 192 / 200" in stage 1, not "XP 292 / 300". The
+    // fill was already per-stage; only the numbers were cumulative.
+    // Maxed (Civilization+): the bar sits full and the label says
+    // MAX with the total XP, as before.
+    const span = msg.nextXp === null ? 1 : Math.max(1, msg.span);
+    const pct = msg.nextXp === null ? 100 : Math.max(0, Math.min(100, msg.inStage / span * 100));
     fillEl.style.width = pct.toFixed(1) + '%';
     labelEl.textContent = msg.nextXp === null
       ? 'XP ' + msg.xp + ' \\u00b7 MAX \\u2014 fully evolved'
-      : 'XP ' + msg.xp + ' / ' + msg.nextXp;
+      : 'XP ' + msg.inStage + ' / ' + span;
     document.getElementById('meta').textContent = 'Grown from ' + msg.chars + ' characters';
     layout(); // text heights changed — re-fit the grid to the view height
   });

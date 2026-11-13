@@ -96,6 +96,39 @@ eq('progress: isMaxed helper agrees at 2199', L.isMaxed(2199), false);
 info = L.stageInfo(0);
 eq('progress: 0 xp next threshold is 100', info.nextXp, 100);
 
+// --- 4b. Per-stage XP bar (round 6, Nov 12 — Devon) ------------------------
+// The bar resets at every stage-up: it shows progress INSIDE the
+// current stage plus that stage's goal, not the cumulative total.
+// 292 XP is "192 / 200" (stage 1), 350 XP is "50 / 300" (stage 2).
+// At Civilization there is no next stage: fill is full and the label
+// is the MAX line with the total XP, unchanged.
+function barEq(xp, inStage, span, label) {
+  const b = L.xpBar(xp);
+  eq(`xpbar: ${xp} xp in-stage`, b.inStage, inStage);
+  eq(`xpbar: ${xp} xp span`, b.span, span);
+  eq(`xpbar: ${xp} xp label`, b.label, label);
+  check(`xpbar: ${xp} xp fill`, Math.abs(b.fill - (span === null ? 1 : inStage / span)) < 1e-12,
+    'got ' + b.fill);
+  eq(`xpbar: ${xp} xp maxed`, b.isMax, span === null);
+}
+barEq(0, 0, 100, 'XP 0 / 100');
+barEq(50, 50, 100, 'XP 50 / 100');
+barEq(99, 99, 100, 'XP 99 / 100');
+barEq(100, 0, 200, 'XP 0 / 200');
+barEq(150, 50, 200, 'XP 50 / 200');
+barEq(292, 192, 200, 'XP 192 / 200');
+barEq(300, 0, 300, 'XP 0 / 300');
+barEq(350, 50, 300, 'XP 50 / 300');
+barEq(599, 299, 300, 'XP 299 / 300');
+barEq(600, 0, 400, 'XP 0 / 400');
+barEq(999, 399, 400, 'XP 399 / 400');
+barEq(1000, 0, 500, 'XP 0 / 500');
+barEq(1499, 499, 500, 'XP 499 / 500');
+barEq(1500, 0, 700, 'XP 0 / 700');
+barEq(2199, 699, 700, 'XP 699 / 700');
+barEq(2200, 0, null, 'XP 2200 · MAX — fully evolved');
+barEq(2500, 300, null, 'XP 2500 · MAX — fully evolved');
+
 // --- 5. XP accumulation through stages --------------------------------------
 let st = freshWithPlanet(42);
 let res = L.applyXp(st, 50, seedSeq());
@@ -158,6 +191,55 @@ eq('maxed: further typing does not re-fire becameMax', res.becameMax, false);
 res = L.applyXp(st, 1000, seedSeq());
 eq('maxed: past Civilization still no re-fire', res.becameMax, false);
 eq('maxed: XP keeps growing past Civilization', st.current.xp, 3700);
+
+// --- 6b. Notification texts (round 6, Nov 12 — Devon) ----------------------
+// Plain, short toasts. Stage-up names the planet + the new stage;
+// hatch names the planet; mutation names every mutation it was born
+// with (one or two). A plain planet earns no mutation toast.
+const notifPlanet = L.makePlanet((() => {
+  for (let s = 0; s < 4000; s++) {
+    if (Planet.generatePlanet(s).mutations.length === 0) return s;
+  }
+  return 42;
+})());
+const notifName = L.nameForPlanet(notifPlanet);
+eq('notif: stage-up names planet + stage', L.stageUpMessage(notifPlanet, 2), `${notifName} reached Molten!`);
+eq('notif: stage-up to Civilization', L.stageUpMessage(notifPlanet, 6), `${notifName} reached Civilization!`);
+eq('notif: hatch names the planet', L.hatchMessage(notifPlanet), `${notifName} was born!`);
+eq('notif: plain planet has no mutation message', L.mutationMessage(notifPlanet), null);
+check('notif: plain planet earns only the birth toast',
+  JSON.stringify(L.birthNotifications(notifPlanet)) === JSON.stringify([`${notifName} was born!`]),
+  JSON.stringify(L.birthNotifications(notifPlanet)));
+function singleMutationSeed() {
+  for (let s = 0; s < 4000; s++) {
+    if (Planet.generatePlanet(s).mutations.length === 1) return s;
+  }
+  return null;
+}
+function twoMutationSeed() {
+  for (let s = 0; s < 4000; s++) {
+    if (Planet.generatePlanet(s).mutations.length === 2) return s;
+  }
+  return null;
+}
+const oneSeed = singleMutationSeed();
+check('notif: a single-mutation seed exists for the test', oneSeed !== null);
+const oneMut = L.makePlanet(oneSeed);
+const oneMutName = (Planet.mutationDef(oneMut.mutations[0]) || {}).name;
+eq('notif: one mutation names it', L.mutationMessage(oneMut),
+  `${L.nameForPlanet(oneMut)} was born with a mutation: ${oneMutName}!`);
+check('notif: mutated planet earns hatch + mutation toasts',
+  JSON.stringify(L.birthNotifications(oneMut)) === JSON.stringify([
+    `${L.nameForPlanet(oneMut)} was born!`,
+    `${L.nameForPlanet(oneMut)} was born with a mutation: ${oneMutName}!`,
+  ]),
+  JSON.stringify(L.birthNotifications(oneMut)));
+const twoSeed = twoMutationSeed();
+check('notif: a two-mutation seed exists for the test', twoSeed !== null);
+const twoMut = L.makePlanet(twoSeed);
+const twoMutNames = twoMut.mutations.map((id) => (Planet.mutationDef(id) || {}).name);
+eq('notif: two mutations name both', L.mutationMessage(twoMut),
+  `${L.nameForPlanet(twoMut)} was born with mutations: ${twoMutNames.join(' + ')}!`);
 
 // --- 7. Starter pick guarantees the terrain (Devon, Nov 11) ------------------
 let icy = 0;
@@ -242,18 +324,22 @@ check('ext: uses gridToHtml (fixed cells)', extSrc.includes('gridToHtml'));
 check('ext: no bare <pre> grid rendering', !/\.grid.*innerHTML\s*=\s*[^P]/.test(extSrc) || extSrc.includes('gridToHtml'));
 check('ext: webview uses nonce CSP', extSrc.includes('Content-Security-Policy') && extSrc.includes('nonce-'));
 check('ext: uses petLogic for XP', extSrc.includes('Logic.applyXp'));
-// The maxed-planet prompt is the ONE popup that can fire while
-// typing (Nov 12): it fires once, when the planet first reaches
-// Civilization, and only offers a new planet. The only other info
-// message is a direct answer to a command the player just ran (Share
-// with no planet yet) — never a typing interruption. The save
-// confirmation lives in the panel itself (the Download button flashes
-// "Saved!"), not a popup.
+// Popups while typing (Nov 12 — round 6, Devon's call): the stage-up
+// toast joins the once-per-planet maxed prompt — both are short toasts
+// on a real event (a stage crossing, first reaching Civilization),
+// never on ordinary typing. All three toasts (stage-up, hatch,
+// mutation) funnel through ONE showInformationMessage call site —
+// notify() — so the count stays small and no new popup can sneak in
+// unnoticed. The only other info message is a direct answer to a
+// command the player just ran (Share with no planet yet) — never a
+// typing interruption. The save confirmation lives in the panel
+// itself (the Download button flashes "Saved!"), not a popup.
 const infoPopups = (extSrc.match(/showInformationMessage/g) || []).length;
-check('ext: typing pops up only the once-per-planet maxed prompt',
-  infoPopups === 2 // maxed prompt + Share-with-no-planet guard
+check('ext: typing pops up only stage-up toast + once-per-planet maxed prompt',
+  infoPopups === 3 // notify() choke point + maxed prompt + Share-with-no-planet guard
   && extSrc.includes('becameMax') && extSrc.includes('fully evolved')
-  && extSrc.includes('No planet yet — pick a starter first, then share it.'));
+  && extSrc.includes('No planet yet — pick a starter first, then share it.')
+  && extSrc.includes('notifyStageUp'));
 check('ext: the save confirmation is in-panel, not a popup',
   extSrc.includes("type: 'saved'") && extSrc.includes("Saved!'"));
 // Maxed (Civilization+) wiring: orange XP bar, isMax in the view

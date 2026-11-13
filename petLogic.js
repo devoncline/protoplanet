@@ -175,6 +175,63 @@ function stageInfo(xp) {
   };
 }
 
+// The sidebar XP bar (round 6, Nov 12 — Devon): progress INSIDE the
+// current stage — the bar resets at every stage-up and shows the new
+// goal, not the cumulative total. 292 XP (stage 1, Accretion) is
+// "192 / 200"; 350 XP (stage 2, Molten) is "50 / 300". At
+// Civilization there is no next stage: fill is full and the label is
+// the MAX line, unchanged (total XP still shows there). The sidebar
+// webview and the status bar both read these numbers from the view
+// model; the detail sheet keeps the TOTAL ("Grown from N characters").
+function xpBar(xp) {
+  const info = stageInfo(xp);
+  if (info.isMax) return { inStage: info.inStage, span: null, fill: 1, isMax: true, label: `XP ${xp} · MAX — fully evolved` };
+  return { inStage: info.inStage, span: info.span, fill: info.inStage / info.span, isMax: false, label: `XP ${info.inStage} / ${info.span}` };
+}
+
+// ---------------------------------------------------------------------------
+// Notifications (round 6, Nov 12 — Devon): plain, short toasts. The
+// host (extension.js) shows them with showInformationMessage; these
+// pure builders are what the tests assert, so the wording lives here
+// in one place. Stage-up fires on the stage crossing (edge-triggered
+// in applyXp's caller); birth/mutation fire once at birth, for every
+// birth path — the host detects births by planet identity, so no path
+// can miss them and a reload never replays one.
+// ---------------------------------------------------------------------------
+
+// "GJ-364c reached Molten!"
+function stageUpMessage(planet, stageIdx) {
+  const stage = Planet.STAGES[stageIdx] || Planet.STAGES[0];
+  return `${nameForPlanet(planet)} reached ${stage.name}!`;
+}
+
+// "GJ-364c was born!"
+function hatchMessage(planet) {
+  return `${nameForPlanet(planet)} was born!`;
+}
+
+// "GJ-364c was born with a mutation: Blood Moon!" — or with two,
+// "…was born with mutations: Blood Moon + Glitch!". Null when the
+// planet was born plain.
+function mutationMessage(planet) {
+  const ids = planet.mutations || [];
+  if (ids.length === 0) return null;
+  const names = ids.map((id) => (Planet.mutationDef(id) || { name: id }).name);
+  return names.length === 1
+    ? `${nameForPlanet(planet)} was born with a mutation: ${names[0]}!`
+    : `${nameForPlanet(planet)} was born with mutations: ${names.join(' + ')}!`;
+}
+
+// Everything a newborn planet earns: always the birth toast, plus the
+// mutation toast when it was born with one. A seed-hatched planet
+// never carries mutations, so it earns only the birth toast.
+function birthNotifications(planet) {
+  const msgs = [hatchMessage(planet)];
+  const m = mutationMessage(planet);
+  if (m) msgs.push(m);
+  return msgs;
+}
+
 // ---------------------------------------------------------------------------
 // Planets and state.
 // ---------------------------------------------------------------------------
@@ -985,7 +1042,8 @@ function deserializeState(json) {
 module.exports = {
   CONFIG, COUNTED_SCHEMES,
   shouldCountDocument, countInsertedChars,
-  stageForXp, stageInfo, displayStageForXp, isMaxed,
+  stageForXp, stageInfo, displayStageForXp, isMaxed, xpBar,
+  stageUpMessage, hatchMessage, mutationMessage, birthNotifications,
   randomSeed, makePlanet, nameForPlanet, uniquePlanetName, takenNamesFor, freshState, startFirstPlanet,
   archiveCurrent, applyXp, newPlanet, parseSeedInput, makeSeedPlanet, hatchFromSeed, shareSeedFor,
   finishedCount, systemRank, lockedRingLabel, resolveSlotPlanet,
