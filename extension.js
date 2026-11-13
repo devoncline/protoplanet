@@ -346,6 +346,20 @@ class ProtoplanetApp {
   // 4), so a tilted birth roll renders exactly as it was born.
   renderablePlanet(record, kind) {
     let traits = record.planet;
+    if (!traits && kind === 'current') {
+      // The live planet IS its own snapshot: makePlanet builds it from
+      // generatePlanet plus xp/chars, so it carries every trait field
+      // the renderer needs. Never re-roll the current planet from its
+      // seed — a planet hatched under an older generation rule re-rolls
+      // into a DIFFERENT planet with current code. GJ-364c (seed
+      // 948502300) was hatched under the pre-guarantee 75% starter
+      // bias: the stored planet has a grey moon (tint 244, radius 4),
+      // a wide ring and size 0.9126, while the re-roll gives a peach
+      // moon (209, radius 2), a double ring and size 1.0013. The
+      // sidebar already renders the stored object; the panel must
+      // render the same one (Nov 12, round 5).
+      traits = record;
+    }
     if (!traits) {
       // Pre-step-4 record (no snapshot): re-roll from the seed and
       // apply the stored mutations. Best effort — a tilted birth
