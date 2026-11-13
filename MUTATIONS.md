@@ -1,4 +1,4 @@
-# Mutation list — Protoplanet (decided with Devon, Nov 11, 2026)
+# Mutation list — Protoplanet (decided with Devon, Nov 11, 2026; reworked Nov 12)
 
 Keep this list current. Devon asks for it on demand — send him this list.
 
@@ -74,28 +74,79 @@ model) was too many. Retune after playing. Measured over 10,000 seeds
 (Nov 11, after the City Lights cut): 9.0% any mutation, 0.46% two
 mutations, each mutation 0.63–0.85%. One knob: `CONFIG.MUTATION_CHANCE` (0.007).
 
-## Minerals (BUILT — step 2, Nov 11)
+## Minerals (BUILT — step 2, Nov 11; reworked round 10, Nov 12)
 
-The player starts with one free mineral (crystal — tilts toward glow
-effects), granted on first run. Inventory lives in petLogic state
+The player starts with one free mineral (crystal — glow family),
+granted on first run. Inventory lives in petLogic state
 (`state.minerals`, persisted in globalState); old saves get the
 starter mineral as a one-time gift on load.
 
-**Feeding (birth-roll rethink — settled):** mutations are born with
-the planet, so feeding a mineral does NOT change the current planet.
-Feeding tilts the NEXT planet's birth roll toward matching mutations.
-Feed any time (Command Palette: "Feed a mineral"); the fed mineral
-sits in the fed slot and is CONSUMED when the next planet is
-generated — recycle, new planet, or prestige offspring.
-Feeding another mineral returns the old one to the inventory.
-A family mineral tilts every mutation in its family (x10); a mineral
-carrying a specific mutation tilts that one mutation harder (x20).
-All multipliers live in petLogic CONFIG, tunable.
+**Apply (round 10 — the mineral IS the mutation; feeding is gone):**
+Devon, Nov 12: feeding a mineral to tilt the NEXT planet's birth roll
+was "confusing and clunky". Replaced. Now you spend a mineral on the
+planet you already love — Command Palette: "Protoplanet: Apply a
+mineral to your planet". The pick list only shows minerals that CAN
+go on this planet (one already on it, or a family it already owns
+whole, is not offered). Then a coin flip (`CONFIG.MUTATE_CHANCE`,
+0.5): it takes hold, or it fizzles and the mineral is gone either
+way. A mutation mineral tries THAT mutation; a family mineral tries
+a random mutation in its family the planet doesn't already have.
+Success bakes the exact same visuals a planet born with that
+mutation would have (same shared code, seeded per planet +
+mutation, so it always looks the same way). The sidebar flashes
+gold on the new mutation label, and the toast names it
+("✦ Green Moon took hold on GJ-1281e!"). A blocked mineral is
+never consumed. No preview of the mutation before it lands — the
+surprise is the fun (Devon: he once glitched a planet randomly,
+thought it was broken, realized it was mutated — "felt awesome").
+
+**Seed protection:** a shared seed hatches the SAME base planet
+WITHOUT mutations (seed hatch strips them). Nobody gets your rare
+mutated planet just by pasting its seed — mutations stay unique to
+the original. A mutation mineral only comes from destroying a
+planet that had the mutation.
 
 Mineral families: moon / rings / glow / storm / sky / weird (each
 mutation carries tags for the mapping).
 
-## Salvage / recycle (BUILT — step 2, Nov 11)
+## Sets (BUILT — round 10, Nov 12)
+
+A whole mutation family on ONE planet names it — the set is the
+planet's title, not a separate reward.
+
+- **Moon Lord** — Green Moon + Blood Moon + Big Moon on one planet.
+- **Ring King** — Crossed Rings + Colored Rings + Double Rings on one planet.
+
+Completing a set fires a toast ("GJ-1281e is the Moon Lord!") and
+the set gets its own gold title card in the detail sheet and in
+the Mutation Index.
+
+## Mutation Index (BUILT — round 10, Nov 12)
+
+The Solar System panel's third tab. Every mutation you have ever
+found is recorded forever (`state.discovered`) — even after the
+planet is destroyed. Found entries are gold with ✦, the name, the
+family, the odds ("about 1 in 143 births"), and which planets carry
+it now ("On: GJ-1281e" — or "Found — but its planet is gone.").
+Missing entries are dimmed with ? and the same odds. The sets row
+on top names each set, what it needs, and who holds it
+("Held by GJ-1281e" / "Not earned yet."). The Index itself can be
+filtered (All / Mutated only / one mutation) and sorted by "Most
+mutated".
+
+## Legendary look (BUILT — round 10, Nov 12)
+
+Mutated planets read as legendary everywhere:
+
+- **Sidebar:** the mutation label flashes gold for 2s on a new
+  mutation (birth or apply) and the planet flickers once.
+- **Index tiles:** a mutated planet's tile gets a gold outline and
+  a ✦ in the top-right corner (✦×N when it carries several).
+- **Detail sheet:** every mutation is its own gold title card
+  (✦ name + one-line flavor), and a completed set gets its own
+  set title card — instead of the old flat .mut tag.
+
+## Salvage / recycle (BUILT — step 2, Nov 11; perk added round 10)
 
 Destroy ANY planet for minerals — this is Devon's loop: roll a
 planet, see its mutation at birth, keep it or recycle it for
@@ -104,28 +155,42 @@ minerals and roll again.
 - **Recycle the CURRENT planet** (Command Palette: "Salvage /
   recycle a planet"): destroyed for minerals AND a fresh planet
   hatches immediately (generation +1). The destroyed planet is NOT
-  archived — it's gone, its minerals are what you keep. A fed
-  mineral tilts the fresh planet's birth roll.
+  archived — it's gone, its minerals are what you keep.
 - **Salvage an ARCHIVED planet:** destroyed for minerals, no new
   planet.
 
 Yields: one mineral per mutation the planet carries (each carrying
-that mutation — the mineral remembers where it came from); a plain
-planet yields one plain mineral of a family derived from its own
-seed. The mineral count shows in the status bar (◆N) and the pet
-window's meta line, plus any fed mineral ("Fed: Crystal mineral").
+that mutation — the mineral remembers where it came from) **plus
+one extra plain mineral** if the planet was mutated at all (round
+10 perk — a mutated planet is worth more); a plain planet yields
+one plain mineral of a family derived from its own seed. The
+mineral count shows in the status bar (◆N) and the pet window's
+meta line. A destroyed planet's mutations stay discovered in the
+Mutation Index.
 
-## Prestige (BUILT — step 2, Nov 11; word kept — Devon's lean)
+**System Rank weight (round 10):** a double-rings planet counts
+double toward System Rank (finished planets / 3) — a double ring
+is a whole second ring system, so it fills a ring slot's worth of
+"finished" faster.
+
+## Prestige (BUILT — step 2, Nov 11; % preview added round 10)
 
 Combining two planets that REACHED Civilization (2200+ chars —
 "reached", so a maxed planet that kept growing past 2200 counts too) makes an offspring: a
 new seed starting as dust, whose birth roll is tilted by the
-parents' mutations — each parent mutation passes at a multiplied
-chance (~2x if one parent has it, ~3x if both); mutations neither
-parent has still roll at the base chance. A fed mineral stacks on
-top (consumed). The offspring becomes the new current planet; the
-old current planet is archived. Command Palette: "Prestige two
+parents' mutations — each parent mutation passes at a real chance
+(50% if one parent has it, 75% if both — Devon's call, Nov 12:
+inheritance is genetics, not a lottery ticket); mutations neither
+parent has still roll at the base chance. The offspring becomes the
+new current planet; the old current planet is archived. Command Palette: "Prestige two
 planets" (two-step pick, then confirm).
+
+**The % before you commit (round 10 — the Brainrot fuse screen):**
+the prestige panel shows the REAL chance per parent mutation
+before fusing — "◆ Glowing Oceans — one parent carries it ·
+50% (base 0.7%)" — plus "Anything else can still appear at its
+usual rare odds — 0.7% each." No fed mineral stacks on top anymore
+(feeding is gone; inheritance is the only tilt).
 
 **Parent fate — built as a tunable switch.**
 Devon's dilemma: destroy the parents and you lose a lot of planets;
@@ -150,6 +215,13 @@ child's record carries the lineage and the family tree stays visible
 even though the parent planets are gone. Merge is realistic, lineage
 keeps the memory.
 
+## Economy (PARKED — Phase 2, Devon Nov 12)
+
+Once a planet reaches Civilization it has an economy, and a heavily
+mutated planet earns more — a reason to farm mutations beyond
+showing off. Held off until the mutation rework above is in place
+and feels good. Do not build until Devon says so.
+
 ## Second planet (flag for Devon)
 
 The New planet command (manual — old planet archived, new seed
@@ -163,7 +235,7 @@ not invent one on your own.
 ## Onboarding (step 3 — NOT built yet)
 
 First run: a curated pick — pick 1 of 3 starter minerals, each with a
-one-line flavor hint of what it tilts toward. A fun, limited, hook-y
-first choice, NOT a shop menu. The starter mineral feeds into the
-mineral system above. Until onboarding lands, the starter mineral
+one-line flavor hint of what it could become. A fun, limited, hook-y
+first choice, NOT a shop menu. The starter mineral is your first
+mutate attempt. Until onboarding lands, the starter mineral
 (crystal) is granted automatically on first run.

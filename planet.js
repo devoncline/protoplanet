@@ -203,8 +203,9 @@ const CONFIG = {
   // Devon can retune after playing. At 0.007 each, ~9% of planets
   // are born with at least one mutation (1-(1-0.007)^14), ~0.4%
   // with two. Most planets have NO mutation — when one shows up,
-  // it's special. `tags` are the mineral families that tilt toward
-  // this mutation (step 2: feeding tilts the NEXT planet's roll).
+  // it's special. `tags` are the mineral families that map to this
+  // mutation (round 10: a mineral IS the mutation — spend it to try
+  // to put that mutation on the planet you love).
   MUTATION_CHANCE: 0.007,
   MUTATIONS: [
     { id: 'big-moon',          name: 'Big Moon',         tags: ['moon'],  desc: 'One oversized moon.' },
@@ -422,6 +423,132 @@ function hasMutation(planet, id) {
   return (planet.mutations || []).includes(id);
 }
 
+// The mutations that BAKE traits into the planet object (a ring the
+// base roll didn't give, a moon's color/size). The other 7 mutations
+// need no baking — the renderer reads them from the active set alone.
+const MUTATION_OVERRIDE_ORDER = ['double-rings', 'colored-rings', 'crossed-rings', 'big-moon', 'green-moon', 'blood-moon'];
+
+// FNV-1a string hash — one stable number per mutation id, so a
+// post-birth apply always draws the same way for the same planet.
+function stringHash(s) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+
+// The seeded rng for a post-birth apply: same seed + same mutation
+// always applies the same way (same hue, same crossing angle).
+function applyRng(seed, mutationId) {
+  return mulberry32(((seed || 0) ^ stringHash(mutationId)) >>> 0);
+}
+
+// The human-readable one-liner, e.g. "Icy world · wide ring · 2
+// moons". Shared by the generator and the post-birth apply, so a
+// planet that gains a ring or a moon from a mineral renames itself
+// exactly the way a planet born with it would.
+function planetSummaryFor(planet) {
+  const ringDef = CONFIG.RING_TYPES.find((rt) => rt.id === planet.ringType);
+  const ringLabel = ringDef ? ringDef.label : (planet.ringLabel || '');
+  return `${planet.terrainLabel} world · ${ringLabel.toLowerCase()} · ${planet.moons.length} moon${planet.moons.length === 1 ? '' : 's'}`;
+}
+
+// Apply ONE mutation's baked traits to a planet object, in place.
+// This is the SAME code the birth roll runs (generatePlanet calls it
+// per mutation, in MUTATION_OVERRIDE_ORDER) — the only difference is
+// when it runs: at birth, or later, when a mineral is spent on a
+// planet you already love (round 10). Idempotent: applying a
+// mutation the planet already has is a no-op (the baked traits are
+// already there), so a second call can never double-tint a moon or
+// double a ring.
+// `planet` is the trait object (ringType, baseRingType, ringHue,
+// crossTilt, ringTilt, ringLabel, terrainLabel, moons). Returns true
+// when it changed something, false when it was already applied or
+// the id has no baked traits.
+function applyMutationToPlanet(planet, mutationId, rng) {
+  if (!planet || !mutationId) return false;
+  const moons = planet.moons || [];
+  const ensureMoon = (radius, tint) => {
+    // A moon added by a mutation still needs a PLAIN form: the base
+    // size and tint are what a planet WITHOUT the mutation shows, so
+    // the mutation is a real difference, not baked in. The base tint
+    // is a normal moon tint drawn from the base table — never the
+    // mutated color (46/196 are not base tints, so baking them into
+    // baseTint would make the moon show its mutation color even on a
+    // planet without the mutation).
+    const baseTint = weightedPick(rng, CONFIG.MOON_TINTS).code;
+    const m = {
+      orbit: 1.55 + moons.length * 0.35 + rng() * 0.15,
+      speed: (0.25 + rng() * 0.35) * (rng() < 0.5 ? 1 : -1),
+      phase: rng() * Math.PI * 2,
+      radius, tint, baseRadius: radius, baseTint, mutantIds: [],
+    };
+    moons.push(m);
+    return m;
+  };
+  const setRing = (id) => {
+    planet.ringType = id;
+    const def = CONFIG.RING_TYPES.find((rt) => rt.id === id);
+    if (def) planet.ringLabel = def.label;
+  };
+  const refreshSummary = () => { planet.summary = planetSummaryFor(planet); };
+  if (mutationId === 'double-rings') {
+    if (planet.ringType === 'double') return false;
+    setRing('double');
+    refreshSummary();
+    return true;
+  }
+  if (mutationId === 'colored-rings') {
+    if (planet.ringHue !== null && planet.ringHue !== undefined) return false;
+    if (planet.ringType === 'none') setRing('thin');
+    const hues = [201, 93, 51, 46, 196]; // magenta / violet / cyan / green / red
+    planet.ringHue = hues[Math.trunc(rng() * hues.length)];
+    refreshSummary();
+    return true;
+  }
+  if (mutationId === 'crossed-rings') {
+    if (planet.crossTilt !== null && planet.crossTilt !== undefined) return false;
+    if (planet.ringType === 'none') setRing('thin');
+    // The second ring sits 25-55° off the main ring — a clear crossing,
+    // but clamped to ±45° so it never goes near-vertical and turns the
+    // whole frame into a diagonal mess.
+    const rawCross = (planet.ringTilt || 0) + (rng() < 0.5 ? -1 : 1) * (25 + rng() * 30);
+    planet.crossTilt = Math.max(-45, Math.min(45, rawCross));
+    refreshSummary();
+    return true;
+  }
+  if (mutationId === 'big-moon') {
+    if (moons.some((m) => (m.mutantIds || []).includes('big-moon'))) return false;
+    if (moons.length === 0) {
+      const m = ensureMoon(5.0, 250);
+      // The plain form is a NORMAL moon (radius 3.0) — the mutation is
+      // the size, so a planet without it must not show a big moon.
+      m.baseRadius = 3.0;
+      m.mutantIds.push('big-moon');
+    } else {
+      const big = moons.reduce((a, b) => (a.baseRadius >= b.baseRadius ? a : b));
+      big.radius = 5.0;
+      big.mutantIds.push('big-moon');
+    }
+    refreshSummary();
+    return true;
+  }
+  if (mutationId === 'green-moon' || mutationId === 'blood-moon') {
+    if (moons.some((m) => (m.mutantIds || []).includes(mutationId))) return false;
+    const tint = mutationId === 'green-moon' ? 46 : 196; // neon green / blood red
+    let target = moons.find((m) => !(m.mutantIds || []).includes('green-moon') && !(m.mutantIds || []).includes('blood-moon'));
+    if (!target) target = ensureMoon(3.0, tint);
+    target.tint = tint;
+    // A colored moon has to READ as colored: a radius-2 moon is ~11
+    // cells and mostly dim, so the color only shows on 2-3 of them.
+    // Colored moons are at least radius 3 — big enough to see the color.
+    target.radius = Math.max(target.radius, 3.0);
+    target.mutantIds.push(mutationId);
+    refreshSummary();
+    return true;
+  }
+  return false; // the other 7 mutations bake nothing — the renderer reads them from the active set
+}
+
 // The mutation label: "MUTATION · Glitch" — just the name, with a
 // MUTATION tag so it's unmissable. No tier (there are no tiers
 // anymore). Null when the planet has no mutation. Several mutations
@@ -436,9 +563,9 @@ function mutationLabel(planet) {
 // ---------------------------------------------------------------------------
 // SEEDED GENERATOR — seed (number) -> planet traits. Deterministic:
 // calling this twice with the same seed gives the exact same planet.
-// `tilt` (optional, step 2) biases the birth rolls: { boosts: { mutationId:
-// multiplier } } — a fed mineral or prestige inheritance multiplies the
-// base chance for those mutations only. Every mutation still draws
+// `tilt` (optional) biases the birth rolls: { boosts: { mutationId:
+// multiplier } } — prestige inheritance multiplies the base chance
+// for those mutations only. Every mutation still draws
 // exactly one rng() value, so a tilt never reshuffles the planet's other
 // traits (same seed + any tilt = same terrain/rings/moons/size).
 // ---------------------------------------------------------------------------
@@ -498,11 +625,10 @@ function generatePlanet(seed, starterTerrain, tilt) {
   // existing seeds. One independent seeded roll per mutation, all at
   // the SAME chance (CONFIG.MUTATION_CHANCE) — no tiers, no cap: a
   // planet is born with whatever it rolls, usually nothing, rarely
-  // two. A mutation you roll is yours from stage 0. A tilt (step 2:
-  // a fed mineral, or prestige inheritance) multiplies the chance
-  // for the boosted mutations only — the roll still draws once per
-  // mutation, so unboosted mutations and every other trait are
-  // untouched by the tilt.
+  // two. A mutation you roll is yours from stage 0. A tilt (prestige
+  // inheritance) multiplies the chance for the boosted mutations only
+  // — the roll still draws once per mutation, so unboosted mutations
+  // and every other trait are untouched by the tilt.
   let mutations = [];
   for (const mut of CONFIG.MUTATIONS) {
     const boost = (tilt && tilt.boosts && tilt.boosts[mut.id]) || 1;
@@ -511,72 +637,27 @@ function generatePlanet(seed, starterTerrain, tilt) {
   // Mutation overrides: some mutations GRANT the trait they name, so a
   // planet born with one always shows it — even if its base rolls said
   // no rings / no moons. These consume rng in a FIXED order, so the
-  // generation stays deterministic.
-  let finalRingType = ringType.id;
-  let ringHue = null;   // colored-rings: the vivid ring color (ANSI code)
-  let crossTilt = null; // crossed-rings: the second ring's tilt (degrees)
-  const ensureMoon = (radius, tint) => {
-    // A moon added by a mutation still needs a PLAIN form: the base
-    // size and tint are what a planet WITHOUT the mutation shows, so
-    // the mutation is a real difference, not baked in. The base tint
-    // is a normal moon tint drawn from the base table — never the
-    // mutated color (46/196 are not base tints, so baking them into
-    // baseTint would make the moon show its mutation color even on a
-    // planet without the mutation).
-    const baseTint = weightedPick(rng, CONFIG.MOON_TINTS).code;
-    const m = {
-      orbit: 1.55 + moons.length * 0.35 + rng() * 0.15,
-      speed: (0.25 + rng() * 0.35) * (rng() < 0.5 ? 1 : -1),
-      phase: rng() * Math.PI * 2,
-      radius, tint, baseRadius: radius, baseTint, mutantIds: [],
-    };
-    moons.push(m);
-    return m;
+  // generation stays deterministic. The override code lives in
+  // applyMutationToPlanet (shared with the post-birth mineral apply,
+  // round 10) — the birth roll calls it per mutation, in
+  // MUTATION_OVERRIDE_ORDER, so every existing seed keeps the exact
+  // draws it had.
+  const draft = {
+    ringType: ringType.id,
+    baseRingType: ringType.id,
+    ringHue: null,   // colored-rings: the vivid ring color (ANSI code)
+    crossTilt: null, // crossed-rings: the second ring's tilt (degrees)
+    ringTilt,
+    ringLabel: ringType.label,
+    terrainLabel: terrain.label,
+    moons,
   };
-  if (mutations.includes('double-rings')) finalRingType = 'double';
-  if (mutations.includes('colored-rings')) {
-    if (finalRingType === 'none') finalRingType = 'thin';
-    const hues = [201, 93, 51, 46, 196]; // magenta / violet / cyan / green / red
-    ringHue = hues[Math.trunc(rng() * hues.length)];
+  for (const id of MUTATION_OVERRIDE_ORDER) {
+    if (mutations.includes(id)) applyMutationToPlanet(draft, id, rng);
   }
-  if (mutations.includes('crossed-rings')) {
-    if (finalRingType === 'none') finalRingType = 'thin';
-    // The second ring sits 25-55° off the main ring — a clear crossing,
-    // but clamped to ±45° so it never goes near-vertical and turns the
-    // whole frame into a diagonal mess.
-    const rawCross = ringTilt + (rng() < 0.5 ? -1 : 1) * (25 + rng() * 30);
-    crossTilt = Math.max(-45, Math.min(45, rawCross));
-  }
-  if (mutations.includes('big-moon')) {
-    if (moons.length === 0) {
-      const m = ensureMoon(5.0, 250);
-      // The plain form is a NORMAL moon (radius 3.0) — the mutation is
-      // the size, so a planet without it must not show a big moon.
-      m.baseRadius = 3.0;
-      m.mutantIds.push('big-moon');
-    } else {
-      const big = moons.reduce((a, b) => (a.baseRadius >= b.baseRadius ? a : b));
-      big.radius = 5.0;
-      big.mutantIds.push('big-moon');
-    }
-  }
-  if (mutations.includes('green-moon')) {
-    let target = moons.find(m => !m.mutantIds.includes('green-moon') && !m.mutantIds.includes('blood-moon'));
-    if (!target) target = ensureMoon(3.0, 46);
-    target.tint = 46; // neon green
-    // A colored moon has to READ as colored: a radius-2 moon is ~11
-    // cells and mostly dim, so the color only shows on 2-3 of them.
-    // Colored moons are at least radius 3 — big enough to see the color.
-    target.radius = Math.max(target.radius, 3.0);
-    target.mutantIds.push('green-moon');
-  }
-  if (mutations.includes('blood-moon')) {
-    let target = moons.find(m => !m.mutantIds.includes('green-moon') && !m.mutantIds.includes('blood-moon'));
-    if (!target) target = ensureMoon(3.0, 196);
-    target.tint = 196; // blood red
-    target.radius = Math.max(target.radius, 3.0);
-    target.mutantIds.push('blood-moon');
-  }
+  const finalRingType = draft.ringType;
+  const ringHue = draft.ringHue;
+  const crossTilt = draft.crossTilt;
   // The summary names the FINAL traits (mutations can grant a ring or
   // a moon the base rolls didn't) — for a planet with no mutations it
   // is exactly the old string.
@@ -2771,6 +2852,7 @@ const API = {
   CONFIG, STAGES, STARS, STAGE0_STYLES,
   mulberry32, generatePlanet, stripMutations, generatePlanetName, formatCatalogName, parseCatalogName, buildFragments, buildSmoke, buildSparkles, buildCoreMarkers, coreMarkerAt, smokeCellAt,
   mutationDef, activeMutations, hasMutation, mutationLabel,
+  applyMutationToPlanet, applyRng, planetSummaryFor, MUTATION_OVERRIDE_ORDER,
   collisionFrame, collisionPhase, collisionShardAt, COLLISION_TIMELINE, COLLISION_END,
   drawComet, drawMeteorShower, applyGlitch,
   makeGrid, render, renderCozy, downsampleGrid, drawPlanet, drawRings, drawMoons, drawMiniSphere, starGrid, starfieldGrid, starfieldHtml, stageScale, ringFitZoom, discDetail, sunDetail, discBlend, sidebarCrop, cropGrid,

@@ -48,23 +48,34 @@ const CONFIG = {
   SAVE_DEBOUNCE_MS: 3000,
 
   // --- Minerals, salvage/recycle, prestige (step 2, Nov 11) -----------
-  // Mineral families map to mutation families (each mutation carries
-  // tags in planet.js). A mineral tilts the NEXT planet's birth roll
-  // toward matching mutations — it never changes the current planet,
-  // because mutations are born with the planet (Nov 11 redesign).
+  // A mineral IS a mutation, bottled: a mutated planet yields a
+  // mineral OF its mutation when destroyed. Spend it to try to put
+  // that mutation on the planet you love — right now, same planet,
+  // same moment (round 10, Nov 12 — Devon's call: feeding a mineral
+  // to tilt the NEXT planet's birth was confusing and clunky, cause
+  // on one planet, effect on another, later. Feeding is gone.)
   MINERAL_FAMILIES: ['moon', 'rings', 'glow', 'storm', 'sky', 'weird'],
 
-  // Feeding multipliers (applied to CONFIG.MUTATION_CHANCE for the
-  // matching mutations on the next planet's birth roll). A family
-  // mineral tilts every mutation in its family; a mineral carrying a
-  // specific mutation tilts that one mutation much harder.
-  FED_FAMILY_BOOST_MULT: 10,
-  FED_EXACT_BOOST_MULT: 20,
+  // The mutate attempt (round 10): spend a mineral, coin flip — it
+  // takes hold or it fizzles and the mineral is gone. One knob.
+  MUTATE_CHANCE: 0.5,
 
-  // Prestige inheritance: a parent mutation passes to the offspring
-  // at a multiplied chance — ~2x if one parent has it, ~3x if both.
-  PRESTIGE_INHERIT_MULT_ONE: 2,
-  PRESTIGE_INHERIT_MULT_BOTH: 3,
+  // Sets (round 10): a whole mutation family on ONE planet names
+  // it. The set is the planet's title, not a separate reward.
+  SETS: [
+    { id: 'moon-lord', name: 'Moon Lord', required: ['green-moon', 'blood-moon', 'big-moon'] },
+    { id: 'ring-king', name: 'Ring King', required: ['crossed-rings', 'colored-rings', 'double-rings'] },
+  ],
+
+  // Prestige inheritance (Devon's call, Nov 12): a parent mutation
+  // passes to the offspring at a REAL chance — 50% if one parent
+  // has it, 75% if both. Inheritance is genetics, not a lottery
+  // ticket: the old x2/x3 multipliers on the 0.7% base only gave
+  // 1.4%/2.1%, barely better than random, which made fusing for a
+  // mutation feel pointless. Everything neither parent has still
+  // rolls at the base chance.
+  PRESTIGE_INHERIT_CHANCE_ONE: 0.5,
+  PRESTIGE_INHERIT_CHANCE_BOTH: 0.75,
 
   // Parent fate (Devon's call, accepted retire for now): parents STAY
   // in the collection, but each planet can only be a parent ONCE.
@@ -90,7 +101,7 @@ const CONFIG = {
   SYSTEM_MAX_RINGS: 12, // the orrery gets unreadable past this; retune if needed
 
   // The one free starter mineral, granted on first run (crystal —
-  // tilts toward glow effects).
+  // a random glow-family mutation when spent on your planet).
   STARTER_MINERAL: { kind: 'crystal', family: 'glow', mutation: null, source: 'starter' },
 };
 
@@ -223,13 +234,24 @@ function mutationMessage(planet) {
 }
 
 // Everything a newborn planet earns: always the birth toast, plus the
-// mutation toast when it was born with one. A seed-hatched planet
-// never carries mutations, so it earns only the birth toast.
+// mutation toast when it was born with one, plus a set toast when the
+// birth completes a whole family on one planet ("GJ-364c is the Moon
+// Lord!"). A seed-hatched planet never carries mutations, so it earns
+// only the birth toast.
 function birthNotifications(planet) {
   const msgs = [hatchMessage(planet)];
   const m = mutationMessage(planet);
   if (m) msgs.push(m);
+  for (const setId of setsForPlanet(planet)) msgs.push(setMessage(planet, setId));
   return msgs;
+}
+
+// "GJ-364c is the Moon Lord!" — the planet completed a whole mutation
+// family (sets live in CONFIG.SETS). Null for an unknown set id.
+function setMessage(planet, setId) {
+  const def = setDef(setId);
+  if (!def) return null;
+  return `${nameForPlanet(planet)} is the ${def.name}!`;
 }
 
 // ---------------------------------------------------------------------------
@@ -244,7 +266,8 @@ function randomSeed() {
 // xp and chars are the same number in v1 (1 char = 1 XP); chars is
 // kept as its own field because later pieces add XP that isn't typed
 // (minerals, piece 5) — "grown from N characters" stays honest.
-// `tilt` (optional, step 2) biases the birth roll — see takeTilt().
+// `tilt` (optional) biases the birth roll — prestige inheritance
+// only (see prestigeTilt()); plain births pass undefined.
 // `usedAsParent` tracks the one-time-parent rule; `parents` is the
 // lineage (prestige offspring only) — always stored, so the family
 // tree stays visible even if parent-fate flips to destroy.
@@ -360,29 +383,39 @@ function freshState() {
     system: [null, null, null, null],
     // Step 2: the mineral inventory.
     minerals: [], // [{ id, kind, family, mutation, source }]
-    fedMineral: null, // the mineral fed for the NEXT planet's birth roll, or null
     mineralSeq: 0, // counter for mineral ids
     starterMineralGranted: false,
+    // Round 10: the Mutation Index — every mutation id ever seen on
+    // a planet you grew (birth roll, successful apply, prestige
+    // offspring). A mutation is "found" forever, even after the
+    // planet that carried it is destroyed.
+    discovered: [], // [mutationId, ...]
   };
 }
 
 // First run: hatch the first planet, optionally biased by the starter
 // terrain the user picked (undefined = fully random). Grants the one
-// free starter mineral (crystal — tilts toward glow effects).
+// free starter mineral (crystal — a random glow-family mutation when
+// spent on your planet). The birth is recorded in the Mutation Index.
 function startFirstPlanet(state, seed, starterTerrain) {
   state.current = makePlanet(seed, starterTerrain, undefined, takenNamesFor(state), state.generation);
+  recordDiscovery(state, state.current);
   state.starterDone = true;
   grantStarterMineral(state);
   return state.current;
 }
 
 // ---------------------------------------------------------------------------
-// Minerals (step 2) — the inventory, feeding, and the tilt.
+// Minerals (step 2) — the inventory and the mutate attempt (round 10).
 // A mineral is { id, kind, family, mutation, source }:
 //   * family: one of CONFIG.MINERAL_FAMILIES (moon/rings/glow/...).
 //   * mutation: the mutation id it carries, or null for a plain family
 //     mineral. A mutated planet yields a mineral OF its mutation.
 //   * source: 'starter' | 'salvage' | 'prestige' (where it came from).
+// A mineral IS the mutation, bottled: spend it to try to put that
+// mutation on the planet you love — the attempt below. Feeding (tilt
+// the NEXT planet's birth) was cut in round 10: cause on one planet,
+// effect on another, later, was the clunky part.
 // ---------------------------------------------------------------------------
 
 function mineralName(mineral) {
@@ -395,14 +428,14 @@ function mineralName(mineral) {
   return `${mineral.family} mineral`;
 }
 
-// Plain words for the UI: what does this mineral tilt toward?
-function mineralTiltsText(mineral) {
+// Plain words for the UI: what does spending this mineral try to do?
+function mineralApplyText(mineral) {
   if (!mineral) return '';
   if (mineral.mutation) {
     const def = Planet.mutationDef(mineral.mutation);
-    return `tilts your next planet toward ${def ? def.name : mineral.mutation}`;
+    return `try to put ${def ? def.name : mineral.mutation} on your planet (coin flip)`;
   }
-  return `tilts your next planet toward ${mineral.family} mutations`;
+  return `try a random ${mineral.family} mutation on your planet (coin flip)`;
 }
 
 function makeMineral(state, spec) {
@@ -425,61 +458,81 @@ function grantStarterMineral(state) {
   return m;
 }
 
-// Feed a mineral for the NEXT planet's birth roll. The mineral moves
-// out of the inventory into the fed slot; feeding another one returns
-// the old one to the inventory. The fed mineral is CONSUMED when the
-// next planet is generated (recycle, new planet, prestige) —
-// it never changes the planet you already have.
-function feedMineral(state, mineralId) {
+// The Mutation Index (round 10): record every mutation on this planet
+// as discovered — "found" forever, even after the planet is destroyed.
+// A seed-hatched planet has no mutations, so it records nothing.
+function recordDiscovery(state, planet) {
+  if (!planet) return;
+  if (!Array.isArray(state.discovered)) state.discovered = [];
+  for (const id of (planet.mutations || [])) {
+    if (!state.discovered.includes(id)) state.discovered.push(id);
+  }
+}
+
+// The sets a planet completes: every required mutation of a family on
+// ONE planet. A planet with two green moons still only counts once —
+// the set is about the family, not the count.
+function setDef(setId) {
+  return CONFIG.SETS.find((s) => s.id === setId) || null;
+}
+
+function setsForPlanet(planet) {
+  const muts = new Set(planet ? planet.mutations || [] : []);
+  return CONFIG.SETS.filter((s) => s.required.every((id) => muts.has(id))).map((s) => s.id);
+}
+
+// Spend a mineral to try to put its mutation on the CURRENT planet
+// (round 10 — the mineral IS the mutation). The mineral is consumed
+// whether the attempt works or not — the price is the mineral, and
+// the mineral came from destroying a planet that had the mutation.
+//   * A mutation mineral tries THAT mutation.
+//   * A family mineral tries a RANDOM mutation in its family that the
+//     planet doesn't already have.
+//   * Blocked (mineral NOT consumed): the planet already has that
+//     mutation, or owns every mutation in the family.
+// `rng` is the coin flip (defaults to Math.random; tests pass a fixed
+// one). The visuals use a SEEDED rng (seed + mutation), so the same
+// apply always looks the same way. Returns { ok, success,
+// mutationId, mutationName, setsCompleted } — setsCompleted lists the
+// set ids the planet completed with this mutation, if any.
+function attemptMutation(state, mineralId, rng) {
+  const roll = typeof rng === 'function' ? rng : Math.random;
+  if (!state.current) return { ok: false, reason: 'no current planet' };
   const idx = (state.minerals || []).findIndex((m) => m.id === mineralId);
   if (idx < 0) return { ok: false, reason: 'no such mineral' };
-  let returned = null;
-  if (state.fedMineral) {
-    returned = state.fedMineral;
-    state.minerals.push(returned);
-  }
-  state.fedMineral = state.minerals.splice(idx, 1)[0];
-  return { ok: true, fed: state.fedMineral, returned };
-}
-
-function unfeedMineral(state) {
-  if (!state.fedMineral) return { ok: false, reason: 'nothing fed' };
-  const m = state.fedMineral;
-  state.fedMineral = null;
-  state.minerals.push(m);
-  return { ok: true, mineral: m };
-}
-
-// Take the fed mineral out of the slot (consumed by a new planet's
-// birth roll). Returns the mineral, or null when nothing was fed.
-function takeFedMineral(state) {
-  const m = state.fedMineral;
-  state.fedMineral = null;
-  return m || null;
-}
-
-// The boosts map for a fed mineral: { mutationId: multiplier }.
-// A family mineral tilts every mutation in its family; a mineral
-// carrying a specific mutation tilts that one mutation much harder.
-function boostsForMineral(mineral) {
-  if (!mineral) return {};
-  const boosts = {};
+  const mineral = state.minerals[idx];
+  const owned = new Set(state.current.mutations || []);
+  let targetId = null;
   if (mineral.mutation) {
-    boosts[mineral.mutation] = CONFIG.FED_EXACT_BOOST_MULT;
-    return boosts;
+    if (owned.has(mineral.mutation)) return { ok: false, reason: 'planet already has it' };
+    targetId = mineral.mutation;
+  } else {
+    const candidates = Planet.CONFIG.MUTATIONS
+      .filter((m) => (m.tags || []).includes(mineral.family) && !owned.has(m.id))
+      .map((m) => m.id);
+    if (candidates.length === 0) return { ok: false, reason: 'planet already has them all' };
+    targetId = candidates[Math.trunc(roll() * candidates.length)];
   }
-  for (const mut of Planet.CONFIG.MUTATIONS) {
-    if ((mut.tags || []).includes(mineral.family)) boosts[mut.id] = CONFIG.FED_FAMILY_BOOST_MULT;
+  // The mineral is spent — success or fizzle, it's gone.
+  state.minerals.splice(idx, 1);
+  const def = Planet.mutationDef(targetId);
+  if (roll() >= CONFIG.MUTATE_CHANCE) {
+    return { ok: true, success: false, mutationId: targetId, mutationName: def ? def.name : targetId, setsCompleted: [] };
   }
-  return boosts;
+  const setsBefore = new Set(setsForPlanet(state.current));
+  state.current.mutations = [...(state.current.mutations || []), targetId];
+  Planet.applyMutationToPlanet(state.current, targetId, Planet.applyRng(state.current.seed, targetId));
+  recordDiscovery(state, state.current);
+  const setsCompleted = setsForPlanet(state.current).filter((id) => !setsBefore.has(id));
+  return { ok: true, success: true, mutationId: targetId, mutationName: def ? def.name : targetId, setsCompleted };
 }
 
-// Build the tilt for the next planet: the fed mineral's boosts
-// (consumed now) merged with any extra boosts (prestige inheritance).
-// Multipliers stack — a mutation boosted by both is boosted by both.
-// Returns null when there is nothing to tilt (plain birth roll).
-function takeTilt(state, extraBoosts) {
-  const boosts = boostsForMineral(takeFedMineral(state));
+// The prestige tilt (round 10): the ONLY tilt left. A fed mineral no
+// longer exists — the offspring's birth roll is tilted by the
+// parents' mutations (inheritance) and nothing else. Returns null
+// when there is nothing to tilt (plain birth roll).
+function prestigeTilt(extraBoosts) {
+  const boosts = {};
   if (extraBoosts) {
     for (const [id, mult] of Object.entries(extraBoosts)) {
       boosts[id] = (boosts[id] || 1) * mult;
@@ -496,7 +549,6 @@ function mineralSummary(state) {
   return {
     total: (state.minerals || []).length,
     byFamily,
-    fed: state.fedMineral ? mineralName(state.fedMineral) : null,
   };
 }
 
@@ -506,8 +558,10 @@ function mineralSummary(state) {
 
 // What a destroyed planet yields. One mineral per mutation it carries
 // (each carrying that mutation — the mineral remembers where it came
-// from); a plain planet yields one plain mineral of a family derived
-// from its own seed, so the yield is stable and testable.
+// from), PLUS one extra plain mineral when it was mutated at all
+// (round 10 perk: a mutated planet is worth more than a plain one);
+// a plain planet yields one plain mineral of a family derived from
+// its own seed, so the yield is stable and testable.
 function yieldMineralsForPlanet(planet) {
   const yields = [];
   const muts = planet.mutations || [];
@@ -516,6 +570,9 @@ function yieldMineralsForPlanet(planet) {
       const def = Planet.mutationDef(id);
       yields.push({ family: (def && def.tags && def.tags[0]) || 'weird', mutation: id, source: 'salvage' });
     }
+    const fams = CONFIG.MINERAL_FAMILIES;
+    const pick = fams[Math.trunc(Planet.mulberry32(((planet.seed || 0) ^ 0xB0A7) >>> 0)() * fams.length)];
+    yields.push({ family: pick, mutation: null, source: 'salvage' });
     return yields;
   }
   const fams = CONFIG.MINERAL_FAMILIES;
@@ -532,15 +589,15 @@ function addMinerals(state, specs) {
 // Recycle the CURRENT planet (Devon's loop): destroy it for minerals
 // and immediately hatch a fresh one. The destroyed planet is NOT
 // archived — it's gone, its minerals are what you keep. The new
-// planet's birth roll is tilted by any fed mineral (consumed).
+// planet's birth roll is a plain roll (no tilt — feeding is gone).
 // Generation +1 — a recycled planet is a new life.
 function recycleCurrent(state, nextSeed) {
   if (!state.current) return { ok: false, reason: 'no current planet' };
   const destroyed = state.current;
   const minerals = addMinerals(state, yieldMineralsForPlanet(destroyed));
   state.generation += 1;
-  const tilt = takeTilt(state, null);
-  state.current = makePlanet(nextSeed ? nextSeed() : randomSeed(), null, tilt, takenNamesFor(state), state.generation);
+  state.current = makePlanet(nextSeed ? nextSeed() : randomSeed(), null, undefined, takenNamesFor(state), state.generation);
+  recordDiscovery(state, state.current);
   // The destroyed planet may have been on a ring — clear that slot.
   normalizeSystem(state);
   return { ok: true, minerals, destroyedSeed: destroyed.seed, planet: state.current };
@@ -549,8 +606,7 @@ function recycleCurrent(state, nextSeed) {
 // Destroy the CURRENT planet (round 9 — Devon): destroy it for
 // minerals and grow NOTHING — the player picks what grows next.
 // The destroyed planet is NOT archived. Generation does NOT move
-// (no new life), and a fed mineral is NOT consumed — it still tilts
-// the next birth, whenever that happens.
+// (no new life).
 function destroyCurrent(state) {
   if (!state.current) return { ok: false, reason: 'no current planet' };
   const destroyed = state.current;
@@ -632,8 +688,13 @@ function inheritanceBoosts(parentMutationsA, parentMutationsB) {
   const boosts = {};
   const count = {};
   for (const id of [...parentMutationsA, ...parentMutationsB]) count[id] = (count[id] || 0) + 1;
+  // The tilt is built from the inheritance CHANCES: generatePlanet
+  // rolls each mutation at base chance x boost, so the boost is the
+  // chance divided by the base (0.5 / 0.007 ≈ 71x). The panel shows
+  // the chance itself, never the boost — nobody wants to read "71x".
   for (const [id, n] of Object.entries(count)) {
-    boosts[id] = n >= 2 ? CONFIG.PRESTIGE_INHERIT_MULT_BOTH : CONFIG.PRESTIGE_INHERIT_MULT_ONE;
+    const chance = n >= 2 ? CONFIG.PRESTIGE_INHERIT_CHANCE_BOTH : CONFIG.PRESTIGE_INHERIT_CHANCE_ONE;
+    boosts[id] = chance / Planet.CONFIG.MUTATION_CHANCE;
   }
   return boosts;
 }
@@ -655,11 +716,12 @@ function lineageRecord(planet, generation) {
 
 // Combine two Civilization-stage planets into an offspring: a new
 // seed starting as dust (0 XP), whose birth roll is tilted by the
-// parents' mutations (inheritance) plus any fed mineral (consumed).
-// The offspring becomes the new current planet; the old current
-// planet is archived (retired if it was a parent, plain if not) —
-// unless the parents were destroyed instead (flag). Parents STAY in
-// the collection by default, but each can only be a parent ONCE.
+// parents' mutations (inheritance) and nothing else — there is no fed
+// mineral anymore (round 10). The offspring becomes the new current
+// planet; the old current planet is archived (retired if it was a
+// parent, plain if not) — unless the parents were destroyed instead
+// (flag). Parents STAY in the collection by default, but each can
+// only be a parent ONCE.
 function prestige(state, parentA, parentB, nextSeed) {
   const a = resolveParent(state, parentA);
   const b = resolveParent(state, parentB);
@@ -691,11 +753,12 @@ function prestige(state, parentA, parentB, nextSeed) {
   // The old current planet leaves the stage — archived (retired if it
   // was a parent) — unless it was just destroyed as a parent.
   if (state.current && !(CONFIG.PRESTIGE_CONSUMES_PARENTS && currentIsParent)) archiveCurrent(state);
-  const tilt = takeTilt(state, inheritanceBoosts(mutsA, mutsB));
+  const tilt = prestigeTilt(inheritanceBoosts(mutsA, mutsB));
   state.generation += 1;
   const offspring = makePlanet(nextSeed ? nextSeed() : randomSeed(), null, tilt, takenNamesFor(state), state.generation);
   offspring.parents = parents;
   state.current = offspring;
+  recordDiscovery(state, offspring);
   return { ok: true, planet: offspring, parents };
 }
 
@@ -739,9 +802,16 @@ function archiveCurrent(state) {
 // ---------------------------------------------------------------------------
 
 // Finished planets = archived planets. The current (growing) planet
-// does not count — a rank is earned by FINISHING planets.
+// does not count — a rank is earned by FINISHING planets. A finished
+// planet carrying Double Rings counts DOUBLE (round 10 perk: its
+// double ring is two rings' worth of system).
 function finishedCount(state) {
-  return (state.past || []).length;
+  let n = 0;
+  for (const p of (state.past || [])) {
+    n += 1;
+    if ((p.mutations || []).includes('double-rings')) n += 1;
+  }
+  return n;
 }
 
 // System Rank: floor(finished / 3). Each rank unlocks +1 ring, from
@@ -878,7 +948,7 @@ function applyXp(state, n, nextSeed) {
 
 // "New planet" command: archive the living planet (if any) and hatch a
 // fresh one. Generation +1 — a manual new planet is a new life, on
-// demand. A fed mineral tilts the new planet's birth roll (consumed).
+// demand. The birth roll is plain (no tilt — feeding is gone).
 // starterTerrain (round 9 — Devon): the mineral pick is only for the
 // first planet; later births are random by default, but the
 // post-destroy prompt can still offer the pick — pass the picked
@@ -886,7 +956,8 @@ function applyXp(state, n, nextSeed) {
 function newPlanet(state, nextSeed, starterTerrain) {
   if (state.current) archiveCurrent(state);
   state.generation += 1;
-  state.current = makePlanet(nextSeed ? nextSeed() : randomSeed(), starterTerrain || null, takeTilt(state, null), takenNamesFor(state), state.generation);
+  state.current = makePlanet(nextSeed ? nextSeed() : randomSeed(), starterTerrain || null, undefined, takenNamesFor(state), state.generation);
+  recordDiscovery(state, state.current);
   return state.current;
 }
 
@@ -1013,12 +1084,11 @@ function makeSeedPlanet(seed, takenNames, terrain, generation) {
 // "Hatch from seed" command: archive the living planet (kept in the
 // collection) and hatch the seed's base planet, mutations stripped.
 // Generation +1 — a seed-hatched planet is a new life, on demand.
-// NO tilt is applied: a fed mineral would change the planet away
-// from the seed's canonical form, so the fed mineral stays fed for
-// the next birth that actually rolls (new planet / recycle /
-// prestige). When there is no current planet yet (first run), the
-// seed hatch IS the first planet (starter done + the one free
-// starter mineral), so the first-run pick never pops up afterwards.
+// NO tilt is applied: the seed's canonical form is the point — a
+// tilt would change the planet away from it. When there is no current
+// planet yet (first run), the seed hatch IS the first planet (starter
+// done + the one free starter mineral), so the first-run pick never
+// pops up afterwards.
 function hatchFromSeed(state, seed, terrain) {
   if (state.current) {
     archiveCurrent(state);
@@ -1110,12 +1180,25 @@ function deserializeState(json) {
     // defaults, plus a one-time starter mineral gift for players who
     // started before minerals existed.
     if (!Array.isArray(s.minerals)) s.minerals = [];
-    if (typeof s.fedMineral !== 'object') s.fedMineral = null;
     if (typeof s.mineralSeq !== 'number' || s.mineralSeq < 0) s.mineralSeq = 0;
     if (typeof s.starterMineralGranted !== 'boolean') {
       s.starterMineralGranted = true;
       if (s.minerals.length === 0) s.minerals.push(makeMineral(s, CONFIG.STARTER_MINERAL));
     }
+    // Round 10: the Mutation Index. Old saves get it rebuilt from
+    // everything still observable — mutations on the current planet,
+    // on archived planets, and on minerals in the inventory (a mineral
+    // of a mutation means that mutation was seen). A legacy fed
+    // mineral (feeding was cut in round 10) counts too, then the fed
+    // slot is deleted — there is no fed slot anymore.
+    if (!Array.isArray(s.discovered)) s.discovered = [];
+    const seen = new Set(s.discovered);
+    if (s.current) for (const id of (s.current.mutations || [])) seen.add(id);
+    for (const p of s.past) for (const id of (p.mutations || [])) seen.add(id);
+    for (const m of s.minerals) if (m.mutation) seen.add(m.mutation);
+    if (s.fedMineral && s.fedMineral.mutation) seen.add(s.fedMineral.mutation);
+    s.discovered = [...seen];
+    delete s.fedMineral;
     // Step 4 fields: old saves get an empty 4-ring system.
     if (!Array.isArray(s.system)) s.system = [null, null, null, null];
     normalizeSystem(s);
@@ -1134,9 +1217,9 @@ module.exports = {
   archiveCurrent, applyXp, newPlanet, makeCurrent, parseSeedInput, makeSeedPlanet, hatchFromSeed, shareSeedFor,
   finishedCount, systemRank, lockedRingLabel, resolveSlotPlanet,
   slotIndexForPlanet, normalizeSystem, placePlanet, removeFromSystem,
-  mineralName, mineralTiltsText, makeMineral, grantStarterMineral,
-  feedMineral, unfeedMineral, takeFedMineral, boostsForMineral, takeTilt,
-  mineralSummary, yieldMineralsForPlanet, addMinerals,
+  mineralName, mineralApplyText, makeMineral, grantStarterMineral,
+  recordDiscovery, setDef, setsForPlanet, setMessage, attemptMutation,
+  prestigeTilt, mineralSummary, yieldMineralsForPlanet, addMinerals,
   recycleCurrent, salvageArchived, destroyCurrent,
   prestigeEligible, eligiblePrestigeParents, inheritanceBoosts,
   lineageRecord, prestige,

@@ -306,7 +306,7 @@ check('pkg: pet view lives in the Explorer', views.some((v) => v.id === 'protopl
 const cmds = (pkg.contributes && pkg.contributes.commands) || [];
 check('pkg: showPet command', cmds.some((c) => c.command === 'protoplanet.showPet'));
 check('pkg: newPlanet command', cmds.some((c) => c.command === 'protoplanet.newPlanet'));
-check('pkg: feedMineral command', cmds.some((c) => c.command === 'protoplanet.feedMineral'));
+check('pkg: applyMineral command', cmds.some((c) => c.command === 'protoplanet.applyMineral'));
 check('pkg: salvagePlanet command', cmds.some((c) => c.command === 'protoplanet.salvagePlanet'));
 check('pkg: prestige command', cmds.some((c) => c.command === 'protoplanet.prestige'));
 check('pkg: no activity bar icon reference', !JSON.stringify(pkg.contributes).includes('media/planet.svg'));
@@ -315,7 +315,7 @@ check('pkg: planet.js exists for the webview', fs.existsSync(path.join(__dirname
 const extSrc = fs.readFileSync(path.join(__dirname, 'extension.js'), 'utf8');
 check('ext: registers showPet', extSrc.includes("'protoplanet.showPet'"));
 check('ext: registers newPlanet', extSrc.includes("'protoplanet.newPlanet'"));
-check('ext: registers feedMineral', extSrc.includes("'protoplanet.feedMineral'"));
+check('ext: registers applyMineral', extSrc.includes("'protoplanet.applyMineral'"));
 check('ext: registers salvagePlanet', extSrc.includes("'protoplanet.salvagePlanet'"));
 check('ext: registers prestige', extSrc.includes("'protoplanet.prestige'"));
 check('ext: status bar shows minerals', extSrc.includes('mineralSummary'));
@@ -327,19 +327,21 @@ check('ext: uses petLogic for XP', extSrc.includes('Logic.applyXp'));
 // Popups while typing (Nov 12 — round 6, Devon's call): the stage-up
 // toast joins the once-per-planet maxed prompt — both are short toasts
 // on a real event (a stage crossing, first reaching Civilization),
-// never on ordinary typing. All three toasts (stage-up, hatch,
-// mutation) funnel through ONE showInformationMessage call site —
-// notify() — so the count stays small and no new popup can sneak in
-// unnoticed. The only other info message is a direct answer to a
-// command the player just ran (Share with no planet yet) — never a
-// typing interruption. The save confirmation lives in the panel
-// itself (the Download button flashes "Saved!"), not a popup.
+// never on ordinary typing. All toasts (stage-up, hatch, mutation,
+// apply success/fizzle, set) funnel through ONE showInformationMessage
+// call site — notify() — so the count stays small and no new popup
+// can sneak in unnoticed. The only other info messages are direct
+// answers to a command the player just ran (Share with no planet yet,
+// Apply with no planet / no usable mineral / a blocked mineral) —
+// never a typing interruption. The save confirmation lives in the
+// panel itself (the Download button flashes "Saved!"), not a popup.
 const infoPopups = (extSrc.match(/showInformationMessage/g) || []).length;
 check('ext: typing pops up only stage-up toast + once-per-planet maxed prompt',
-  infoPopups === 3 // notify() choke point + maxed prompt + Share-with-no-planet guard
+  infoPopups === 6 // notify() choke point + maxed prompt + Share-with-no-planet guard + Apply's three direct answers
   && extSrc.includes('becameMax') && extSrc.includes('fully evolved')
   && extSrc.includes('No planet yet — pick a starter first, then share it.')
-  && extSrc.includes('notifyStageUp'));
+  && extSrc.includes('notifyStageUp')
+  && extSrc.includes('No planet is growing — hatch one first, then spend a mineral on it.'));
 check('ext: the save confirmation is in-panel, not a popup',
   extSrc.includes("type: 'saved'") && extSrc.includes("Saved!'"));
 // Maxed (Civilization+) wiring: orange XP bar, isMax in the view
@@ -361,7 +363,7 @@ check('ext: sidebar webview uses the Protoplanet alias', extSrc.includes('P.CONF
 // collide (Devon, Nov 11: Ring 5 / Ring 6 overlapped).
 check('ext: lock labels stagger so they never overlap', extSrc.includes('lockSeen * 26'));
 
-// --- 12. Minerals, feeding, salvage/recycle, prestige (step 2) ------------
+// --- 12. Minerals, mutate attempts, salvage/recycle, prestige (step 2) -
 // Helper: first seed whose ONLY mutation is the target (same idea as
 // test-planet's singleSeed14, small range is fine for tests).
 function carrierSeed(id) {
@@ -389,46 +391,86 @@ eq('minerals: starter family is glow', st.minerals[0].family, 'glow');
 eq('minerals: starter carries no mutation', st.minerals[0].mutation, null);
 eq('minerals: starter flag set', st.starterMineralGranted, true);
 eq('minerals: starter name', L.mineralName(st.minerals[0]), 'Crystal mineral');
-check('minerals: starter tilts toward glow', L.mineralTiltsText(st.minerals[0]).includes('glow'));
+check('minerals: starter is your first mutate attempt (glow family)', L.mineralApplyText(st.minerals[0]).includes('glow'));
 eq('minerals: second grant is a no-op', L.grantStarterMineral(st), null);
 eq('minerals: still one after second grant', st.minerals.length, 1);
 
-// 12b. Feeding: moves a mineral to the fed slot; feeding another one
-// returns the old one; unfeed returns it; takeTilt consumes it.
-st = freshWithPlanet(42);
-const starterId = st.minerals[0].id;
-let fr = L.feedMineral(st, starterId);
-eq('feed: ok', fr.ok, true);
-eq('feed: fed slot set', st.fedMineral.id, starterId);
-eq('feed: inventory emptied', st.minerals.length, 0);
-eq('feed: unknown id rejected', L.feedMineral(st, 'min-999').ok, false);
-const extra = L.makeMineral(st, { family: 'moon', mutation: null, source: 'salvage' });
-st.minerals.push(extra);
-fr = L.feedMineral(st, extra.id);
-eq('feed: second feed returns the first', fr.returned && fr.returned.id, starterId);
-eq('feed: first mineral back in inventory', st.minerals.some((m) => m.id === starterId), true);
-const ur = L.unfeedMineral(st);
-eq('unfeed: ok', ur.ok, true);
-eq('unfeed: slot cleared', st.fedMineral, null);
-eq('unfeed: mineral back in inventory', st.minerals.length, 2);
-eq('unfeed: nothing fed is a no-op', L.unfeedMineral(st).ok, false);
-L.feedMineral(st, starterId);
-const tilt = L.takeTilt(st, null);
-check('takeTilt: fed crystal boosts glow mutations x10',
-  tilt && tilt.boosts['crystal-crust'] === 10 && tilt.boosts['glowing-oceans'] === 10
-  && tilt.boosts['sparkling-surface'] === 10);
-check('takeTilt: fed crystal does not boost moon mutations',
-  tilt && tilt.boosts['green-moon'] === undefined);
-eq('takeTilt: fed mineral consumed', st.fedMineral, null);
-eq('takeTilt: nothing fed -> null tilt', L.takeTilt(st, null), null);
-const exact = L.makeMineral(st, { family: 'moon', mutation: 'green-moon', source: 'salvage' });
-check('boosts: a mutation mineral tilts that mutation x20',
-  L.boostsForMineral(exact)['green-moon'] === 20
-  && L.boostsForMineral(exact)['blood-moon'] === undefined);
-eq('mineral name: mutation mineral', L.mineralName(exact), 'Green Moon mineral');
+// 12b. The mutate attempt (round 10 — the mineral IS the mutation):
+// spend a mineral on the planet you love, coin flip. Success adds
+// the mutation (with its visuals); failure eats the mineral and
+// nothing changes; a mineral the planet already has is blocked and
+// NOT consumed. A family mineral tries a random mutation in its
+// family that the planet doesn't already have.
+{
+  // Success: fixed rng 0.1 < 0.5 — the Green Moon lands.
+  st = freshWithPlanet(42);
+  st.current.mutations = [];
+  const gm = L.makeMineral(st, { family: 'moon', mutation: 'green-moon', source: 'salvage' });
+  st.minerals.push(gm);
+  const before = st.minerals.length;
+  const ok1 = L.attemptMutation(st, gm.id, () => 0.1);
+  eq('apply: ok', ok1.ok, true);
+  eq('apply: success', ok1.success, true);
+  eq('apply: mutation id', ok1.mutationId, 'green-moon');
+  eq('apply: mutation name', ok1.mutationName, 'Green Moon');
+  eq('apply: mineral consumed', st.minerals.length, before - 1);
+  check('apply: planet now carries it', st.current.mutations.includes('green-moon'));
+  check('apply: discovery recorded', st.discovered.includes('green-moon'));
+  check('apply: the moon actually turns green (visuals baked)',
+    st.current.moons.some((m) => m.tint === 46 && (m.mutantIds || []).includes('green-moon')));
+  // Failure: fixed rng 0.9 >= 0.5 — the mineral is gone, the planet unchanged.
+  st = freshWithPlanet(42);
+  st.current.mutations = [];
+  const gm2 = L.makeMineral(st, { family: 'moon', mutation: 'green-moon', source: 'salvage' });
+  st.minerals.push(gm2);
+  const ok2 = L.attemptMutation(st, gm2.id, () => 0.9);
+  eq('apply: fizzle still ok', ok2.ok, true);
+  eq('apply: fizzle is not a success', ok2.success, false);
+  eq('apply: fizzle eats the mineral', st.minerals.some((m) => m.id === gm2.id), false);
+  check('apply: fizzle leaves the planet plain', !st.current.mutations.includes('green-moon'));
+  check('apply: fizzle is not discovered', !st.discovered.includes('green-moon'));
+  // Blocked: the planet already has it — the mineral is NOT consumed.
+  st = freshWithPlanet(42);
+  st.current.mutations = ['green-moon'];
+  const gm3 = L.makeMineral(st, { family: 'moon', mutation: 'green-moon', source: 'salvage' });
+  st.minerals.push(gm3);
+  const ok3 = L.attemptMutation(st, gm3.id, () => 0.1);
+  eq('apply: already-has-it is blocked', ok3.ok, false);
+  eq('apply: blocked mineral stays in inventory', st.minerals.some((m) => m.id === gm3.id), true);
+  // Family mineral: constant rng 0.0 picks the first candidate the
+  // planet doesn't own (moon family order: big-moon first) and the
+  // same stream's second draw (0.0 < 0.5) lands it.
+  st = freshWithPlanet(42);
+  st.current.mutations = [];
+  const fam = L.makeMineral(st, { family: 'moon', mutation: null, source: 'salvage' });
+  st.minerals.push(fam);
+  const ok4 = L.attemptMutation(st, fam.id, () => 0.0);
+  eq('apply: family mineral tries big-moon first', ok4.mutationId, 'big-moon');
+  eq('apply: family attempt succeeds', ok4.success, true);
+  check('apply: big moon baked (a moon is radius 5)',
+    st.current.moons.some((m) => m.radius === 5.0 && (m.mutantIds || []).includes('big-moon')));
+  // Family mineral blocked when the planet owns the whole family.
+  st = freshWithPlanet(42);
+  st.current.mutations = ['big-moon', 'green-moon', 'blood-moon'];
+  const fam2 = L.makeMineral(st, { family: 'moon', mutation: null, source: 'salvage' });
+  st.minerals.push(fam2);
+  const ok5 = L.attemptMutation(st, fam2.id, () => 0.1);
+  eq('apply: whole family owned is blocked', ok5.ok, false);
+  eq('apply: blocked family mineral stays', st.minerals.some((m) => m.id === fam2.id), true);
+  eq('apply: unknown id rejected', L.attemptMutation(st, 'min-999', () => 0.1).ok, false);
+  st = L.freshState();
+  eq('apply: no current planet rejected', L.attemptMutation(st, 'min-1', () => 0.1).ok, false);
+  // Feeding is gone (round 10): no fed slot, no feed function, no tilt builder.
+  eq('apply: no fed slot on a fresh state', st.fedMineral, undefined);
+  eq('apply: feedMineral no longer exists', typeof L.feedMineral, 'undefined');
+  eq('apply: takeTilt no longer exists', typeof L.takeTilt, 'undefined');
+}
 
-// 12c. A fed mineral really tilts the next planet's birth roll
-// (measured over 2000 seeds: moon-family rate ~2% plain, ~20% fed).
+// 12c. A tilt really tilts the birth roll (measured over 2000 seeds:
+// moon-family rate ~2% plain, ~20% tilted). The tilt mechanism is
+// the prestige inheritance tilt (round 10: feeding is gone, so the
+// only tilt left is prestige) — the generatePlanet tilt parameter
+// itself is unchanged.
 {
   let plainMoon = 0, fedMoon = 0;
   const N = 2000;
@@ -439,7 +481,7 @@ eq('mineral name: mutation mineral', L.mineralName(exact), 'Green Moon mineral')
     if (p.mutations.some((id) => ['big-moon', 'green-moon', 'blood-moon'].includes(id))) plainMoon++;
     if (f.mutations.some((id) => ['big-moon', 'green-moon', 'blood-moon'].includes(id))) fedMoon++;
   }
-  check('tilt: fed moon mineral raises the moon-mutation rate (>10%)', fedMoon / N > 0.10, `${(100 * fedMoon / N).toFixed(1)}% fed`);
+  check('tilt: a moon tilt raises the moon-mutation rate (>10%)', fedMoon / N > 0.10, `${(100 * fedMoon / N).toFixed(1)}% tilted`);
   check('tilt: plain moon-mutation rate stays low (<5%)', plainMoon / N < 0.05, `${(100 * plainMoon / N).toFixed(1)}% plain`);
   const a = Planet.generatePlanet(123), b = Planet.generatePlanet(123, null, moonTilt);
   eq('tilt: same seed + tilt keeps the terrain', b.terrain, a.terrain);
@@ -451,12 +493,15 @@ eq('mineral name: mutation mineral', L.mineralName(exact), 'Green Moon mineral')
 }
 
 // 12d. Salvage yields: a mutated planet yields a mineral OF its
-// mutation; a plain planet yields one plain mineral (stable per seed).
+// mutation PLUS one extra plain mineral (round 10 perk); a plain
+// planet yields one plain mineral (stable per seed).
 {
   const gm = L.yieldMineralsForPlanet(Planet.generatePlanet(carrierSeed('green-moon')));
-  eq('salvage: mutated planet yields one mineral', gm.length, 1);
-  eq('salvage: it carries the mutation', gm[0].mutation, 'green-moon');
+  eq('salvage: mutated planet yields two minerals', gm.length, 2);
+  eq('salvage: first carries the mutation', gm[0].mutation, 'green-moon');
   eq('salvage: family matches the mutation', gm[0].family, 'moon');
+  eq('salvage: bonus is a plain mineral', gm[1].mutation, null);
+  check('salvage: bonus family is a real family', L.CONFIG.MINERAL_FAMILIES.includes(gm[1].family));
   const plain = Planet.generatePlanet(42); plain.mutations = [];
   const yp = L.yieldMineralsForPlanet(plain);
   eq('salvage: plain planet yields one mineral', yp.length, 1);
@@ -469,8 +514,8 @@ eq('mineral name: mutation mineral', L.mineralName(exact), 'Green Moon mineral')
     const pl = Planet.generatePlanet(s);
     if (pl.mutations.length === 2) two = pl;
   }
-  check('salvage: a two-mutation planet yields two minerals',
-    two && L.yieldMineralsForPlanet(two).length === 2, two ? two.mutations.join('+') : 'no two-mutation seed found');
+  check('salvage: a two-mutation planet yields three minerals (2 + bonus)',
+    two && L.yieldMineralsForPlanet(two).length === 3, two ? two.mutations.join('+') : 'no two-mutation seed found');
 }
 
 // 12e. Recycle: destroy the current planet for minerals, hatch a fresh
@@ -478,17 +523,17 @@ eq('mineral name: mutation mineral', L.mineralName(exact), 'Green Moon mineral')
 st = freshWithPlanet(carrierSeed('green-moon'));
 const rc = L.recycleCurrent(st, seedSeq(3000));
 eq('recycle: ok', rc.ok, true);
-eq('recycle: yields the mutation mineral', rc.minerals.length, 1);
+eq('recycle: yields the mutation mineral + bonus', rc.minerals.length, 2);
 eq('recycle: mineral is the green moon', rc.minerals[0].mutation, 'green-moon');
 eq('recycle: generation +1', st.generation, 2);
 eq('recycle: new planet is Dust cloud', L.stageForXp(st.current.xp), 0);
 eq('recycle: destroyed planet NOT archived', st.past.length, 0);
 eq('recycle: new seed differs', st.current.seed !== carrierSeed('green-moon'), true);
 eq('recycle: mineral in inventory', st.minerals.some((m) => m.mutation === 'green-moon'), true);
+check('recycle: the destroyed planet\'s mutation stays discovered', st.discovered.includes('green-moon'));
 st = freshWithPlanet(42);
-L.feedMineral(st, st.minerals[0].id);
 L.recycleCurrent(st, seedSeq(4000));
-eq('recycle: fed mineral consumed by the new planet', st.fedMineral, null);
+eq('recycle: no fed slot exists anymore', st.fedMineral, undefined);
 st = L.freshState();
 eq('recycle: no current planet is a no-op', L.recycleCurrent(st, seedSeq()).ok, false);
 
@@ -499,6 +544,7 @@ L.newPlanet(st, seedSeq(8000));
 eq('salvage: one archived planet', st.past.length, 1);
 const sv = L.salvageArchived(st, 0);
 eq('salvage: ok', sv.ok, true);
+eq('salvage: yields the glitch mineral + bonus', sv.minerals.length, 2);
 eq('salvage: yields the glitch mineral', sv.minerals[0].mutation, 'glitch');
 eq('salvage: record removed', st.past.length, 0);
 eq('salvage: no new planet made', st.current.seed !== carrierSeed('glitch'), true);
@@ -534,45 +580,71 @@ eq('prestige: young planets are not eligible',
   L.eligiblePrestigeParents(st).length, 0);
 eq('prestige: young parents rejected',
   L.prestige(st, { kind: 'current' }, { kind: 'past', index: 0 }, seedSeq()).ok, false);
-// Inheritance boosts: one parent x2, both parents x3 (the mechanism).
-eq('inherit: one parent boosts x2', L.inheritanceBoosts(['green-moon'], [])['green-moon'], 2);
-eq('inherit: both parents boost x3', L.inheritanceBoosts(['green-moon'], ['green-moon'])['green-moon'], 3);
-eq('inherit: unshared mutations stay x2',
-  L.inheritanceBoosts(['green-moon'], ['blood-moon'])['blood-moon'], 2);
+// Inheritance chances (Devon, Nov 12): 50% if one parent has it,
+// 75% if both — inheritance is genetics, not a lottery ticket. The
+// tilt machinery still speaks multipliers, so the boost is the
+// chance divided by the base; these checks read the effective
+// chance, not the raw boost number.
+eq('inherit: one-parent chance is 50%', L.CONFIG.PRESTIGE_INHERIT_CHANCE_ONE, 0.5);
+eq('inherit: both-parents chance is 75%', L.CONFIG.PRESTIGE_INHERIT_CHANCE_BOTH, 0.75);
+check('inherit: one-parent boost is the chance over the base',
+  Math.abs(L.inheritanceBoosts(['green-moon'], [])['green-moon'] * Planet.CONFIG.MUTATION_CHANCE - 0.5) < 1e-9);
+check('inherit: both-parents boost is the chance over the base',
+  Math.abs(L.inheritanceBoosts(['green-moon'], ['green-moon'])['green-moon'] * Planet.CONFIG.MUTATION_CHANCE - 0.75) < 1e-9);
+check('inherit: unshared mutations stay at the one-parent chance',
+  Math.abs(L.inheritanceBoosts(['green-moon'], ['blood-moon'])['blood-moon'] * Planet.CONFIG.MUTATION_CHANCE - 0.5) < 1e-9);
 {
-  // The boost is real in the roll: green-moon at x3 over 5000 seeds.
-  // (N is big on purpose — a 3x boost over a 0.7% base is a small
-  // absolute gap, and the check must not flake on binomial noise:
-  // expected ~35 base vs ~105 boosted.)
-  let base = 0, boosted = 0;
-  const N = 5000, tilt3 = { boosts: { 'green-moon': 3 } };
+  // The chance is real in the roll: green-moon at 50% over 2000
+  // seeds (expected ~1000 hits vs ~14 base — no flake possible at
+  // this gap, unlike the old 3x-over-0.7% measurement).
+  let base = 0, inherited = 0;
+  const N = 2000;
+  const tilt50 = { boosts: { 'green-moon': L.inheritanceBoosts(['green-moon'], [])['green-moon'] } };
   for (let s = 0; s < N; s++) {
     if (Planet.generatePlanet(s).mutations.includes('green-moon')) base++;
-    if (Planet.generatePlanet(s, null, tilt3).mutations.includes('green-moon')) boosted++;
+    if (Planet.generatePlanet(s, null, tilt50).mutations.includes('green-moon')) inherited++;
   }
-  check('inherit: x3 boost triples the green-moon rate', boosted > base * 1.5, `${boosted} vs ${base} / ${N}`);
+  check('inherit: 50% tilt lands green-moon about half the time',
+    inherited > N * 0.4 && inherited < N * 0.6, `${inherited} / ${N} (base ${base})`);
 }
-// A fed mineral is consumed by a prestige offspring too.
-st = prestigeReadyState();
-L.feedMineral(st, st.minerals[0].id);
-L.prestige(st, { kind: 'current' }, { kind: 'past', index: 0 }, seedSeq(9500));
-eq('prestige: fed mineral consumed by the offspring', st.fedMineral, null);
+// prestigeTilt (round 10): the ONLY tilt left — inheritance only,
+// no fed mineral anymore. A fed mineral cannot stack on top because
+// there is no fed mineral.
+eq('prestigeTilt: null with no boosts', L.prestigeTilt(null), null);
+eq('prestigeTilt: inheritance boosts pass through',
+  L.prestigeTilt({ 'green-moon': 2 }).boosts['green-moon'], 2);
+eq('prestigeTilt: empty boosts is a null tilt', L.prestigeTilt({}), null);
 
-// 12h. Persistence: minerals + fed mineral survive a round-trip, and
+// 12h. Persistence: minerals + discovered survive a round-trip, and
 // old saves (from before minerals) get the one-time starter gift.
+// A pre-round-10 save with a legacy fedMineral migrates: its mutation
+// is discovered, and the fed slot is deleted — there is no fed slot
+// anymore.
 st = freshWithPlanet(42);
-L.feedMineral(st, st.minerals[0].id);
 const loaded2 = L.deserializeState(L.serializeState(st));
-eq('persist: fed mineral survives', loaded2.fedMineral && loaded2.fedMineral.id, st.fedMineral.id);
+eq('persist: minerals survive', loaded2.minerals.length, st.minerals.length);
+eq('persist: discovered survives', loaded2.discovered.join(','), st.discovered.join(','));
 eq('persist: starter flag survives', loaded2.starterMineralGranted, true);
 const migrated = L.deserializeState('{"version":1,"current":null,"past":[],"generation":1,"starterDone":true}');
 eq('persist: old save gets the starter gift', migrated.minerals.length, 1);
 eq('persist: old save starter is crystal', migrated.minerals[0].kind, 'crystal');
 eq('persist: old save flag set', migrated.starterMineralGranted, true);
+const legacy = L.deserializeState(JSON.stringify({
+  version: 1,
+  current: { seed: 42, xp: 0, mutations: ['glitch'] },
+  past: [{ seed: 7, mutations: ['comet'] }],
+  generation: 1, starterDone: true, minerals: [],
+  fedMineral: { id: 'min-9', kind: 'mutation', family: 'moon', mutation: 'green-moon', source: 'salvage' },
+  mineralSeq: 9, starterMineralGranted: true,
+}));
+check('persist: legacy fed mineral mutation is discovered', legacy.discovered.includes('green-moon'));
+check('persist: legacy current mutation is discovered', legacy.discovered.includes('glitch'));
+check('persist: legacy archived mutation is discovered', legacy.discovered.includes('comet'));
+eq('persist: legacy fed slot is deleted', legacy.fedMineral, undefined);
 const summary = L.mineralSummary(freshWithPlanet(42));
 eq('summary: one mineral total', summary.total, 1);
 eq('summary: one glow mineral', summary.byFamily.glow, 1);
-eq('summary: nothing fed', summary.fed, null);
+eq('summary: no fed field anymore', summary.fed, undefined);
 
 // --- 13. Solar system (step 4): System Rank, slots, names, overflow -------
 // Helper: grow `n` finished planets — each one typed to Civilization
@@ -1388,7 +1460,9 @@ check('ext: panel lets you skip the collision', extSrc.includes('Skip the collis
 check('ext: panel asks for confirmation before fusing', extSrc.includes('confirmFuseBtn'));
 check('ext: panel shows the offspring’s lineage', extSrc.includes('Born from'));
 check('ext: panel shows what the offspring inherited', extSrc.includes('Inherited:'));
-check('ext: panel shows the fed mineral tilting the offspring', extSrc.includes('Fed:'));
+check('ext: the fed-mineral line is gone from the prestige panel (round 10)',
+  !extSrc.includes('Fed:') && extSrc.includes('both parents carry it')
+  && extSrc.includes('Anything else can still appear at its usual rare odds'));
 // The panel hides sections with .hidden, but #slotsRow and
 // #confirmBar set their own display — without this rule the
 // browser's [hidden] is overridden and the slots stay visible
@@ -1589,18 +1663,14 @@ check('seed input: tagged out-of-range rejected', L.parseSeedInput('1000000000-i
   check('seed hatch tagged: generation +1', st.generation === 2);
   check('seed hatch tagged: old planet archived', st.past.length === 1 && st.past[0].seed === 42);
 }
-// A fed mineral is NOT consumed by a seed hatch — the hatch is the
-// seed's canonical planet, not a roll — and it still applies to the
-// next rolled birth (new planet).
+// A seed hatch leaves the inventory alone — the hatch is the seed's
+// canonical planet, not a roll, so no mineral is spent or tilted.
 {
   const st = freshWithPlanet(42);
-  const fedId = st.minerals[0].id; // the starter mineral from startFirstPlanet
-  L.feedMineral(st, fedId);
+  const before = st.minerals.length;
   L.hatchFromSeed(st, 805839337);
-  check('seed hatch: fed mineral stays fed', st.fedMineral && st.fedMineral.id === fedId);
-  check('seed hatch: inventory untouched', st.minerals.length === 0);
-  L.newPlanet(st, () => 777);
-  check('seed hatch: fed mineral consumed by the NEXT rolled birth', st.fedMineral === null);
+  check('seed hatch: inventory untouched', st.minerals.length === before);
+  check('seed hatch: no fed slot exists', st.fedMineral === undefined);
 }
 // No current planet yet (first run): the seed hatch IS the first
 // planet — starter done + the one free starter mineral, still Gen 1.
@@ -1798,7 +1868,8 @@ check('ext: share PNG caption uses the shared seed', extSrc.includes("(state.sha
   check('ext: prestige still plays the collision', prestigeHtml.includes('P.collisionFrame('));
   check('ext: prestige still shows the inheritance preview',
     prestigeHtml.includes('state.inheritBoth') && prestigeHtml.includes('state.inheritOne')
-    && prestigeHtml.includes('× odds'));
+    && prestigeHtml.includes('both parents carry it')
+    && prestigeHtml.includes('Anything else can still appear at its usual rare odds'));
   check('ext: prestige still asks for confirmation before fusing', prestigeHtml.includes('confirmFuseBtn'));
   check('ext: prestige still shows the offspring lineage', prestigeHtml.includes('Born from'));
 })();
@@ -2035,23 +2106,21 @@ check('ext: sidebar always shows the planet settled',
   const oldSeed = st.current.seed;
   const placed = L.placePlanet(st, 0, oldSeed, 1);
   check('r9: setup planet on ring 0', placed.ok === true, placed.reason);
-  const fedId = st.minerals[0].id;
-  L.feedMineral(st, fedId);
-  check('r9: setup mineral fed', st.fedMineral !== null);
+  const starterCount = st.minerals.length;
   const dc = L.destroyCurrent(st);
   check('r9: destroy ok', dc.ok === true, dc.reason);
   check('r9: current is null after destroy', st.current === null);
   check('r9: destroyed planet NOT archived', !st.past.some((p) => p.seed === oldSeed));
   check('r9: destroyed planet NOT on any ring anymore', L.slotIndexForPlanet(st, oldSeed, 1) === -1);
   check('r9: generation does NOT move (no new life)', st.generation === 1);
-  check('r9: fed mineral NOT consumed by the destroy', st.fedMineral !== null && st.fedMineral.id === fedId);
-  check('r9: minerals yielded', dc.minerals.length === 1 && st.minerals.some((m) => m.source === 'salvage'));
+  check('r9: minerals untouched by the destroy (no fed slot to consume)', st.minerals.length === starterCount + dc.minerals.length);
+  check('r9: minerals yielded (mutation + bonus)', dc.minerals.length === 2 && st.minerals.some((m) => m.source === 'salvage'));
   check('r9: destroy with no current is a no-op', L.destroyCurrent(st).ok === false);
   // Birth from the empty state: random, no archive crash.
   const born = L.newPlanet(st, seedSeq(21000));
   check('r9: birth from empty state works', st.current === born && born.xp === 0);
   check('r9: birth from empty is Gen 2', st.generation === 2 && born.generation === 2);
-  check('r9: fed mineral consumed by the next birth', st.fedMineral === null);
+  check('r9: birth is a plain roll (no tilt, no fed mineral)', st.fedMineral === undefined);
   // Birth with a starter terrain (the prompt's pick): pinned, like
   // the first run.
   L.destroyCurrent(st);
@@ -2088,6 +2157,73 @@ check('ext: sidebar clears to its placeholder on an empty push',
   && extSrc.includes("'Nothing is growing \\u2014 start a new planet from the Command Palette, or grow an old one from the Index.'"));
 check('ext: share panel does not crash on a planet-less push',
   extSrc.includes('if (this.sharePanel && this.state.current) this.sharePanel.webview.postMessage(this.shareViewModel());'));
+
+// --- 20. Mutation rework (round 10, Nov 12) -------------------------------
+// Sets, discovery, rank weight, and the extension wiring for the new
+// system (the logic itself is covered in 12b/12d/12h above).
+{
+  // Sets: all three moon mutations on ONE planet is the Moon Lord.
+  const p = Planet.generatePlanet(42);
+  p.mutations = ['green-moon', 'blood-moon', 'big-moon'];
+  eq('sets: moon lord detected', L.setsForPlanet(p).join(','), 'moon-lord');
+  check('sets: moon lord message', L.setMessage(p, L.setsForPlanet(p)[0]).includes('is the Moon Lord!'));
+  check('sets: birth toast names the set',
+    L.birthNotifications(p).some((n) => n.includes('is the Moon Lord!')));
+  const q = Planet.generatePlanet(42);
+  q.mutations = ['crossed-rings', 'colored-rings', 'double-rings'];
+  eq('sets: ring king detected', L.setsForPlanet(q).join(','), 'ring-king');
+  const r = Planet.generatePlanet(42);
+  r.mutations = ['green-moon', 'blood-moon']; // two of three is no set
+  eq('sets: two of three is not a set', L.setsForPlanet(r).length, 0);
+  eq('sets: a plain planet has no sets', L.setsForPlanet(Planet.generatePlanet(42)).length, 0);
+  // Discovery: a mutated birth is found forever, even after the
+  // planet is gone.
+  st = freshWithPlanet(carrierSeed('glitch'));
+  check('discovered: a glitch birth is discovered', st.discovered.includes('glitch'));
+  st = freshWithPlanet(42);
+  check('discovered: a glowing-oceans birth is discovered', st.discovered.includes('glowing-oceans'));
+  st = L.freshState();
+  eq('discovered: a fresh state has found nothing', st.discovered.length, 0);
+  // Rank weight: a double-rings planet counts double toward System Rank.
+  st = L.freshState();
+  st.past = [
+    { seed: 1, mutations: [] },
+    { seed: 2, mutations: [] },
+    { seed: 3, mutations: ['double-rings'] },
+  ];
+  eq('rank: double-rings planet counts double', L.finishedCount(st), 4);
+  eq('rank: four finished planets is Rank 1', L.systemRank(st).rank, 1);
+  // Mutation chance: the birth odds are still 1 in 10 (Devon's locked call).
+  eq('odds: the birth chance is still 1 in 10', Planet.CONFIG.MUTATION_CHANCE, 0.007);
+}
+
+// Host wiring (round 10): the Apply command, the Mutation Index tab,
+// the legendary Index tiles, the prestige % preview, and no feeding
+// left anywhere.
+check('ext: applyMineral is the only mineral command (no feed command)',
+  extSrc.includes("'protoplanet.applyMineral'") && !extSrc.includes('feedMineral'));
+check('ext: no fed slot anywhere in the host',
+  !extSrc.includes('fedMineral') && !extSrc.includes('takeTilt'));
+check('ext: sidebar flashes on a new mutation',
+  extSrc.includes('mutationFlash') && extSrc.includes('ppFlash') && extSrc.includes('ppGlitch'));
+check('ext: system panel has a Mutations tab with an Index',
+  extSrc.includes("tabMutations") && extSrc.includes('renderMutations')
+  && extSrc.includes('mutationIndex') && extSrc.includes('oddsText')
+  && extSrc.includes('about 1 in ${Math.round(1 / Planet.CONFIG.MUTATION_CHANCE)} births'));
+check('ext: Index filters and sorts by mutation',
+  extSrc.includes('mutFilter') && extSrc.includes('Most mutated')
+  && extSrc.includes('<select id="mutFilter">'));
+check('ext: mutated Index tiles get the gold outline and the ✦ corner',
+  extSrc.includes("(mutCount > 0 ? ' mutated' : '')")
+  && extSrc.includes("'<div class=\"corner\">✦'") && extSrc.includes('.tile.mutated'));
+check('ext: detail sheet shows mutation title cards and set title cards',
+  extSrc.includes('mutCard') && extSrc.includes('setCard'));
+check('ext: prestige shows the real % per parent mutation before fusing',
+  extSrc.includes('mutationChance') && extSrc.includes('both parents carry it')
+  && extSrc.includes('Anything else can still appear at its usual rare odds'));
+check('ext: mutationChance view model carries the base chance for the panel',
+  extSrc.includes('mutationChance: Planet.CONFIG.MUTATION_CHANCE')
+  && extSrc.includes('state.mutationChance || 0.007'));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) {

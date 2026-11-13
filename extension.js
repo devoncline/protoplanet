@@ -50,6 +50,7 @@ class ProtoplanetApp {
     this.systemPanel = null; // the Solar System panel (step 4), or null
     this.prestigePanel = null; // the Prestige / fusion panel (step 4b), or null
     this.prestigeResult = null; // the last fusion result, shown until dismissed
+    this.mutationFlash = null; // round 10: the mutation id to flash gold in the sidebar on the next push (birth or apply), then cleared
     this.sharePanel = null; // the Share card panel (P0, Nov 12), or null
     this.saveTimer = null;
     context.subscriptions.push(this.statusBar);
@@ -75,7 +76,7 @@ class ProtoplanetApp {
       vscode.commands.registerCommand('protoplanet.newPlanet', () => this.newPlanet())
     );
     context.subscriptions.push(
-      vscode.commands.registerCommand('protoplanet.feedMineral', () => this.feedMineral())
+      vscode.commands.registerCommand('protoplanet.applyMineral', () => this.applyMineral())
     );
     context.subscriptions.push(
       vscode.commands.registerCommand('protoplanet.salvagePlanet', () => this.salvagePlanet())
@@ -161,18 +162,23 @@ class ProtoplanetApp {
   }
 
   // Birth toasts: "GJ-364c was born!" plus "…was born with a mutation:
-  // Blood Moon!" when it was born with one. Detected HERE, in
-  // pushState, by planet identity — every birth path (first run,
-  // new planet, recycle, prestige, seed hatch) funnels through
+  // Blood Moon!" when it was born with one, plus a set toast when the
+  // birth completes a family ("GJ-364c is the Moon Lord!"). Detected
+  // HERE, in pushState, by planet identity — every birth path (first
+  // run, new planet, recycle, prestige, seed hatch) funnels through
   // pushState right after the birth, so no path can miss it and no
   // call site needs its own notify call. Reload-safe: lastBirthKey
   // starts at the loaded planet's key (set in the constructor), so a
-  // restart never re-toasts an old birth.
+  // restart never re-toasts an old birth. A newborn with a mutation
+  // also flashes gold in the sidebar (the reveal moment) — the flag
+  // rides the same push and clears right after.
   maybeNotifyBirth() {
     const key = this.birthKey();
     if (key && key !== this.lastBirthKey) {
       this.lastBirthKey = key;
       for (const msg of Logic.birthNotifications(this.state.current)) this.notify(msg);
+      const muts = (this.state.current && this.state.current.mutations) || [];
+      if (muts.length > 0) this.mutationFlash = muts[0];
     } else if (!key) {
       this.lastBirthKey = null;
     }
@@ -255,20 +261,58 @@ class ProtoplanetApp {
   // these never fire while typing. Results surface in the pet window
   // and status bar, never as a notification.
 
-  async feedMineral() {
-    const inv = this.state.minerals || [];
-    if (inv.length === 0) return; // can't happen — first run grants one
-    const items = inv.map((m) => ({
+  // Spend a mineral to try to put its mutation on the planet you love
+  // (round 10 — the mineral IS the mutation; feeding is gone). The
+  // pick list only shows minerals that CAN go on this planet — one
+  // already on it, or a family whose mutations it already owns, is
+  // not offered. The coin flip is the fun: it takes hold, or it
+  // fizzles and the mineral is gone.
+  async applyMineral() {
+    if (!this.state.current) {
+      vscode.window.showInformationMessage('No planet is growing — hatch one first, then spend a mineral on it.');
+      return;
+    }
+    const owned = new Set(this.state.current.mutations || []);
+    const usable = (this.state.minerals || []).filter((m) => {
+      if (m.mutation) return !owned.has(m.mutation);
+      const family = Planet.CONFIG.MUTATIONS.filter((x) => (x.tags || []).includes(m.family));
+      return family.some((x) => !owned.has(x.id));
+    });
+    if (usable.length === 0) {
+      const has = (this.state.minerals || []).length > 0;
+      vscode.window.showInformationMessage(has
+        ? 'Every mineral you have is already on this planet — salvage a planet with a mutation you don\'t have yet.'
+        : 'No minerals yet — salvage a planet to get one.');
+      return;
+    }
+    const items = usable.map((m) => ({
       label: Logic.mineralName(m),
-      description: Logic.mineralTiltsText(m),
+      description: Logic.mineralApplyText(m),
       id: m.id,
     }));
     const pick = await vscode.window.showQuickPick(items, {
-      placeHolder: 'Protoplanet: feed a mineral — it tilts your NEXT planet',
+      placeHolder: 'Protoplanet: spend a mineral — coin flip to put its mutation on your planet',
       ignoreFocusOut: true,
     });
     if (!pick) return;
-    Logic.feedMineral(this.state, pick.id);
+    const res = Logic.attemptMutation(this.state, pick.id);
+    if (!res.ok) {
+      vscode.window.showInformationMessage('That mineral can\'t go on this planet anymore.');
+      return;
+    }
+    if (res.success) {
+      // The sidebar flashes gold + flickers once on the new mutation
+      // (the reveal moment) — the flag rides the next push, then
+      // clears so typing never re-flashes it.
+      this.mutationFlash = res.mutationId;
+      this.notify(`✦ ${res.mutationName} took hold on ${Logic.nameForPlanet(this.state.current)}!`);
+      for (const setId of (res.setsCompleted || [])) {
+        const msg = Logic.setMessage(this.state.current, setId);
+        if (msg) this.notify(msg);
+      }
+    } else {
+      this.notify(`The ${res.mutationName} mineral fizzled out.`);
+    }
     this.saveNow();
     this.pushState();
   }
@@ -556,6 +600,13 @@ class ProtoplanetApp {
       archivedAt: record.archivedAt || null,
       mutations: (record.mutations || []).slice(),
       mutationLabel: Planet.mutationLabel({ mutations: record.mutations || [] }),
+      // Round 10: the set titles this planet earned (Moon Lord, Ring
+      // King) — a whole family on one planet. { id, name } pairs, so
+      // the panels never hardcode set names.
+      sets: Logic.setsForPlanet(record).map((id) => {
+        const d = Logic.setDef(id);
+        return { id, name: d ? d.name : id };
+      }),
       parents: record.parents || null,
       usedAsParent: !!record.usedAsParent,
       kind,
@@ -596,6 +647,35 @@ class ProtoplanetApp {
     }
     const index = this.state.past.map((p) => renderable(p, 'past'));
     if (this.state.current) index.push(renderable(this.state.current, 'current'));
+    // Round 10: the Mutation Index — all 13 mutations, found vs
+    // missing, which planets carry each, honest odds. Found means
+    // discovered (state.discovered) — a mutation stays found even
+    // after its planet is destroyed.
+    const discovered = new Set(this.state.discovered || []);
+    const mutationIndex = {
+      total: Planet.CONFIG.MUTATIONS.length,
+      foundCount: Planet.CONFIG.MUTATIONS.filter((m) => discovered.has(m.id)).length,
+      oddsText: `about 1 in ${Math.round(1 / Planet.CONFIG.MUTATION_CHANCE)} births`,
+      entries: Planet.CONFIG.MUTATIONS.map((m) => ({
+        id: m.id,
+        name: m.name,
+        desc: m.desc,
+        family: (m.tags && m.tags[0]) || 'weird',
+        found: discovered.has(m.id),
+        carriers: index
+          .filter((p) => (p.mutations || []).includes(m.id))
+          .map((p) => ({ name: p.name, seed: p.seed, generation: p.generation, kind: p.kind })),
+      })),
+      sets: Logic.CONFIG.SETS.map((s) => {
+        const holder = index.find((p) => Logic.setsForPlanet(p).includes(s.id));
+        return {
+          id: s.id,
+          name: s.name,
+          required: s.required.map((id) => (Planet.mutationDef(id) || { name: id }).name),
+          holder: holder ? { name: holder.name, seed: holder.seed, generation: holder.generation } : null,
+        };
+      }),
+    };
     return {
       type: 'system',
       rank: rank.rank,
@@ -607,6 +687,7 @@ class ProtoplanetApp {
       totalPlanets: index.length,
       slots,
       index,
+      mutationIndex,
     };
   }
 
@@ -680,8 +761,9 @@ class ProtoplanetApp {
   }
 
   // Everything the panel needs: every planet in the collection with
-  // its eligibility, the fed mineral (consumed by the offspring), the
-  // inheritance multipliers, and the last fusion result (if any).
+  // its eligibility, the inheritance multipliers, the base mutation
+  // chance (so the panel can show the real % before fusing), and the
+  // last fusion result (if any).
   prestigeViewModel() {
     const eligible = Logic.eligiblePrestigeParents(this.state);
     const planets = [];
@@ -708,10 +790,10 @@ class ProtoplanetApp {
       eligibleCount: eligible.length,
       canFuse: eligible.length >= 2,
       minChars: Logic.CONFIG.PRESTIGE_MIN_CHARS,
-      inheritOne: Logic.CONFIG.PRESTIGE_INHERIT_MULT_ONE,
-      inheritBoth: Logic.CONFIG.PRESTIGE_INHERIT_MULT_BOTH,
+      inheritOne: Logic.CONFIG.PRESTIGE_INHERIT_CHANCE_ONE,
+      inheritBoth: Logic.CONFIG.PRESTIGE_INHERIT_CHANCE_BOTH,
       consumesParents: Logic.CONFIG.PRESTIGE_CONSUMES_PARENTS,
-      fedMineral: this.state.fedMineral ? Logic.mineralName(this.state.fedMineral) : null,
+      mutationChance: Planet.CONFIG.MUTATION_CHANCE,
       planets,
       result: this.prestigeResult,
     };
@@ -883,6 +965,10 @@ class ProtoplanetApp {
       // planet (Nov 11 redesign), so it's in the view model from stage
       // 0: the window shows it right away, no tier, just the name.
       mutationLabel: Planet.mutationLabel(cur),
+      // Round 10: the mutation id to flash gold in the sidebar on this
+      // push (a birth or a successful apply) — null the rest of the
+      // time, so typing never re-flashes it.
+      mutationFlash: this.mutationFlash || null,
       stageStart: info.stageStart,
       // Per-stage bar (round 6): the bar resets at every stage-up —
       // inStage is the XP earned inside this stage, span is what the
@@ -926,6 +1012,9 @@ class ProtoplanetApp {
       this.statusBar.text = '$(globe) Protoplanet — hatching…';
     }
     this.viewProvider.postState(vm);
+    // The flash is one-shot: it rode this push to the sidebar, and
+    // typing must never re-flash it.
+    this.mutationFlash = null;
     // The Solar System panel gets the same push (its own view model)
     // — typing never opens it, but a new planet while it is open must
     // show the new planet in the Index right away.
@@ -1005,6 +1094,13 @@ class ProtoplanetApp {
     letter-spacing: .12em; text-transform: uppercase; color: #ffd75f;
     background: rgba(255, 215, 95, .12); border: 1px solid rgba(255, 215, 95, .55);
     border-radius: 3px; padding: 2px 7px; margin: 0 0 8px; }
+  /* Round 10 — the reveal moment: when a mutation lands (birth or a
+     successful apply), the tag pulses gold for 2s and the card
+     flickers once. One-shot, driven by msg.mutationFlash. */
+  #mutationLabel.flash { animation: ppFlash 2s ease 1; }
+  @keyframes ppFlash { 0% { box-shadow: 0 0 0 rgba(255, 215, 95, 0); } 15% { box-shadow: 0 0 16px rgba(255, 215, 95, .9); } 100% { box-shadow: 0 0 0 rgba(255, 215, 95, 0); } }
+  #wrap.glitchFlash { animation: ppGlitch .9s steps(2) 1; }
+  @keyframes ppGlitch { 0%, 100% { opacity: 1; } 20% { opacity: .35; } 40% { opacity: .9; } 60% { opacity: .45; } 80% { opacity: .95; } }
   /* The XP bar has to READ as a bar, not a black strip (Devon, Nov 11):
      at 0 XP the fill is empty, so the track itself needs a visible
      border — plus a label with the numbers, so there's no guessing. */
@@ -1192,6 +1288,15 @@ class ProtoplanetApp {
     const mutEl = document.getElementById('mutationLabel');
     if (msg.mutationLabel) { mutEl.textContent = msg.mutationLabel; mutEl.style.display = 'inline-block'; }
     else { mutEl.style.display = 'none'; }
+    // Round 10 — the reveal moment: a mutation just landed (birth or
+    // apply). The tag pulses gold for 2s and the card flickers once.
+    // One-shot: the flag rides one push only, and the classes are
+    // removed on a timer so typing never re-flashes them.
+    if (msg.mutationFlash) {
+      mutEl.classList.add('flash');
+      wrapEl.classList.add('glitchFlash');
+      setTimeout(function () { mutEl.classList.remove('flash'); wrapEl.classList.remove('glitchFlash'); }, 2000);
+    }
     // No flavor text in the sidebar (Devon, Nov 11): the stage
     // description and the world details (terrain, ring, moons, seed,
     // minerals) live in the detail sheet / Index. The sidebar keeps
@@ -1394,6 +1499,15 @@ class ProtoplanetApp {
   #detail .mut { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .12em;
     text-transform: uppercase; color: #ffd75f; background: transparent;
     border: 1px solid rgba(255, 215, 95, 0.55); padding: 2px 7px; margin: 0 0 8px; }
+  /* Round 10 — legendary: every mutation is its own title card
+     (gold, name + one-line flavor), and a completed set gets its own
+     title card too. The flat .mut tag above stays for other panels. */
+  #detail .mutCard { background: linear-gradient(135deg, #2b2b2b, #3a2f14); border: 1px solid #e8b64c;
+    border-radius: 6px; padding: 8px 10px; margin: 0 0 8px; }
+  #detail .mutCard .mutName { font-size: 12px; font-weight: 700; color: #ffd75f; }
+  #detail .mutCard .mutDesc { font-size: 11px; opacity: .8; margin-top: 2px; line-height: 1.4; }
+  #detail .setCard { background: #2b2b2b; border: 1px solid #e8b64c; border-radius: 6px;
+    padding: 8px 10px; margin: 0 0 8px; font-size: 12px; font-weight: 700; color: #ffd75f; line-height: 1.5; }
   #detail table { font-size: 12px; border-collapse: collapse; margin: 0 0 12px; }
   #detail td { padding: 2px 10px 2px 0; vertical-align: top; }
   #detail td.k { opacity: .6; white-space: nowrap; }
@@ -1412,6 +1526,28 @@ class ProtoplanetApp {
     padding: 14px 28px 48px; background: #050505; }
   body.mode-index #index { display: block; }
   body.mode-index #orreryWrap { display: none; }
+  /* The Mutation Index (round 10): the collection, not the orrery —
+     all 13 mutations, found vs missing, which planets carry each. */
+  #mutations { display: none; height: calc(100vh - 37px); overflow-y: auto;
+    padding: 14px 28px 48px; background: #050505; }
+  body.mode-mutations #mutations { display: block; }
+  body.mode-mutations #orreryWrap { display: none; }
+  body.mode-mutations #index { display: none; }
+  #mutCount { font-size: 11px; opacity: .55; margin: 0 0 10px; }
+  #mutSets { display: flex; gap: 1px; background: #1e1e1e; margin-bottom: 14px; flex-wrap: wrap; }
+  .setCard { flex: 1 1 240px; background: #050505; padding: 12px 14px; }
+  .setCard.earned { outline: 1px solid rgba(232, 182, 76, .65); outline-offset: -1px; }
+  .setCard .sname { font-size: 13px; font-weight: 700; color: #ffd75f; }
+  .setCard .sreq { font-size: 11px; opacity: .7; margin-top: 4px; line-height: 1.5; }
+  .setCard .sholder { font-size: 11px; color: #ffd75f; margin-top: 4px; }
+  #mutCards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 1px; background: #1e1e1e; }
+  .mutCard { background: #050505; padding: 14px; }
+  .mutCard.found { outline: 1px solid rgba(232, 182, 76, .65); outline-offset: -1px; }
+  .mutCard .mname { font-size: 13px; font-weight: 700; color: #ffd75f; }
+  .mutCard.missing .mname { color: #888; }
+  .mutCard .mdesc { font-size: 12px; opacity: .8; margin-top: 4px; line-height: 1.5; }
+  .mutCard .mmeta { font-size: 11px; opacity: .65; margin-top: 8px; line-height: 1.6; }
+  .mutCard .mcarriers { font-size: 11px; color: #ffd75f; margin-top: 4px; line-height: 1.6; }
   #indexCount { font-size: 11px; opacity: .55; margin: 0 0 10px; }
   #indexBar { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
   #search { flex: 1; min-width: 180px; background: #0a0a0a;
@@ -1424,8 +1560,13 @@ class ProtoplanetApp {
      no tile. The grid is panel black now; tiles are separated by
      1px hairlines only. */
   #tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 0; background: #050505; }
-  .tile { background: #050505; padding: 14px 14px 12px; cursor: pointer; border-bottom: 1px solid #1e1e1e; border-right: 1px solid #1e1e1e; }
+  .tile { position: relative; background: #050505; padding: 14px 14px 12px; cursor: pointer; border-bottom: 1px solid #1e1e1e; border-right: 1px solid #1e1e1e; }
   .tile:hover { background: #0a0a0a; }
+  /* Round 10 — legendary: a mutated planet's tile gets a gold outline
+     and a ✦ in the top-right corner (✦×N when it carries several).
+     Plain tiles stay plain. */
+  .tile.mutated { outline: 1px solid rgba(232, 182, 76, .65); outline-offset: -1px; }
+  .tile .corner { position: absolute; top: 8px; right: 10px; color: #ffd75f; font-size: 16px; font-weight: 700; z-index: 2; }
   .tile .art { display: flex; justify-content: center; background: #050505; margin-bottom: 10px; overflow: hidden; }
   .tile .tname { font-size: 13px; font-weight: 600; }
   .tile .tmeta { font-size: 11px; opacity: .7; line-height: 1.5; margin-top: 2px; }
@@ -1451,6 +1592,7 @@ class ProtoplanetApp {
   <div id="modeTabs">
     <button id="tabOrrery" class="tab active" data-mode="orrery">Orrery</button>
     <button id="tabIndex" class="tab" data-mode="index">Index</button>
+    <button id="tabMutations" class="tab" data-mode="mutations">Mutations</button>
   </div>
   <button id="hideUiBtn" class="ghost" title="Hide the interface (H)">Hide UI</button>
 </header>
@@ -1474,11 +1616,21 @@ class ProtoplanetApp {
       <option value="newest">Newest first</option>
       <option value="oldest">Oldest first</option>
       <option value="most">Most characters</option>
+      <option value="mutated">Most mutated</option>
       <option value="name">Name A&ndash;Z</option>
       <option value="terrain">Terrain</option>
     </select>
+    <select id="mutFilter">
+      <option value="">All planets</option>
+      <option value="mutated">Mutated only</option>
+    </select>
   </div>
   <div id="tiles"></div>
+</section>
+<section id="mutations">
+  <p id="mutCount"></p>
+  <div id="mutSets"></div>
+  <div id="mutCards"></div>
 </section>
 <script nonce="${nonce}" src="${planetJsUri}"></script>
 <script nonce="${nonce}">
@@ -1567,16 +1719,19 @@ class ProtoplanetApp {
     }
     return +Math.min(cellW / _advRatio, cellH).toFixed(2);
   }
-  // --- modes: Orrery <-> Index ----------------------------------------------
-  // Two full screens, not one crowded one (Devon, Nov 12 — the research's
-  // strongest pattern): each mode gets 100% of the panel, so neither the
-  // orrery nor the collection has to shrink for the other.
+  // --- modes: Orrery <-> Index <-> Mutations -------------------------------
+  // Three full screens, not one crowded one (Devon, Nov 12 — the
+  // research's strongest pattern): each mode gets 100% of the panel,
+  // so neither the orrery nor the collection has to shrink for the
+  // other. The Mutations tab (round 10) is the collection view.
   function setMode(m) {
     if (m === mode) return;
     mode = m;
     document.body.classList.toggle('mode-index', m === 'index');
+    document.body.classList.toggle('mode-mutations', m === 'mutations');
     document.getElementById('tabOrrery').classList.toggle('active', m === 'orrery');
     document.getElementById('tabIndex').classList.toggle('active', m === 'index');
+    document.getElementById('tabMutations').classList.toggle('active', m === 'mutations');
     if (m === 'orrery') {
       // The orrery was display:none — its size is 0 until it is back,
       // so recompute the fit and re-apply the current view.
@@ -1588,9 +1743,11 @@ class ProtoplanetApp {
       // for real instead of falling back to the estimate.
       renderIndex();
     }
+    if (m === 'mutations') renderMutations();
   }
   document.getElementById('tabOrrery').addEventListener('click', function () { setMode('orrery'); });
   document.getElementById('tabIndex').addEventListener('click', function () { setMode('index'); });
+  document.getElementById('tabMutations').addEventListener('click', function () { setMode('mutations'); });
   document.getElementById('hideUiBtn').addEventListener('click', function () {
     document.body.classList.toggle('hide-ui');
   });
@@ -2190,10 +2347,23 @@ class ProtoplanetApp {
     var emptyRing = firstEmptyRing();
     // The art is filled by fillDetailArt() below (cropped render,
     // cells sized to the sheet) — the grid element starts empty.
+    // Round 10 — legendary: every mutation is its own title card
+    // (gold, name + one-line flavor), and a completed set gets its
+    // own title card. The flat tag is gone from this sheet.
+    var mutCards = '';
+    (planet.mutations || []).forEach(function (id) {
+      var def = P.mutationDef(id);
+      mutCards += '<div class="mutCard"><div class="mutName">✦ ' + esc(def ? def.name : id) + '</div>'
+        + '<div class="mutDesc">' + esc(def ? def.desc : '') + '</div></div>';
+    });
+    var setCards = '';
+    (planet.sets || []).forEach(function (s) {
+      setCards += '<div class="setCard">✦ ' + esc(s.name) + ' — a whole mutation family on one planet</div>';
+    });
     var html = '<button id="detailClose" class="ghost" data-action="close" title="Close">&times;</button>'
       + '<h2>' + esc(planet.name) + '</h2>'
       + '<p class="sub">' + esc(planet.summary) + ' &middot; Seed ' + planet.seed + '</p>'
-      + (planet.mutationLabel ? '<div class="mut">' + esc(planet.mutationLabel) + '</div>' : '')
+      + mutCards + setCards
       + '<div id="detailArt" class="pp-frame" data-cw="4" data-ch="7.2" data-atmo="' + planet.planet.atmosphere + '"><div class="pp-stars"></div><div class="pp-planet"><div class="pp-grid"></div></div></div>'
       + '<table>'
       + '<tr><td class="k">Terrain</td><td>' + esc(planet.terrainLabel) + '</td></tr>'
@@ -2275,22 +2445,44 @@ class ProtoplanetApp {
       if (state.index[i].kind === 'current') cur = state.index[i].seed + ':' + state.index[i].stageIdx;
     }
     return JSON.stringify([
-      state.index.map(function (p) { return p.seed + ':' + p.generation; }),
+      // A planet's mutations change without its seed:generation
+      // changing (round 10: a mineral apply adds one in place) — the
+      // signature must include them, or the Index won't re-render
+      // after an apply.
+      state.index.map(function (p) { return p.seed + ':' + p.generation + ':' + (p.mutations || []).join(','); }),
       state.slots.map(function (s) { return s.planet ? s.planet.seed + ':' + s.planet.generation : ''; }),
       cur,
+      state.mutationIndex ? state.mutationIndex.foundCount : 0,
     ]);
   }
+  var mutFilter = ''; // '' = all, 'mutated' = mutated only, else a mutation id
+  // The filter's mutation options come from the engine's own list —
+  // the panel never hardcodes the 13 ids.
+  (function () {
+    var sel = document.getElementById('mutFilter');
+    P.CONFIG.MUTATIONS.forEach(function (m) {
+      var opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.name;
+      sel.appendChild(opt);
+    });
+  })();
   function filteredIndex() {
     var q = searchText.trim().toLowerCase();
     var list = state.index.filter(function (p) {
-      if (!q) return true;
-      var hay = (p.name + ' ' + p.terrainLabel + ' ' + p.seed + ' ' + (p.mutationLabel || '')).toLowerCase();
-      return hay.indexOf(q) >= 0;
+      if (q) {
+        var hay = (p.name + ' ' + p.terrainLabel + ' ' + p.seed + ' ' + (p.mutationLabel || '')).toLowerCase();
+        if (hay.indexOf(q) < 0) return false;
+      }
+      if (mutFilter === 'mutated') return (p.mutations || []).length > 0;
+      if (mutFilter) return (p.mutations || []).includes(mutFilter);
+      return true;
     });
     list.sort(function (a, b) {
       if (sortMode === 'newest') return (b.archivedAt || Infinity) - (a.archivedAt || Infinity);
       if (sortMode === 'oldest') return (a.archivedAt || 0) - (b.archivedAt || 0);
       if (sortMode === 'most') return b.chars - a.chars;
+      if (sortMode === 'mutated') return (b.mutations || []).length - (a.mutations || []).length || b.chars - a.chars;
       if (sortMode === 'name') return a.name.localeCompare(b.name);
       if (sortMode === 'terrain') return (a.terrainLabel + a.name).localeCompare(b.terrainLabel + b.name);
       return 0;
@@ -2323,8 +2515,10 @@ class ProtoplanetApp {
     for (var i = 0; i < list.length; i++) {
       var p = list[i];
       var inSys = slotOf(p.seed, p.generation) >= 0;
-      html += '<div class="tile' + (inSys ? ' inSystem' : '') + (pickerRing !== null ? ' picking' : '') + '"'
+      var mutCount = (p.mutations || []).length;
+      html += '<div class="tile' + (inSys ? ' inSystem' : '') + (pickerRing !== null ? ' picking' : '') + (mutCount > 0 ? ' mutated' : '') + '"'
         + ' data-seed="' + p.seed + '" data-gen="' + p.generation + '">'
+        + (mutCount > 0 ? '<div class="corner">✦' + (mutCount > 1 ? '×' + mutCount : '') + '</div>' : '')
         + '<div class="art"><div class="pp-grid"></div></div>'
         + '<div class="tname">' + esc(p.name) + '</div>'
         + '<div class="tmeta">' + esc(p.terrainLabel) + ' &middot; ' + esc(p.stageName) + ' &middot; ' + p.chars + ' chars &middot; Gen ' + p.generation + '</div>'
@@ -2369,6 +2563,40 @@ class ProtoplanetApp {
       gridEl.innerHTML = P.gridToHtml(
         P.cropGrid(P.render(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx), undefined, 0.5, true), crop), cellW, cellH);
     }
+  }
+
+  // --- mutation index (round 10) -------------------------------------------
+  // The collection, not the orrery: all 13 mutations as cards — found
+  // ones gold with their carriers, missing ones dimmed with honest
+  // odds — plus the two set titles and who holds them.
+  function renderMutations() {
+    if (!state || !state.mutationIndex) return;
+    var mi = state.mutationIndex;
+    document.getElementById('mutCount').textContent =
+      mi.foundCount + ' / ' + mi.total + ' mutations found — each ' + mi.oddsText + ' when a planet is born';
+    var setsHtml = '';
+    for (var i = 0; i < mi.sets.length; i++) {
+      var s = mi.sets[i];
+      setsHtml += '<div class="setCard' + (s.holder ? ' earned' : '') + '">'
+        + '<div class="sname">✦ ' + esc(s.name) + '</div>'
+        + '<div class="sreq">' + s.required.map(esc).join(' + ') + ' on one planet</div>'
+        + (s.holder ? '<div class="sholder">Held by ' + esc(s.holder.name) + '</div>' : '<div class="sreq">Not earned yet.</div>')
+        + '</div>';
+    }
+    document.getElementById('mutSets').innerHTML = setsHtml;
+    var html = '';
+    for (var j = 0; j < mi.entries.length; j++) {
+      var e = mi.entries[j];
+      html += '<div class="mutCard' + (e.found ? ' found' : ' missing') + '">'
+        + '<div class="mname">' + (e.found ? '✦ ' : '? ') + esc(e.name) + '</div>'
+        + '<div class="mdesc">' + esc(e.desc) + '</div>'
+        + '<div class="mmeta">' + esc(e.family) + ' family · ' + mi.oddsText + '</div>'
+        + (e.found && e.carriers.length > 0
+          ? '<div class="mcarriers">On: ' + e.carriers.map(function (c) { return esc(c.name); }).join(', ') + '</div>'
+          : (e.found ? '<div class="mcarriers">Found — but its planet is gone.</div>' : ''))
+        + '</div>';
+    }
+    document.getElementById('mutCards').innerHTML = html;
   }
 
   // --- picker mode (choosing a planet for a ring) ---------------------------
@@ -2578,6 +2806,9 @@ class ProtoplanetApp {
   document.getElementById('sort').addEventListener('change', function (e) {
     sortMode = e.target.value; renderIndex();
   });
+  document.getElementById('mutFilter').addEventListener('change', function (e) {
+    mutFilter = e.target.value; renderIndex();
+  });
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') {
       if (pickerRing !== null) cancelPicker();
@@ -2646,6 +2877,7 @@ class ProtoplanetApp {
       lastSig = sig;
       renderOrrery();
       renderIndex();
+      renderMutations();
       if (detailOpen) renderDetail();
     } else if (detailOpen) {
       renderDetail(); // live XP/stage for the current planet
@@ -2942,19 +3174,24 @@ class ProtoplanetApp {
     if (order.length === 0) {
       html += '<div class="row">Neither parent carries a mutation — the offspring rolls a fresh one at the usual rare odds.</div>';
     } else {
+      // Round 10 — the numbers BEFORE you commit (Brainrot shows them
+      // on the fuse screen; so do we): the real chance per parent
+      // mutation. inheritOne/inheritBoth ARE the chances now (50% one
+      // parent, 75% both — Devon's call, Nov 12), not multipliers.
+      var base = state.mutationChance || 0.007;
+      var baseStr = (Math.round(base * 1000) / 10) + '%';
       order.forEach(function (id) {
         var def = P.mutationDef(id);
         var name = def ? def.name : id;
         var both = counts[id] >= 2;
+        var chance = both ? state.inheritBoth : state.inheritOne;
+        var pct = Math.min(100, chance * 100);
+        var pctStr = (Math.round(pct * 10) / 10) + '%';
         html += '<div class="row">◆ ' + esc(name) + ' — '
           + (both ? 'both parents carry it' : 'one parent carries it')
-          + ' &middot; <span class="boost">~' + (both ? state.inheritBoth : state.inheritOne) + '× odds</span></div>';
+          + ' &middot; <span class="boost">' + pctStr + '</span> (base ' + baseStr + ')</div>';
       });
-      html += '<div class="row" style="opacity:.65">Anything else can still appear at its usual rare odds.</div>';
-    }
-    if (state.fedMineral) {
-      html += '<div class="row fed">Fed: ' + esc(state.fedMineral)
-        + ' — it will tilt the offspring’s birth roll too, then it’s consumed.</div>';
+      html += '<div class="row" style="opacity:.65">Anything else can still appear at its usual rare odds — ' + baseStr + ' each.</div>';
     }
     inheritBarEl.innerHTML = html;
   }

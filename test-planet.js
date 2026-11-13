@@ -2225,5 +2225,147 @@ check('name: generatePlanet carries the seed name',
     blendedChars(gj1, 4.7) === nOld, `blended ${blendedChars(gj1, 4.7)} vs cropped ${nOld}`);
 }
 
+// --- 23. Post-birth apply: applyMutationToPlanet (round 10, Nov 12) --------
+// The same code the birth roll runs — a mineral spent on a planet you
+// already love bakes the exact same traits a planet born with that
+// mutation would have. applyRng(seed, id) is deterministic per
+// (seed, mutation), so the same planet + the same mineral always
+// draws the same hue / crossing angle.
+{
+  // (test-planet has no eq helper — this block defines its own.)
+  const eq = (name, got, want) => check(name, got === want, 'got ' + JSON.stringify(got) + ', want ' + JSON.stringify(want));
+  // A clean slate: a plain planet with a real ring and at least one moon.
+  function plainCarrier() {
+    for (let s = 0; s < 4000; s++) {
+      const pl = P.generatePlanet(s);
+      if (pl.mutations.length === 0 && pl.ringType !== 'none' && pl.ringType !== 'double' && pl.moons.length >= 1) return pl;
+    }
+    return null;
+  }
+  const carrier = plainCarrier();
+  check('apply: a clean plain carrier exists', !!carrier);
+  const clone = () => JSON.parse(JSON.stringify(carrier));
+
+  // Each override mutation bakes its trait and reports true.
+  let p = clone();
+  eq('apply: double-rings lands', P.applyMutationToPlanet(p, 'double-rings', P.applyRng(p.seed, 'double-rings')), true);
+  eq('apply: double-rings sets the ring', p.ringType, 'double');
+  check('apply: double-rings renames the summary', p.summary.includes('double ring'), p.summary);
+  p = clone();
+  eq('apply: colored-rings lands', P.applyMutationToPlanet(p, 'colored-rings', P.applyRng(p.seed, 'colored-rings')), true);
+  check('apply: colored-rings sets a hue', [201, 93, 51, 46, 196].includes(p.ringHue), 'hue ' + p.ringHue);
+  check('apply: colored-rings keeps the base ring', p.ringType === carrier.ringType, p.ringType);
+  p = clone();
+  eq('apply: crossed-rings lands', P.applyMutationToPlanet(p, 'crossed-rings', P.applyRng(p.seed, 'crossed-rings')), true);
+  check('apply: crossed-rings sets a second tilt', p.crossTilt !== null && Math.abs(p.crossTilt) <= 45, 'crossTilt ' + p.crossTilt);
+  p = clone();
+  eq('apply: big-moon lands', P.applyMutationToPlanet(p, 'big-moon', P.applyRng(p.seed, 'big-moon')), true);
+  check('apply: big-moon makes a radius-5 moon',
+    p.moons.some((m) => m.radius === 5.0 && (m.mutantIds || []).includes('big-moon')));
+  p = clone();
+  eq('apply: green-moon lands', P.applyMutationToPlanet(p, 'green-moon', P.applyRng(p.seed, 'green-moon')), true);
+  check('apply: green-moon tints a moon neon green',
+    p.moons.some((m) => m.tint === 46 && (m.mutantIds || []).includes('green-moon')));
+  p = clone();
+  eq('apply: blood-moon lands', P.applyMutationToPlanet(p, 'blood-moon', P.applyRng(p.seed, 'blood-moon')), true);
+  check('apply: blood-moon tints a moon blood red',
+    p.moons.some((m) => m.tint === 196 && (m.mutantIds || []).includes('blood-moon')));
+
+  // The other 7 mutations bake nothing — the renderer reads them from
+  // the active set — and the planet is untouched.
+  let allNoop = true;
+  for (const id of ['crystal-crust', 'glowing-oceans', 'giant-storm', 'comet', 'meteor-shower', 'sparkling-surface', 'glitch']) {
+    p = clone();
+    const before = JSON.stringify(p);
+    if (P.applyMutationToPlanet(p, id, P.applyRng(p.seed, id)) !== false || JSON.stringify(p) !== before) { allNoop = false; break; }
+  }
+  check('apply: the other 7 mutations bake nothing (no-op false)', allNoop);
+
+  // Idempotence: a second apply is a no-op — no double tint, no double ring.
+  p = clone();
+  P.applyMutationToPlanet(p, 'green-moon', P.applyRng(p.seed, 'green-moon'));
+  const afterFirst = JSON.stringify(p);
+  eq('apply: second green-moon is a no-op', P.applyMutationToPlanet(p, 'green-moon', P.applyRng(p.seed, 'green-moon')), false);
+  check('apply: second green-moon changes nothing', JSON.stringify(p) === afterFirst);
+  p = clone();
+  P.applyMutationToPlanet(p, 'double-rings', P.applyRng(p.seed, 'double-rings'));
+  eq('apply: second double-rings is a no-op', P.applyMutationToPlanet(p, 'double-rings', P.applyRng(p.seed, 'double-rings')), false);
+
+  // applyRng is deterministic per (seed, mutation): the same planet +
+  // the same mineral always draws the same hue / crossing angle.
+  const hue1 = clone(), hue2 = clone();
+  P.applyMutationToPlanet(hue1, 'colored-rings', P.applyRng(hue1.seed, 'colored-rings'));
+  P.applyMutationToPlanet(hue2, 'colored-rings', P.applyRng(hue2.seed, 'colored-rings'));
+  eq('applyRng: same seed + same mutation draws the same hue', hue1.ringHue, hue2.ringHue);
+  const cross1 = clone(), cross2 = clone();
+  P.applyMutationToPlanet(cross1, 'crossed-rings', P.applyRng(cross1.seed, 'crossed-rings'));
+  P.applyMutationToPlanet(cross2, 'crossed-rings', P.applyRng(cross2.seed, 'crossed-rings'));
+  eq('applyRng: same seed + same mutation draws the same crossing angle', cross1.crossTilt, cross2.crossTilt);
+  const r1 = P.applyRng(42, 'green-moon'), r2 = P.applyRng(42, 'blood-moon');
+  check('applyRng: different mutations draw differently', r1() !== r2());
+
+  // stripMutations inverts an apply: apply then strip returns the
+  // exact plain planet you started from.
+  let roundTripOk = true, worst = '';
+  for (const id of P.MUTATION_OVERRIDE_ORDER) {
+    p = clone();
+    P.applyMutationToPlanet(p, id, P.applyRng(p.seed, id));
+    p.mutations = [id]; // the apply site adds the id to the list (petLogic does this)
+    const stripped = P.stripMutations(p);
+    if (JSON.stringify(stripped) !== JSON.stringify(carrier)) { roundTripOk = false; worst = id; break; }
+  }
+  check('apply: strip inverts every override apply (6/6 round-trip)', roundTripOk, worst);
+
+  // The birth roll and the apply agree: a planet BORN with an
+  // override mutation carries the same kind of baked trait an
+  // applied planet gets.
+  const bornTraits = {
+    'double-rings': (pl) => pl.ringType === 'double',
+    'colored-rings': (pl) => pl.ringHue !== null,
+    'crossed-rings': (pl) => pl.crossTilt !== null,
+    'big-moon': (pl) => pl.moons.some((m) => m.radius === 5.0 && (m.mutantIds || []).includes('big-moon')),
+    'green-moon': (pl) => pl.moons.some((m) => m.tint === 46 && (m.mutantIds || []).includes('green-moon')),
+    'blood-moon': (pl) => pl.moons.some((m) => m.tint === 196 && (m.mutantIds || []).includes('blood-moon')),
+  };
+  let bornOk = true, bornWorst = '';
+  for (const id of P.MUTATION_OVERRIDE_ORDER) {
+    const born = singleSeed14(id);
+    if (!born || !bornTraits[id](born)) { bornOk = false; bornWorst = id; break; }
+  }
+  check('apply: every born override carrier has the same baked trait (6/6)', bornOk, bornWorst);
+
+  // Edge cases: a moonless planet grows a moon from a moon mutation;
+  // a ringless planet gets a thin ring from a ring mutation; a planet
+  // born with double rings can't be double-ringed again.
+  let moonless = null, ringless = null, bornDouble = null;
+  for (let s = 0; s < 4000 && (!moonless || !ringless || !bornDouble); s++) {
+    const pl = P.generatePlanet(s);
+    if (!moonless && pl.mutations.length === 0 && pl.moons.length === 0) moonless = pl;
+    if (!ringless && pl.mutations.length === 0 && pl.ringType === 'none') ringless = pl;
+    if (!bornDouble && pl.mutations.length === 0 && pl.baseRingType === 'double') bornDouble = pl;
+  }
+  if (moonless) {
+    p = JSON.parse(JSON.stringify(moonless));
+    eq('apply: green-moon on a moonless planet lands', P.applyMutationToPlanet(p, 'green-moon', P.applyRng(p.seed, 'green-moon')), true);
+    eq('apply: green-moon grows exactly one moon', p.moons.length, 1);
+    check('apply: the grown moon is green', p.moons[0].tint === 46 && p.moons[0].mutantIds.includes('green-moon'));
+    p = JSON.parse(JSON.stringify(moonless));
+    P.applyMutationToPlanet(p, 'big-moon', P.applyRng(p.seed, 'big-moon'));
+    check('apply: big-moon on a moonless planet grows a radius-5 moon with a plain base',
+      p.moons.length === 1 && p.moons[0].radius === 5.0 && p.moons[0].baseRadius === 3.0);
+  } else { check('apply: a moonless plain carrier exists', false); }
+  if (ringless) {
+    p = JSON.parse(JSON.stringify(ringless));
+    P.applyMutationToPlanet(p, 'colored-rings', P.applyRng(p.seed, 'colored-rings'));
+    eq('apply: colored-rings on a ringless planet grants a thin ring', p.ringType, 'thin');
+    check('apply: ...and still sets the hue', p.ringHue !== null);
+  } else { check('apply: a ringless plain carrier exists', false); }
+  if (bornDouble) {
+    p = JSON.parse(JSON.stringify(bornDouble));
+    eq('apply: double-rings on a born-double planet is a no-op', P.applyMutationToPlanet(p, 'double-rings', P.applyRng(p.seed, 'double-rings')), false);
+    check('apply: ...and the ring is untouched', p.ringType === 'double');
+  } else { check('apply: a born-double plain carrier exists', false); }
+}
+
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);
