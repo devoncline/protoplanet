@@ -254,14 +254,34 @@ function randomSeed() {
 // letter, seed-derived) until it is unique. The final name is stored
 // on the record and never changes after birth. When no set is passed
 // (tests, one-off rolls), the planet keeps its base name.
-function makePlanet(seed, starterTerrain, tilt, takenNames) {
+function makePlanet(seed, starterTerrain, tilt, takenNames, generation) {
   const p = Planet.generatePlanet(seed, starterTerrain, tilt);
   if (takenNames) p.name = uniquePlanetName(p.name, seed, takenNames);
   p.xp = 0;
   p.chars = 0;
   p.usedAsParent = false;
   p.parents = null;
+  // The planet carries its own birth-order generation (round 7):
+  // "Gen 1" is which life this planet is, and it must never change —
+  // not when the planet is archived, and not when it is grown again
+  // later. state.generation is the lives counter; a planet born as
+  // Gen 2 stays Gen 2 even if an older planet is reactivated first.
+  // Older planets (born before this stamp) have no field — callers
+  // read through currentGeneration() instead, which falls back to
+  // state.generation.
+  if (Number.isInteger(generation)) p.generation = generation;
   return p;
+}
+
+// The living planet's generation: its own stamped field when it has
+// one, state.generation otherwise (old saves, where the current
+// planet was born as the latest life — the fallback is exactly
+// right for those). Every read of "the current planet's generation"
+// goes through here, so a reactivated planet keeps its generation
+// instead of inheriting the lives counter.
+function currentGeneration(state) {
+  if (state.current && Number.isInteger(state.current.generation)) return state.current.generation;
+  return state.generation;
 }
 
 // A planet's name: stored on the record when it was born (step 4),
@@ -350,7 +370,7 @@ function freshState() {
 // terrain the user picked (undefined = fully random). Grants the one
 // free starter mineral (crystal — tilts toward glow effects).
 function startFirstPlanet(state, seed, starterTerrain) {
-  state.current = makePlanet(seed, starterTerrain, undefined, takenNamesFor(state));
+  state.current = makePlanet(seed, starterTerrain, undefined, takenNamesFor(state), state.generation);
   state.starterDone = true;
   grantStarterMineral(state);
   return state.current;
@@ -520,7 +540,7 @@ function recycleCurrent(state, nextSeed) {
   const minerals = addMinerals(state, yieldMineralsForPlanet(destroyed));
   state.generation += 1;
   const tilt = takeTilt(state, null);
-  state.current = makePlanet(nextSeed ? nextSeed() : randomSeed(), null, tilt, takenNamesFor(state));
+  state.current = makePlanet(nextSeed ? nextSeed() : randomSeed(), null, tilt, takenNamesFor(state), state.generation);
   // The destroyed planet may have been on a ring — clear that slot.
   normalizeSystem(state);
   return { ok: true, minerals, destroyedSeed: destroyed.seed, planet: state.current };
@@ -562,7 +582,7 @@ function eligiblePrestigeParents(state) {
     list.push({
       kind: 'current', index: -1,
       label: `Current — ${state.current.summary}`,
-      seed: state.current.seed, generation: state.generation,
+      seed: state.current.seed, generation: currentGeneration(state),
       chars: state.current.chars, mutations: (state.current.mutations || []).slice(),
     });
   }
@@ -635,8 +655,8 @@ function prestige(state, parentA, parentB, nextSeed) {
   }
   const mutsA = (a.mutations || []).slice();
   const mutsB = (b.mutations || []).slice();
-  const genA = parentA.kind === 'current' ? state.generation : a.generation;
-  const genB = parentB.kind === 'current' ? state.generation : b.generation;
+  const genA = parentA.kind === 'current' ? currentGeneration(state) : a.generation;
+  const genB = parentB.kind === 'current' ? currentGeneration(state) : b.generation;
   const parents = [lineageRecord(a, genA), lineageRecord(b, genB)];
   const currentIsParent = parentA.kind === 'current' || parentB.kind === 'current';
   if (CONFIG.PRESTIGE_CONSUMES_PARENTS) {
@@ -658,7 +678,7 @@ function prestige(state, parentA, parentB, nextSeed) {
   if (state.current && !(CONFIG.PRESTIGE_CONSUMES_PARENTS && currentIsParent)) archiveCurrent(state);
   const tilt = takeTilt(state, inheritanceBoosts(mutsA, mutsB));
   state.generation += 1;
-  const offspring = makePlanet(nextSeed ? nextSeed() : randomSeed(), null, tilt, takenNamesFor(state));
+  const offspring = makePlanet(nextSeed ? nextSeed() : randomSeed(), null, tilt, takenNamesFor(state), state.generation);
   offspring.parents = parents;
   state.current = offspring;
   return { ok: true, planet: offspring, parents };
@@ -680,7 +700,11 @@ function archiveCurrent(state) {
     terrainLabel: c.terrainLabel,
     summary: c.summary,
     chars: c.chars,
-    generation: state.generation,
+    // The planet's OWN generation (round 7) — a planet born as Gen 2
+    // archives as Gen 2, even if an older planet is reactivated
+    // later and the lives counter has moved on. Old planets without
+    // the stamp fall back to the counter, which is right for them.
+    generation: Number.isInteger(c.generation) ? c.generation : state.generation,
     archivedAt: Date.now(),
     mutations: (c.mutations || []).slice(),
     parents: c.parents ? c.parents.map((p) => ({ ...p, mutations: (p.mutations || []).slice() })) : null,
@@ -748,7 +772,7 @@ function resolveSlotPlanet(state, slot) {
   if (!slot) return null;
   const rec = (state.past || []).find((p) => p.seed === slot.seed && p.generation === slot.generation);
   if (rec) return { kind: 'past', record: rec };
-  if (state.current && state.current.seed === slot.seed && state.generation === slot.generation) {
+  if (state.current && state.current.seed === slot.seed && currentGeneration(state) === slot.generation) {
     return { kind: 'current', record: state.current };
   }
   return null;
@@ -786,7 +810,7 @@ function placePlanet(state, slotIndex, seed, generation) {
     return { ok: false, reason: 'no such ring' };
   }
   const exists = (state.past || []).some((p) => p.seed === seed && p.generation === generation)
-    || (state.current && state.current.seed === seed && state.generation === generation);
+    || (state.current && state.current.seed === seed && currentGeneration(state) === generation);
   if (!exists) return { ok: false, reason: 'no such planet' };
   const already = slotIndexForPlanet(state, seed, generation);
   if (already >= 0) return { ok: false, reason: 'already in your system' };
@@ -843,8 +867,50 @@ function applyXp(state, n, nextSeed) {
 function newPlanet(state, nextSeed) {
   if (state.current) archiveCurrent(state);
   state.generation += 1;
-  state.current = makePlanet(nextSeed ? nextSeed() : randomSeed(), null, takeTilt(state, null), takenNamesFor(state));
+  state.current = makePlanet(nextSeed ? nextSeed() : randomSeed(), null, takeTilt(state, null), takenNamesFor(state), state.generation);
   return state.current;
+}
+
+// "Grow this planet again" (round 7 — Devon): make an ARCHIVED
+// planet the living one, from the Index. The planet comes back
+// exactly as it was archived — same XP, same stage, same mutations,
+// same generation (its birth order never changes) — and typing grows
+// it again. The planet that was growing is archived into the
+// collection in its place, so nothing is lost: switching back is
+// the same tap in reverse. The lives counter (state.generation)
+// does NOT move — this is not a new life, it is an old one resumed.
+// A ring the revived planet was on stays its ring: slots are keyed
+// by seed+generation and the revived planet keeps both.
+// index is the position in state.past. Refuses records without a
+// full planet snapshot (pre-step-4) — re-rolling one from its seed
+// could not reproduce a tilted birth roll faithfully.
+function makeCurrent(state, index) {
+  if (!Number.isInteger(index) || index < 0 || index >= (state.past || []).length) {
+    return { ok: false, reason: 'no such archived planet' };
+  }
+  const record = state.past[index];
+  if (!record.planet) {
+    return { ok: false, reason: 'planet has no saved snapshot' };
+  }
+  const seed = record.seed;
+  const gen = record.generation;
+  if (state.current) archiveCurrent(state);
+  // Remove by identity, not by position: archiveCurrent appends to
+  // the end of past (and, at the PAST_LIMIT cap, can shift the oldest
+  // record off the front) — the target's index may have moved.
+  const at = state.past.findIndex((p) => p.seed === seed && p.generation === gen);
+  if (at < 0) {
+    return { ok: false, reason: 'planet left the collection' };
+  }
+  const [revived] = state.past.splice(at, 1);
+  const planet = JSON.parse(JSON.stringify(revived.planet));
+  // Stamp the record's generation onto the revived planet: the
+  // snapshot predates the generation stamp for old planets, and the
+  // record's generation is the authoritative birth order.
+  planet.generation = revived.generation;
+  state.current = planet;
+  normalizeSystem(state);
+  return { ok: true, planet: state.current };
 }
 
 // ---------------------------------------------------------------------------
@@ -914,13 +980,14 @@ function parseSeedInput(text) {
 // pins the terrain — a tagged share ("948502300-icy") hatches the
 // pinned terrain instead of the seed's canonical roll; without it
 // the bare-seed behavior stands.
-function makeSeedPlanet(seed, takenNames, terrain) {
+function makeSeedPlanet(seed, takenNames, terrain, generation) {
   const p = Planet.stripMutations(Planet.generatePlanet(seed, terrain || undefined));
   if (takenNames) p.name = uniquePlanetName(p.name, seed, takenNames);
   p.xp = 0;
   p.chars = 0;
   p.usedAsParent = false;
   p.parents = null;
+  if (Number.isInteger(generation)) p.generation = generation;
   return p;
 }
 
@@ -943,7 +1010,7 @@ function hatchFromSeed(state, seed, terrain) {
   } else {
     state.generation += 1;
   }
-  state.current = makeSeedPlanet(seed, takenNamesFor(state), terrain);
+  state.current = makeSeedPlanet(seed, takenNamesFor(state), terrain, state.generation);
   return state.current;
 }
 
@@ -1044,8 +1111,8 @@ module.exports = {
   shouldCountDocument, countInsertedChars,
   stageForXp, stageInfo, displayStageForXp, isMaxed, xpBar,
   stageUpMessage, hatchMessage, mutationMessage, birthNotifications,
-  randomSeed, makePlanet, nameForPlanet, uniquePlanetName, takenNamesFor, freshState, startFirstPlanet,
-  archiveCurrent, applyXp, newPlanet, parseSeedInput, makeSeedPlanet, hatchFromSeed, shareSeedFor,
+  randomSeed, makePlanet, currentGeneration, nameForPlanet, uniquePlanetName, takenNamesFor, freshState, startFirstPlanet,
+  archiveCurrent, applyXp, newPlanet, makeCurrent, parseSeedInput, makeSeedPlanet, hatchFromSeed, shareSeedFor,
   finishedCount, systemRank, lockedRingLabel, resolveSlotPlanet,
   slotIndexForPlanet, normalizeSystem, placePlanet, removeFromSystem,
   mineralName, mineralTiltsText, makeMineral, grantStarterMineral,

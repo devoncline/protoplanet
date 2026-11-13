@@ -152,10 +152,12 @@ class ProtoplanetApp {
 
   // The identity of the living planet — seed:generation. A new life
   // always bumps the generation, so the key changes on every birth
-  // even if a seed ever repeated.
+  // even if a seed ever repeated. The generation is the planet's own
+  // stamped field when it has one (round 7) — a reactivated planet
+  // keeps its generation, so its key stays its own.
   birthKey() {
     const cur = this.state.current;
-    return cur ? `${cur.seed}:${this.state.generation}` : null;
+    return cur ? `${cur.seed}:${Number.isInteger(cur.generation) ? cur.generation : this.state.generation}` : null;
   }
 
   // Birth toasts: "GJ-364c was born!" plus "…was born with a mutation:
@@ -448,7 +450,12 @@ class ProtoplanetApp {
       terrainLabel: record.terrainLabel,
       summary: record.summary,
       chars: record.chars || 0,
-      generation: kind === 'current' ? this.state.generation : record.generation,
+      // The current planet's generation is its own stamped field
+      // (round 7) — a reactivated Gen 1 planet still reads Gen 1,
+      // not the lives counter. Old saves fall back to the counter.
+      generation: kind === 'current'
+        ? (Number.isInteger(record.generation) ? record.generation : this.state.generation)
+        : record.generation,
       archivedAt: record.archivedAt || null,
       mutations: (record.mutations || []).slice(),
       mutationLabel: Planet.mutationLabel({ mutations: record.mutations || [] }),
@@ -510,9 +517,10 @@ class ProtoplanetApp {
     if (this.systemPanel) this.systemPanel.webview.postMessage(this.solarSystemViewModel());
   }
 
-  // Messages from the panel: place a planet on a ring, or take one
-  // off. The panel never mutates state itself — it asks, the logic
-  // decides, and the fresh state is pushed back.
+  // Messages from the panel: place a planet on a ring, take one off,
+  // or grow an archived planet again. The panel never mutates state
+  // itself — it asks, the logic decides, and the fresh state is
+  // pushed back.
   onSystemMessage(msg) {
     if (!msg || typeof msg !== 'object') return;
     if (msg.type === 'place' && Number.isInteger(msg.ring)) {
@@ -521,6 +529,22 @@ class ProtoplanetApp {
     } else if (msg.type === 'remove' && Number.isInteger(msg.ring)) {
       const res = Logic.removeFromSystem(this.state, msg.ring);
       if (res.ok) { this.saveNow(); this.pushState(); }
+    } else if (msg.type === 'makeCurrent' && Number.isInteger(msg.seed) && Number.isInteger(msg.generation)) {
+      // Grow an archived planet again (round 7 — Devon): the Index
+      // detail sheet asks by seed+generation, the same identity the
+      // slots use. A switch is NOT a birth — the planet keeps its
+      // generation and its XP — so the birth detector must be told
+      // the new key is already seen, or pushState would toast
+      // "X was born!" for a planet that has been alive for weeks.
+      const idx = this.state.past.findIndex((p) => p.seed === msg.seed && p.generation === msg.generation);
+      if (idx < 0) return;
+      const res = Logic.makeCurrent(this.state, idx);
+      if (res.ok) {
+        this.lastBirthKey = this.birthKey();
+        this.notify(`${Logic.nameForPlanet(res.planet)} is growing again!`);
+        this.saveNow();
+        this.pushState();
+      }
     }
   }
 
@@ -770,7 +794,9 @@ class ProtoplanetApp {
       nextXp: info.nextXp, // null at Civilization: no next stage
       isMax: info.isMax, // fully evolved (Civilization+) — orange XP bar
       chars: cur.chars,
-      generation: this.state.generation,
+      // The planet's own generation (round 7) — a reactivated planet
+      // keeps its birth order. Old saves fall back to the counter.
+      generation: Number.isInteger(cur.generation) ? cur.generation : this.state.generation,
       summary: cur.summary,
       // Step 2: the mineral inventory for the webview's meta line.
       minerals: Logic.mineralSummary(this.state),
@@ -2060,6 +2086,14 @@ class ProtoplanetApp {
       + (planet.usedAsParent ? '<tr><td class="k">Prestige</td><td>Already a parent</td></tr>' : '')
       + '</table>'
       + '<div class="actions">';
+    // Grow this planet again (round 7 — Devon): an archived planet
+    // in the Index can become the living one — typing grows it
+    // again, and the planet that was growing is kept in the
+    // collection. The living planet already shows "growing now" in
+    // its Stage row, so it gets no button.
+    if (planet.kind !== 'current') {
+      html += '<button data-action="makeCurrent">Grow this planet</button>';
+    }
     if (ring >= 0) {
       html += '<button data-action="remove" data-ring="' + ring + '">Remove from system</button>'
         + '<button class="ghost" data-action="replace" data-ring="' + ring + '">Replace&hellip;</button>';
@@ -2382,7 +2416,10 @@ class ProtoplanetApp {
     if (!t || !selected) return;
     var action = t.getAttribute('data-action');
     if (action === 'close') { closeDetail(); return; }
-    if (action === 'remove') {
+    if (action === 'makeCurrent') {
+      vscodeApi.postMessage({ type: 'makeCurrent', seed: selected.seed, generation: selected.generation });
+      closeDetail();
+    } else if (action === 'remove') {
       vscodeApi.postMessage({ type: 'remove', ring: +t.getAttribute('data-ring') });
       closeDetail();
     } else if (action === 'place') {

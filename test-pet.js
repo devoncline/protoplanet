@@ -1869,6 +1869,121 @@ check('ext: share PNG caption uses the shared seed', extSrc.includes("(state.sha
     && prestigeHtml.includes('P.render(off.planet, off.stageIdx, 10, sec, 1.2)'));
 })();
 
+// --- 17. Grow an archived planet again (round 7, Nov 12 — Devon) ---------
+// "I just started a new planet and now i cant go back to growing the
+// old one. i should be able to do that from the index."
+// makeCurrent revives an archived planet exactly as it was — XP,
+// stage, mutations, generation — and archives the planet that was
+// growing in its place. Nothing is lost; switching back is the same
+// tap in reverse. The lives counter never moves on a switch: this
+// is an old life resumed, not a new one.
+
+function grownState() {
+  // Gen 1 planet grown to 350 XP, then a Gen 2 planet started.
+  const st = freshWithPlanet(42);
+  L.applyXp(st, 350, seedSeq());
+  const oldSeed = st.current.seed;
+  const oldName = st.current.name;
+  L.newPlanet(st, seedSeq(5000));
+  return { st, oldSeed, oldName };
+}
+
+{
+  const { st, oldSeed, oldName } = grownState();
+  eq('r7: past holds the old planet before the switch', st.past.length, 1);
+  eq('r7: lives counter is 2 before the switch', st.generation, 2);
+  const res = L.makeCurrent(st, 0);
+  check('r7: makeCurrent ok', res.ok === true, res.reason);
+  eq('r7: current is the old planet again', st.current.seed, oldSeed);
+  eq('r7: revived planet keeps its name', st.current.name, oldName);
+  eq('r7: revived planet keeps its XP', st.current.xp, 350);
+  eq('r7: revived planet keeps its chars', st.current.chars, 350);
+  eq('r7: revived planet keeps its generation', st.current.generation, 1);
+  eq('r7: lives counter does not move on a switch', st.generation, 2);
+  eq('r7: the planet that was growing is archived instead', st.past.length, 1);
+  eq('r7: archived replacement is the Gen 2 planet', st.past[0].generation, 2);
+  eq('r7: finished count unchanged by a switch', L.finishedCount(st), 1);
+  // Typing now grows the revived planet.
+  L.applyXp(st, 10, seedSeq());
+  eq('r7: typing grows the revived planet', st.current.chars, 360);
+  eq('r7: typing grows the revived planet (xp)', st.current.xp, 360);
+  // Switching back is the same tap in reverse.
+  const back = L.makeCurrent(st, 0);
+  check('r7: switch back ok', back.ok === true, back.reason);
+  eq('r7: current is the Gen 2 planet again', st.current.generation, 2);
+  eq('r7: Gen 1 planet archived with its generation intact', st.past[0].generation, 1);
+  eq('r7: Gen 1 planet archived with its XP intact', st.past[0].chars, 360);
+}
+
+{
+  // Mutations and terrain survive the round trip.
+  const st = freshWithPlanet(42);
+  st.current.mutations = ['blood-moon'];
+  const oldTerrain = st.current.terrain;
+  L.applyXp(st, 100, seedSeq());
+  L.newPlanet(st, seedSeq(6000));
+  L.makeCurrent(st, 0);
+  check('r7: revived planet keeps its mutation', (st.current.mutations || []).includes('blood-moon'));
+  eq('r7: revived planet keeps its terrain', st.current.terrain, oldTerrain);
+}
+
+{
+  // A ring the archived planet was on stays its ring after the switch.
+  const { st } = grownState();
+  const placed = L.placePlanet(st, 0, st.past[0].seed, st.past[0].generation);
+  check('r7: archived planet can sit on a ring', placed.ok === true, placed.reason);
+  L.makeCurrent(st, 0);
+  eq('r7: revived planet still on its ring', L.slotIndexForPlanet(st, st.current.seed, st.current.generation), 0);
+  const resolved = L.resolveSlotPlanet(st, st.system[0]);
+  check('r7: ring resolves the revived planet as current', resolved !== null && resolved.kind === 'current');
+}
+
+{
+  // Generation is stamped at every birth, and archive stores the
+  // planet's own generation — so a planet's birth order is never
+  // rewritten by a later switch.
+  const st = freshWithPlanet(42);
+  eq('r7: first planet stamped Gen 1', st.current.generation, 1);
+  L.newPlanet(st, seedSeq(7000));
+  eq('r7: second planet stamped Gen 2', st.current.generation, 2);
+  eq('r7: currentGeneration reads the stamp', L.currentGeneration(st), 2);
+  L.newPlanet(st, seedSeq(8000));
+  eq('r7: third planet stamped Gen 3', st.current.generation, 3);
+  eq('r7: first archived record kept Gen 1', st.past[0].generation, 1);
+  eq('r7: second archived record kept Gen 2', st.past[1].generation, 2);
+  // An old planet without the stamp falls back to the counter.
+  delete st.current.generation;
+  eq('r7: unstamped planet falls back to the counter', L.currentGeneration(st), 3);
+}
+
+{
+  // Guards: bad index, snapshot-less record, and no current planet.
+  const { st } = grownState();
+  check('r7: bad index refused', L.makeCurrent(st, 5).ok === false);
+  check('r7: negative index refused', L.makeCurrent(st, -1).ok === false);
+  const st2 = freshWithPlanet(42);
+  L.newPlanet(st2, seedSeq(9000));
+  delete st2.past[0].planet;
+  check('r7: snapshot-less record refused', L.makeCurrent(st2, 0).ok === false);
+  eq('r7: refused switch leaves the current planet alone', st2.current.generation, 2);
+  const st3 = freshWithPlanet(42);
+  L.newPlanet(st3, seedSeq(9500));
+  st3.current = null;
+  const res3 = L.makeCurrent(st3, 0);
+  check('r7: switch with no current planet works', res3.ok === true, res3.reason);
+  eq('r7: revived planet is current with no prior planet', st3.current.seed, st3.past.length === 0 ? res3.planet.seed : -1);
+  eq('r7: past empty after reviving the only archived planet', st3.past.length, 0);
+}
+
+// Host wiring: the detail sheet offers the switch, the panel message
+// reaches the logic, and the birth detector reads the planet's own
+// generation (so a switch never toasts "was born!").
+check('ext: detail sheet has a Grow this planet button', extSrc.includes('Grow this planet'));
+check('ext: detail sheet button posts makeCurrent', extSrc.includes("data-action=\"makeCurrent\""));
+check('ext: system message handler handles makeCurrent', extSrc.includes("msg.type === 'makeCurrent'"));
+check('ext: switch suppresses the birth toast', extSrc.includes('this.lastBirthKey = this.birthKey();'));
+check('ext: birthKey reads the planet generation', extSrc.includes('cur.generation'));
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) {
   console.log('Failures:\n- ' + failures.join('\n- '));
