@@ -232,11 +232,11 @@ const CONFIG = {
   // its variant (crack path/angle, egg angle, twin colors all vary
   // per seed). One tunable table, so Devon can retune after playing.
   BIRTH_VARIANTS: [
-    { id: 'classic', weight: 40 },
-    { id: 'egg',     weight: 15 },
-    { id: 'cracked', weight: 15 },
-    { id: 'twin',    weight: 15 },
-    { id: 'morph',   weight: 15 },
+    { id: 'classic', weight: 70 },
+    { id: 'egg',     weight: 10 },
+    { id: 'cracked', weight: 7 },
+    { id: 'twin',    weight: 10 },
+    { id: 'morph',   weight: 5 },
   ],
   // Crack glow colors (Nov 14): ONE per seed — purple for even seeds,
   // neon green for odd. Never both on one planet.
@@ -313,8 +313,8 @@ const STAGES = [
   { name: 'Accretion',     mode: 'rock', radius: 19.5, ring: 0.0,  dur: 7,  pat: [1.2, 0.30], bands: [137, 130, 94],  desc: 'Rocks collide and stick — a lumpy little world.' },
   { name: 'Molten',        mode: 'molten', radius: 24.0, ring: 0.0, dur: 8,  pat: [1.8, 0.45], bands: [196, 202, 214], desc: 'Bombardment melts everything. A lava ocean.' },
   { name: 'Crust',         mode: 'crust', radius: 24.0, ring: 0.0,  dur: 7,  pat: [1.0, 0.25], bands: [240, 238, 130], desc: 'The surface cools and hardens, cracks still glowing.' },
-  { name: 'Oceans',        mode: 'ocean', radius: 27.0, ring: 0.35, dur: 9,  pat: [0.6, 0.15], bands: [27, 33, 39],    banded: true, desc: 'Water pools, clouds drift, waves roll.' },
-  { name: 'Life',          mode: 'life', radius: 28.5, ring: 0.6,  dur: 9,  pat: [1.2, 0.35], bands: [28, 34, 40],    banded: true, desc: 'Green spreads across the continents.' },
+  { name: 'Tides',         mode: 'ocean', radius: 27.0, ring: 0.35, dur: 9,  pat: [0.6, 0.15], bands: [27, 33, 39],    banded: true, desc: 'Water pools, clouds drift, waves roll.' },
+  { name: 'Eden',          mode: 'life', radius: 28.5, ring: 0.6,  dur: 9,  pat: [1.2, 0.35], bands: [28, 34, 40],    banded: true, desc: 'Green spreads across the continents.' },
   { name: 'Civilization',  mode: 'civ', radius: 28.5, ring: 1.0,  dur: 10, pat: [1.0, 0.20], bands: [19, 27, 22],    banded: true, desc: 'City lights blink on the night side. Rings open wide.' },
 ];
 
@@ -1223,8 +1223,15 @@ function drawBirthVariant(grid, r, sec, planet, variant) {
   if (variant === 'egg') {
     // Egg/oval core: an engine rock core warped into an oval. Long-axis
     // angle is seeded (any direction), scales vary a little per seed.
+    // The angle ROTATES with time (Nov 14 — Devon: the frozen oval
+    // never changed, so it read as a still image, not a tumbling rock).
+    // 0.45 rad/s matches the surface texture drift (tx = sx - sec*0.30
+    // over a 4-unit texture period = one turn in ~13s), so the oval and
+    // the rock texture turn together — one solid body, not a texture
+    // sliding inside a fixed outline. An oval flips every 180°, so a
+    // full visual cycle takes ~7s.
     const erng = mulberry32(((seed || 0) ^ 0xE66) >>> 0);
-    const th = erng() * Math.PI; // 0-180° — an oval has no up/down
+    const th = erng() * Math.PI + sec * 0.45; // 0-180° base + rotation
     const aScale = 1.25 + erng() * 0.2, bScale = 0.70 + erng() * 0.1;
     const src = makeGrid();
     drawPlanet(src, ROCK, 0.45 * r, sec, planet, 1.0, 'exploded', noMuts);
@@ -1740,7 +1747,7 @@ function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts, smokeScal
         }
       }
       // Storm: a bright oval (reel: body += 0.55 * weather * storm
-      // * lit). It runs on banded stages (Oceans and later), where
+      // * lit). It runs on banded stages (Tides and later), where
       // the bands exist for it to ride on.
       if (st.banded) {
         // It sits at a FIXED texture longitude for this planet

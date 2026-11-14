@@ -84,7 +84,7 @@ then **Install from VSIX**. Nothing is published to the Marketplace.
   ocean), which biases the first planet's seed. All numbers live in one
   `CONFIG` object at the top of `petLogic.js`.
 - **`extension.js`** — VS Code wiring only: sidebar webview, status bar
-  (globe icon + `Oceans · 640/1000 XP`, click to show the pet), `globalState`
+  (globe icon + `Tides · 640/1000 XP`, click to show the pet), `globalState`
   persistence (one key, debounced 3s while typing, immediate on stage
   change / new planet). **Ambient:** no popups while typing —
   evolutions show in the pet window and status bar only (one

@@ -107,7 +107,7 @@ function discExtent(planet, stageIdx, t, sec) {
   const h = (maxY - minY + 1) * P.CONFIG.CELL_H;
   return { n, cols: maxX - minX + 1, rows: maxY - minY + 1, ratio: w / h };
 }
-for (const [stageIdx, label] of [[6, 'Civilization'], [4, 'Oceans']]) {
+for (const [stageIdx, label] of [[6, 'Civilization'], [4, 'Tides']]) {
   const d = discExtent(roundPlanet, stageIdx, 5.0, 3.0);
   check(`${label} disc displays round (ratio 0.95-1.20)`, d.ratio >= 0.95 && d.ratio <= 1.20,
     `ratio ${d.ratio.toFixed(3)} (${d.cols}x${d.rows} cells)`);
@@ -832,6 +832,15 @@ const s0r = 18.0 * (s0Planet.size || 1.0);
   // Deterministic: same seed, same variant — and all five ids show up.
   check('birthVariant: deterministic per seed',
     P.birthVariant(123) === P.birthVariant(123) && P.birthVariant(0) === P.birthVariant(0), '');
+  // Weights are Devon's pick (Nov 14): classic 70 / egg 10 / cracked 7 /
+  // twin 10 / morph 5 — most planets stay classic, the new ones are rare.
+  check('birthVariant: weights are classic 70 / egg 10 / cracked 7 / twin 10 / morph 5',
+    JSON.stringify(P.CONFIG.BIRTH_VARIANTS.map(v => v.weight)) === JSON.stringify([70, 10, 7, 10, 5]),
+    P.CONFIG.BIRTH_VARIANTS.map(v => `${v.id}:${v.weight}`).join(' '));
+  // Stage renames (Devon, Nov 14): Oceans -> Tides, Life -> Eden.
+  check('stages: renamed to Tides (4) and Eden (5)',
+    P.STAGES[4].name === 'Tides' && P.STAGES[5].name === 'Eden',
+    `${P.STAGES[4].name} / ${P.STAGES[5].name}`);
   const seenVariants = new Set();
   for (let s = 0; s < 200; s++) seenVariants.add(P.birthVariant(s));
   check('birthVariant: all five variants appear across seeds',
@@ -926,6 +935,35 @@ const s0r = 18.0 * (s0Planet.size || 1.0);
   check('birthVariant: egg long axis points a different way per seed',
     !!eggA && !!eggB && eggDiff > 25,
     eggA && eggB ? `${eggDiff.toFixed(1)}° apart (seeds ${eggA.seed}, ${eggB.seed})` : 'no pair found');
+  // Egg: the oval ROTATES with time (Devon, Nov 14 — the frozen oval
+  // never changed, so it read as a still image, not a tumbling rock).
+  // Same planet, two times 7s apart: the long axis must move. (The
+  // screen-space rate is slower than the warp's 0.45 rad/s because the
+  // warp rotates in aspect-corrected space, so 7s gives ~44°, not 180°.)
+  function ovalAngleAt(planet, sec) {
+    const g = birthCells(planet, sec);
+    const pts = [];
+    let mx = 0, my = 0;
+    for (let y = 0; y < P.CONFIG.H; y++) for (let x = 0; x < P.CONFIG.W; x++) {
+      if (g[y][x][1] === null) continue;
+      const X = x - P.CONFIG.CX, Y = 2 * (y - P.CONFIG.CY);
+      pts.push([X, Y]); mx += X; my += Y;
+    }
+    mx /= pts.length; my /= pts.length;
+    let sxx = 0, syy = 0, sxy = 0;
+    for (const [X, Y] of pts) { const dx = X - mx, dy = Y - my; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; }
+    return 0.5 * Math.atan2(2 * sxy, sxx - syy);
+  }
+  const eggPlanet = findSeed((p, v) => v === 'egg', 500);
+  let eggRot = 0;
+  if (eggPlanet) {
+    let d = Math.abs(ovalAngleAt(eggPlanet, 0) - ovalAngleAt(eggPlanet, 7)) % Math.PI;
+    if (d > Math.PI / 2) d = Math.PI - d;
+    eggRot = d * 180 / Math.PI;
+  }
+  check('birthVariant: egg oval rotates with time (same planet, 7s apart)',
+    !!eggPlanet && eggRot > 30,
+    eggPlanet ? `${eggRot.toFixed(1)}° apart (seed ${eggPlanet.seed})` : 'no egg seed found');
   // Twin: two clumps, two different colors — and the colors change
   // across seeds (the second terrain is seeded; the sides alternate
   // by parity).
@@ -2232,9 +2270,11 @@ check('name: generatePlanet carries the seed name',
     }
     return n;
   }
-  const gj = P.generatePlanet(948502300);
-  // Devon's planet is icy by starter pick; the smoke fringe is a
-  // stage-0 feature on any terrain, so the base seed is enough here.
+  const gj = P.generatePlanet(161675658); // a DENSE classic burst — this
+  // test guards the smoke-fringe regression on a dense classic, so it
+  // uses a classic planet. (GJ-364c is now a cracked shell under the
+  // Nov 14 weights — a sparse core, a separate downsampler edge case
+  // with 2 dark-space cells at extreme downsample, not this regression.)
   let worst = 0, worstLabel = '';
   for (const [ow, oh, label] of [[69, 47, 'disc@3x'], [46, 24, 'disc@2x'], [23, 16, 'fit'], [34, 19, 'thumb']]) {
     let max = 0;

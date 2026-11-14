@@ -14,7 +14,7 @@ for (const { seed } of seeds) {
   // hero seed 1838 rolls big-moon under the birth model; without this
   // its lifecycle stills would show a big moon the titles never name.
   planet.mutations = [];
-  // Civilization stage (rings open, most impressive) + Oceans for contrast.
+  // Civilization stage (rings open, most impressive) + Tides for contrast.
   for (const [stage, t, sec, tag] of [[6, 5.0, 3.0, 'civ'], [4, 5.0, 3.0, 'oceans']]) {
     out.push({
       seed, tag, stage: P.STAGES[stage].name,
