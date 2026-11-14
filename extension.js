@@ -85,6 +85,12 @@ class ProtoplanetApp {
       vscode.commands.registerCommand('protoplanet.prestige', () => this.prestige())
     );
     context.subscriptions.push(
+      vscode.commands.registerCommand('protoplanet.viewMinerals', () => this.viewMinerals())
+    );
+    context.subscriptions.push(
+      vscode.commands.registerCommand('protoplanet.openShop', () => this.openShop())
+    );
+    context.subscriptions.push(
       vscode.workspace.onDidChangeTextDocument((e) => this.onDidChangeTextDocument(e))
     );
     this.pushState();
@@ -163,6 +169,22 @@ class ProtoplanetApp {
     this.notify(`Archive is full (${(this.state.past || []).length}/${Logic.CONFIG.PAST_LIMIT}) — salvage an archived planet from the Index to make room.`);
   }
 
+  // Round 14 — a birth refused for lack of a plain mineral. One
+  // shared message for every birth path that hits it (new planet,
+  // seed hatch, maxed prompt, post-destroy prompt, prestige).
+  notifyNeedPlainMineral() {
+    this.notify(Logic.needPlainMineralMessage());
+  }
+
+  // Round 14 — a salvage that lost mutation minerals (grow-it-first):
+  // one plain message naming what was lost and why. Silent when
+  // nothing was lost.
+  notifySalvageLoss(planet, res) {
+    if (!res || !res.ok) return;
+    const msg = Logic.salvageLostMessage(planet, res.lostMutations);
+    if (msg) this.notify(msg);
+  }
+
   // The identity of the living planet — seed:generation. A new life
   // always bumps the generation, so the key changes on every birth
   // even if a seed ever repeated. The generation is the planet's own
@@ -212,6 +234,7 @@ class ProtoplanetApp {
     const res = Logic.newPlanet(this.state, Logic.randomSeed);
     if (!res.ok) {
       if (res.reason === 'archive full') this.notifyArchiveFull();
+      else if (res.reason === 'no plain mineral') this.notifyNeedPlainMineral();
       return;
     }
     this.saveNow();
@@ -251,6 +274,7 @@ class ProtoplanetApp {
     const hatchRes = Logic.hatchFromSeed(this.state, parsed.seed, parsed.terrain);
     if (!hatchRes.ok) {
       if (hatchRes.reason === 'archive full') this.notifyArchiveFull();
+      else if (hatchRes.reason === 'no plain mineral') this.notifyNeedPlainMineral();
       return;
     }
     this.saveNow();
@@ -273,6 +297,7 @@ class ProtoplanetApp {
     const maxedRes = Logic.newPlanet(this.state, Logic.randomSeed);
     if (!maxedRes.ok) {
       if (maxedRes.reason === 'archive full') this.notifyArchiveFull();
+      else if (maxedRes.reason === 'no plain mineral') this.notifyNeedPlainMineral();
       return;
     }
     this.saveNow();
@@ -341,6 +366,97 @@ class ProtoplanetApp {
     this.pushState();
   }
 
+  // Round 14 — the mineral inventory: a QuickPick listing every
+  // mineral grouped by family/mutation with counts, plus the
+  // Stardust balance in the placeholder. View-only: picking one
+  // just says what it does (spend it from the Apply command).
+  async viewMinerals() {
+    const inv = Logic.mineralInventory(this.state);
+    if (inv.groups.length === 0) {
+      this.notify('No minerals yet — salvage a planet to get one, or buy one in the Protoplanet shop.');
+      return;
+    }
+    const items = inv.groups.map((g) => ({
+      label: `${g.label}${g.count > 1 ? ` ×${g.count}` : ''}`,
+      description: g.applyText,
+      group: g,
+    }));
+    const pick = await vscode.window.showQuickPick(items, {
+      placeHolder: `Protoplanet: minerals — ✦ ${Math.floor(inv.stardust).toLocaleString()} Stardust`,
+      ignoreFocusOut: true,
+    });
+    if (!pick) return;
+    this.notify(`${pick.label} — ${pick.group.applyText}. Spend one from 'Protoplanet: Apply a mineral to your planet'.`);
+  }
+
+  // Round 14 — the shop: spend Stardust on a plain mineral or one
+  // of three mutation gambles. Every purchase adds a MINERAL, never
+  // a direct mutation — the player still applies it with the 50%
+  // coin flip. Insufficient funds = a plain message, no purchase.
+  // The Family Pick asks for the family in a second pick.
+  async openShop() {
+    const bal = () => Math.floor(this.state.stardust || 0).toLocaleString();
+    const price = (n) => n.toLocaleString(); // 1,000 reads better than 1000
+    const items = [
+      {
+        label: `Plain mineral — ${price(Logic.CONFIG.SHOP_PLAIN_PRICE)} ✦`,
+        description: 'Birthing a planet costs 1 plain mineral',
+        kind: 'plain',
+      },
+      {
+        label: `Mystery Mineral — ${price(Logic.CONFIG.SHOP_MYSTERY_PRICE)} ✦`,
+        description: '5% chance of a random mutation mineral, 95% a plain one',
+        kind: 'mystery',
+      },
+      {
+        label: `Mutation Wheel — ${price(Logic.CONFIG.SHOP_WHEEL_PRICE)} ✦`,
+        description: 'Guaranteed a random mutation mineral — which one is random',
+        kind: 'wheel',
+      },
+      {
+        label: `Family Pick — ${price(Logic.CONFIG.SHOP_FAMILY_PICK_PRICE)} ✦`,
+        description: 'Pick a family, get a random mutation mineral from it',
+        kind: 'family',
+      },
+    ];
+    const pick = await vscode.window.showQuickPick(items, {
+      placeHolder: `Protoplanet: shop — ✦ ${bal()} Stardust`,
+      ignoreFocusOut: true,
+    });
+    if (!pick) return;
+    if (pick.kind === 'family') {
+      const famItems = Logic.CONFIG.MINERAL_FAMILIES.map((f) => ({
+        label: f.charAt(0).toUpperCase() + f.slice(1),
+        description: `A random ${f} mutation mineral`,
+        id: f,
+      }));
+      const famPick = await vscode.window.showQuickPick(famItems, {
+        placeHolder: 'Protoplanet: pick a family for your mutation mineral',
+        ignoreFocusOut: true,
+      });
+      if (!famPick) return;
+      const res = Logic.buyFamilyPick(this.state, famPick.id);
+      if (!res.ok) { this.notify(`Not enough Stardust — a Family Pick costs ${price(Logic.CONFIG.SHOP_FAMILY_PICK_PRICE)} ✦.`); return; }
+      this.notify(`Family Pick: you got a ${Logic.mineralName(res.mineral)}! Spend it from 'Protoplanet: Apply a mineral to your planet'.`);
+    } else if (pick.kind === 'plain') {
+      const res = Logic.buyPlainMineral(this.state);
+      if (!res.ok) { this.notify(`Not enough Stardust — a plain mineral costs ${price(Logic.CONFIG.SHOP_PLAIN_PRICE)} ✦.`); return; }
+      this.notify(`You bought a ${Logic.mineralName(res.mineral)}!`);
+    } else if (pick.kind === 'mystery') {
+      const res = Logic.buyMysteryMineral(this.state);
+      if (!res.ok) { this.notify(`Not enough Stardust — a Mystery Mineral costs ${price(Logic.CONFIG.SHOP_MYSTERY_PRICE)} ✦.`); return; }
+      this.notify(res.isMutation
+        ? `Mystery Mineral: a ${Logic.mineralName(res.mineral)}! Spend it from 'Protoplanet: Apply a mineral to your planet'.`
+        : `Mystery Mineral: just a ${Logic.mineralName(res.mineral)} this time.`);
+    } else if (pick.kind === 'wheel') {
+      const res = Logic.buyMutationWheel(this.state);
+      if (!res.ok) { this.notify(`Not enough Stardust — the Mutation Wheel costs ${price(Logic.CONFIG.SHOP_WHEEL_PRICE)} ✦.`); return; }
+      this.notify(`Mutation Wheel: you got a ${Logic.mineralName(res.mineral)}! Spend it from 'Protoplanet: Apply a mineral to your planet'.`);
+    }
+    this.saveNow();
+    this.pushState();
+  }
+
   async salvagePlanet() {
     const items = [];
     if (this.state.current) {
@@ -384,7 +500,9 @@ class ProtoplanetApp {
         'Yes, recycle it'
       );
       if (answer !== 'Yes, recycle it') return;
-      Logic.recycleCurrent(this.state, Logic.randomSeed);
+      const doomedRecycle = this.state.current;
+      const recycleRes = Logic.recycleCurrent(this.state, Logic.randomSeed);
+      this.notifySalvageLoss(doomedRecycle, recycleRes);
     } else if (pick.kind === 'destroyCurrent') {
       const answer = await vscode.window.showWarningMessage(
         'Destroy your current planet? It will be destroyed for minerals and nothing grows until you pick what comes next.',
@@ -392,7 +510,9 @@ class ProtoplanetApp {
         'Yes, destroy it'
       );
       if (answer !== 'Yes, destroy it') return;
-      Logic.destroyCurrent(this.state);
+      const doomedDestroy = this.state.current;
+      const destroyRes = Logic.destroyCurrent(this.state);
+      this.notifySalvageLoss(doomedDestroy, destroyRes);
       this.saveNow();
       this.pushState();
       await this.promptAfterDestroy();
@@ -404,7 +524,9 @@ class ProtoplanetApp {
         'Yes, salvage it'
       );
       if (answer !== 'Yes, salvage it') return;
-      Logic.salvageArchived(this.state, pick.index);
+      const doomedSalvage = this.state.past[pick.index];
+      const salvageRes = Logic.salvageArchived(this.state, pick.index);
+      this.notifySalvageLoss(doomedSalvage, salvageRes);
     }
     this.saveNow();
     this.pushState();
@@ -474,6 +596,7 @@ class ProtoplanetApp {
       const birthRes = Logic.newPlanet(this.state, Logic.randomSeed);
       if (!birthRes.ok) {
         if (birthRes.reason === 'archive full') this.notifyArchiveFull();
+        else if (birthRes.reason === 'no plain mineral') this.notifyNeedPlainMineral();
         return;
       }
       this.saveNow();
@@ -491,6 +614,7 @@ class ProtoplanetApp {
       const birthMineralRes = Logic.newPlanet(this.state, Logic.randomSeed, terrainPick ? terrainPick.id : undefined);
       if (!birthMineralRes.ok) {
         if (birthMineralRes.reason === 'archive full') this.notifyArchiveFull();
+        else if (birthMineralRes.reason === 'no plain mineral') this.notifyNeedPlainMineral();
         return;
       }
       this.saveNow();
@@ -540,7 +664,8 @@ class ProtoplanetApp {
       Logic.randomSeed);
     if (!res.ok) {
       if (res.reason === 'archive full') this.notifyArchiveFull();
-      return; // state changed between picks (shouldn't happen), or the archive is full
+      else if (res.reason === 'no plain mineral') this.notifyNeedPlainMineral();
+      return; // state changed between picks (shouldn't happen), or the archive is full, or no plain mineral
     }
     this.recordPrestigeResult(res);
     this.saveNow();
@@ -656,6 +781,10 @@ class ProtoplanetApp {
       kind,
       stageIdx: dStage,
       stageName: Planet.STAGES[dStage].name,
+      // Round 14: Stardust per character this planet earns, so the
+      // Index and detail sheet can compare planets at a glance.
+      earnRate: Logic.earnRate(record),
+      earnRateText: Logic.formatRate(Logic.earnRate(record)),
       planet: traits,
     };
   }
@@ -735,6 +864,10 @@ class ProtoplanetApp {
       slots,
       index,
       mutationIndex,
+      // Round 14: the Stardust balance and what the whole system earns.
+      stardust: this.state.stardust || 0,
+      systemEarnRate: Logic.systemEarnRate(this.state),
+      systemEarnRateText: Logic.formatRate(Logic.systemEarnRate(this.state)),
     };
   }
 
@@ -784,7 +917,9 @@ class ProtoplanetApp {
         'Yes, salvage it'
       );
       if (answer !== 'Yes, salvage it') return;
-      Logic.salvageArchived(this.state, idx);
+      const doomedPanel = this.state.past[idx];
+      const salvagePanelRes = Logic.salvageArchived(this.state, idx);
+      this.notifySalvageLoss(doomedPanel, salvagePanelRes);
       this.saveNow();
       this.pushState();
     }
@@ -897,6 +1032,8 @@ class ProtoplanetApp {
         this.pushState();
       } else if (res.reason === 'archive full') {
         this.notifyArchiveFull();
+      } else if (res.reason === 'no plain mineral') {
+        this.notifyNeedPlainMineral();
       }
     } else if (msg.type === 'dismissResult') {
       this.prestigeResult = null;
@@ -1052,6 +1189,10 @@ class ProtoplanetApp {
       summary: cur.summary,
       // Step 2: the mineral inventory for the webview's meta line.
       minerals: Logic.mineralSummary(this.state),
+      // Round 14: the Stardust balance and this planet's earn rate.
+      stardust: this.state.stardust || 0,
+      earnRate: Logic.earnRate(cur),
+      earnRateText: Logic.formatRate(Logic.earnRate(cur)),
     };
   }
 
@@ -1073,6 +1214,7 @@ class ProtoplanetApp {
       // the bar is orange.
       this.statusBar.text = `$(globe) ${vm.stageName} · ${vm.isMax ? vm.xp : vm.inStage + '/' + vm.span} XP${vm.isMax ? ' · MAX' : ''}`
         + (vm.mutationLabel ? ` · ${vm.mutationLabel}` : '')
+        + ` · ✦${Math.floor(vm.stardust).toLocaleString()}`
         + (vm.minerals && vm.minerals.total > 0 ? ` · ◆${vm.minerals.total}` : '');
     } else {
       this.statusBar.text = '$(globe) Protoplanet — hatching…';
@@ -1390,7 +1532,10 @@ class ProtoplanetApp {
     labelEl.textContent = msg.nextXp === null
       ? 'XP ' + msg.xp + ' \\u00b7 MAX \\u2014 fully evolved'
       : 'XP ' + msg.inStage + ' / ' + span;
-    document.getElementById('meta').textContent = 'Grown from ' + msg.chars + ' characters';
+    // Round 14 — the meta line is the compact home of the current
+    // planet's earn rate AND the Stardust balance: one short line,
+    // no new panel.
+    document.getElementById('meta').textContent = 'Grown from ' + msg.chars + ' characters · earns ' + msg.earnRateText + ' ✦/char · ✦' + Math.floor(msg.stardust).toLocaleString();
     layout(); // text heights changed — re-fit the grid to the view height
   });
 
@@ -1509,6 +1654,12 @@ class ProtoplanetApp {
     color: #888; font-size: 12px; padding: 9px 10px 8px; cursor: pointer; }
   .tab:hover { color: #d4d4d4; }
   .tab.active { color: #e8b64c; border-bottom-color: #e8b64c; }
+  /* Round 14 — the Stardust balance, top-right: a small pill with a
+     star + the number, like other games' currency display. Amber on
+     near-black so it reads against the orrery. */
+  #stardustChip { display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border: 1px solid #e8b64c; border-radius: 999px;
+    color: #e8b64c; font-size: 12px; white-space: nowrap; }
   /* The orrery takes up the whole screen below the top line — the
      panel never scrolls to a second section anymore. The Index is
      its own mode, reached from the tabs above. */
@@ -1671,6 +1822,7 @@ class ProtoplanetApp {
     <button id="tabIndex" class="tab" data-mode="index">Index</button>
     <button id="tabMutations" class="tab" data-mode="mutations">Mutations</button>
   </div>
+  <div id="stardustChip" title="Stardust — earned per character typed">✦ <span id="stardustBal">0</span></div>
   <button id="hideUiBtn" class="ghost" title="Hide the interface (H)">Hide UI</button>
 </header>
 <div id="orreryWrap">
@@ -2461,6 +2613,7 @@ class ProtoplanetApp {
       + '<table>'
       + '<tr><td class="k">Terrain</td><td>' + esc(planet.terrainLabel) + '</td></tr>'
       + '<tr><td class="k">Stage</td><td>' + esc(planet.stageName) + (planet.kind === 'current' ? ' &middot; growing now' : '') + '</td></tr>'
+      + '<tr><td class="k">Earns</td><td>' + planet.earnRateText + ' ✦ per character' + (planet.kind === 'current' || ring >= 0 ? ' · in your system' : ' · benched — place it in the system to earn') + '</td></tr>'
       + '<tr><td class="k">Grown from</td><td>' + planet.chars + ' characters</td></tr>'
       + '<tr><td class="k">Generation</td><td>Gen ' + planet.generation + '</td></tr>'
       + (planet.parents ? '<tr><td class="k">Parents</td><td>' + esc(planet.parents.map(function (p) { return p.name || ('Seed ' + p.seed); }).join(' + ')) + '</td></tr>' : '')
@@ -2610,8 +2763,9 @@ class ProtoplanetApp {
     var list = filteredIndex();
     if (pickerRing !== null) list = list.filter(function (p) { return slotOf(p.seed, p.generation) < 0; });
     document.getElementById('indexCount').textContent =
-      state.totalPlanets + ' planet' + (state.totalPlanets === 1 ? '' : 's') + ' — ' + state.ringsUsed + ' in system'
-      + ' · Archive ' + (state.archiveCount || 0) + '/' + (state.archiveLimit || 200);
+      state.totalPlanets + ' planet' + (state.totalPlanets === 1 ? '' : 's') + ' — ' + state.ringsUsed + ' on rings'
+      + ' · Archive ' + (state.archiveCount || 0) + '/' + (state.archiveLimit || 200)
+      + ' · ✦' + (state.systemEarnRateText || '0') + '/char';
     if (list.length === 0) {
       tilesEl.innerHTML = '<div class="empty">' + (state.totalPlanets === 0
         ? 'No planets yet — type to grow your first one, and it will show up here when you start a new planet.'
@@ -2629,7 +2783,7 @@ class ProtoplanetApp {
         + (mutCount > 0 ? '<div class="corner">✦' + (mutCount > 1 ? '×' + mutCount : '') + '</div>' : '')
         + '<div class="art"><div class="pp-grid"></div></div>'
         + '<div class="tname">' + esc(p.name) + '</div>'
-        + '<div class="tmeta">' + esc(p.terrainLabel) + ' &middot; ' + esc(p.stageName) + ' &middot; ' + p.chars + ' chars &middot; Gen ' + p.generation + '</div>'
+        + '<div class="tmeta">' + esc(p.terrainLabel) + ' &middot; ' + esc(p.stageName) + ' &middot; ' + p.chars + ' chars &middot; Gen ' + p.generation + ' &middot; ✦' + p.earnRateText + '/char</div>'
         + (jline ? '<div class="jline">' + esc(jline) + '</div>' : '')
         + (inSys ? '<span class="badge sys">In system</span>' : '')
         + (p.kind === 'current' ? '<span class="badge cur">Growing now</span>' : '')
@@ -2739,6 +2893,15 @@ class ProtoplanetApp {
     if (state.nextAt !== null) line += ' &middot; ' + state.toNext + ' to next ring';
     else line += ' &middot; max rings';
     document.getElementById('rankLine').innerHTML = line;
+  }
+
+  // Round 14 — the Stardust balance chip, top-right. Called on every
+  // state push (same place as updateRankLine), so the number ticks up
+  // live as Stardust is earned per character.
+  function updateStardustChip() {
+    if (!state) return;
+    var el = document.getElementById('stardustBal');
+    if (el) el.textContent = Math.floor(state.stardust || 0).toLocaleString();
   }
 
   // --- pan / zoom --------------------------------------------------------------
@@ -2982,6 +3145,7 @@ class ProtoplanetApp {
     if (!msg || msg.type !== 'system') return;
     state = msg;
     updateRankLine();
+    updateStardustChip();
     var sig = indexSignature();
     if (sig !== lastSig) {
       lastSig = sig;

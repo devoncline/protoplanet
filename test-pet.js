@@ -386,6 +386,9 @@ function prestigeReadyState() {
   L.applyXp(s, 2300, seedSeq(5000));
   L.newPlanet(s, seedSeq(6000));
   L.applyXp(s, 2300, seedSeq(7000));
+  // Round 14 — the fusion itself costs 1 plain mineral (the birth
+  // cost); the starter was spent on the new planet above.
+  L.addMinerals(s, [{ family: 'glow', mutation: null, source: 'salvage' }]);
   return s;
 }
 
@@ -501,8 +504,13 @@ eq('minerals: still one after second grant', st.minerals.length, 1);
 // 12d. Salvage yields: a mutated planet yields a mineral OF its
 // mutation PLUS one extra plain mineral (round 10 perk); a plain
 // planet yields one plain mineral (stable per seed).
+// Round 14 — grow it first: the mutation minerals only come back
+// when the planet was grown to Crust (600 XP), so the carriers
+// here are grown first; a young carrier is covered in section 18.
 {
-  const gm = L.yieldMineralsForPlanet(Planet.generatePlanet(carrierSeed('green-moon')));
+  const carrier = Planet.generatePlanet(carrierSeed('green-moon'));
+  carrier.xp = 600; carrier.chars = 600; // grown to Crust
+  const gm = L.yieldMineralsForPlanet(carrier);
   eq('salvage: mutated planet yields two minerals', gm.length, 2);
   eq('salvage: first carries the mutation', gm[0].mutation, 'green-moon');
   eq('salvage: family matches the mutation', gm[0].family, 'moon');
@@ -520,13 +528,18 @@ eq('minerals: still one after second grant', st.minerals.length, 1);
     const pl = Planet.generatePlanet(s);
     if (pl.mutations.length === 2) two = pl;
   }
+  two.xp = 600; two.chars = 600; // grown to Crust
   check('salvage: a two-mutation planet yields three minerals (2 + bonus)',
     two && L.yieldMineralsForPlanet(two).length === 3, two ? two.mutations.join('+') : 'no two-mutation seed found');
 }
 
 // 12e. Recycle: destroy the current planet for minerals, hatch a fresh
 // one immediately. The destroyed planet is NOT archived.
+// Round 14 — the carrier is grown to Crust first (grow it first),
+// and the new birth costs the bonus plain mineral, so the net keep
+// is the mutation mineral.
 st = freshWithPlanet(carrierSeed('green-moon'));
+L.applyXp(st, 600, seedSeq());
 const rc = L.recycleCurrent(st, seedSeq(3000));
 eq('recycle: ok', rc.ok, true);
 eq('recycle: yields the mutation mineral + bonus', rc.minerals.length, 2);
@@ -544,8 +557,10 @@ st = L.freshState();
 eq('recycle: no current planet is a no-op', L.recycleCurrent(st, seedSeq()).ok, false);
 
 // 12f. Salvage an archived planet: minerals out, record gone, no new planet.
+// Round 14 — grown to Crust first (grow it first), so the glitch
+// mineral comes back.
 st = freshWithPlanet(carrierSeed('glitch'));
-L.applyXp(st, 500, seedSeq());
+L.applyXp(st, 600, seedSeq());
 L.newPlanet(st, seedSeq(8000));
 eq('salvage: one archived planet', st.past.length, 1);
 const sv = L.salvageArchived(st, 0);
@@ -658,7 +673,13 @@ eq('summary: no fed field anymore', summary.fed, undefined);
 // auto-rebirth since Nov 12).
 function growFinished(st, n, seedStart) {
   const seq = seedSeq(seedStart === undefined ? 10000 : seedStart);
-  for (let i = 0; i < n; i++) { L.applyXp(st, 2500, seq); L.newPlanet(st, seq); }
+  for (let i = 0; i < n; i++) {
+    L.applyXp(st, 2500, seq);
+    // Round 14 — every birth costs 1 plain mineral; fund each one
+    // from the test's own pocket so the rank ladder still grows.
+    L.addMinerals(st, [{ family: 'moon', mutation: null, source: 'salvage' }]);
+    L.newPlanet(st, seq);
+  }
   return st;
 }
 
@@ -791,6 +812,8 @@ eq('overflow: the 5 rings are untouched by the new planet',
   st.system.filter(Boolean).length, 5);
 eq('overflow: the new planet is not forced into the system',
   L.slotIndexForPlanet(st, st.current.seed, st.generation), -1);
+// Round 14 — the second manual birth costs a plain mineral; fund it.
+L.addMinerals(st, [{ family: 'moon', mutation: null, source: 'salvage' }]);
 const np2 = L.newPlanet(st, seedSeq(23000));
 eq('overflow: manual new planet also archives with a full system',
   st.past.length, beforePast + 2);
@@ -1126,8 +1149,8 @@ check('ext: sun edge carries flames (tongues grow/die at different angles, not a
 // those live in the detail panel / Pokedex, which still shows them.
 check('sidebar: no flavor description after hatching',
   !extSrc.includes('textContent = msg.stageDesc'));
-check('sidebar: meta is only the grown-from line',
-  extSrc.includes("'Grown from ' + msg.chars + ' characters'")
+check('sidebar: meta is the grown-from line plus the earn rate and the Stardust balance (round 14)',
+  extSrc.includes("'Grown from ' + msg.chars + ' characters · earns ' + msg.earnRateText + ' ✦/char · ✦' + Math.floor(msg.stardust).toLocaleString()")
   && !extSrc.includes('msg.summary'));
 check('sidebar: XP bar has a visible track and a numbers label',
   extSrc.includes('#xplabel') && extSrc.includes("getElementById('xplabel')"));
@@ -1678,13 +1701,16 @@ check('seed input: tagged out-of-range rejected', L.parseSeedInput('1000000000-i
   check('seed hatch tagged: generation +1', st.generation === 2);
   check('seed hatch tagged: old planet archived', st.past.length === 1 && st.past[0].seed === 42);
 }
-// A seed hatch leaves the inventory alone — the hatch is the seed's
-// canonical planet, not a roll, so no mineral is spent or tilted.
+// A seed hatch is a birth (round 14): it costs exactly 1 plain
+// mineral — the hatch itself is the seed's canonical planet, not a
+// roll, so no mineral is spent on a tilt. The starter pays it here.
 {
   const st = freshWithPlanet(42);
   const before = st.minerals.length;
-  L.hatchFromSeed(st, 805839337);
-  check('seed hatch: inventory untouched', st.minerals.length === before);
+  const res = L.hatchFromSeed(st, 805839337);
+  check('seed hatch: ok', res.ok === true, res.reason);
+  check('seed hatch: costs exactly one plain mineral', st.minerals.length === before - 1, `before ${before}, after ${st.minerals.length}`);
+  check('seed hatch: the starter paid for it', st.minerals.length === 0);
   check('seed hatch: no fed slot exists', st.fedMineral === undefined);
 }
 // No current planet yet (first run): the seed hatch IS the first
@@ -2031,6 +2057,8 @@ function grownState() {
   L.newPlanet(st, seedSeq(7000));
   eq('r7: second planet stamped Gen 2', st.current.generation, 2);
   eq('r7: currentGeneration reads the stamp', L.currentGeneration(st), 2);
+  // Round 14 — the second birth costs a plain mineral; fund it.
+  L.addMinerals(st, [{ family: 'moon', mutation: null, source: 'salvage' }]);
   L.newPlanet(st, seedSeq(8000));
   eq('r7: third planet stamped Gen 3', st.current.generation, 3);
   eq('r7: first archived record kept Gen 1', st.past[0].generation, 1);
@@ -2076,7 +2104,7 @@ check('ext: birthKey reads the planet generation', extSrc.includes('cur.generati
 // after each recycle, and the newborn must be a genuinely new planet.
 {
   const st = freshWithPlanet(42);
-  L.applyXp(st, 350, seedSeq());
+  L.applyXp(st, 600, seedSeq());
   const oldSeed = st.current.seed;
   const oldName = st.current.name;
   const placed = L.placePlanet(st, 0, oldSeed, 1);
@@ -2117,7 +2145,9 @@ check('ext: sidebar always shows the planet settled',
 // default, but the prompt still offers the pick.
 {
   const st = freshWithPlanet(42);
-  L.applyXp(st, 350, seedSeq());
+  // Round 14 — grown to Crust first (grow it first), so the
+  // Glowing Oceans mineral comes back on the destroy.
+  L.applyXp(st, 600, seedSeq());
   const oldSeed = st.current.seed;
   const placed = L.placePlanet(st, 0, oldSeed, 1);
   check('r9: setup planet on ring 0', placed.ok === true, placed.reason);
@@ -2321,6 +2351,8 @@ check('ext: mutationChance view model carries the base chance for the panel',
   const firstSeed = st.current.seed;
   for (let i = 0; i < 200; i++) {
     L.applyXp(st, 2500, seedSeq(30000 + i * 100));
+    // Round 14 — every birth costs 1 plain mineral; fund each one.
+    L.addMinerals(st, [{ family: 'moon', mutation: null, source: 'salvage' }]);
     const r = L.newPlanet(st, seedSeq(40000 + i * 100));
     eq('archive: birth ' + i + ' ok', r.ok, true);
   }
@@ -2370,6 +2402,360 @@ check('ext: event toasts once on a stage-up event',
   extSrc.includes('Something happened on') && extSrc.includes('res.event'));
 check('ext: archived planet can be salvaged from its detail sheet',
   extSrc.includes('data-action="salvage"') && extSrc.includes("type: 'salvage'"));
+
+// --- 20. Stardust economy / anti-farming (round 14, Nov 14 — Devon) -----
+// Births cost a plain mineral, Stardust is earned per character
+// typed (never over time), a mutated planet only yields its mutation
+// minerals when grown to Crust, and the shop sells plain minerals
+// plus three mutation gambles. Families pay the big money (combos),
+// so farming every mutation onto one planet is not the best play.
+function approx(name, got, want) {
+  check(name, Math.abs(got - want) < 1e-9, 'got ' + got + ', want ' + want);
+}
+function ratePlanet(xp, mutations, eventTitles) {
+  const p = Planet.generatePlanet(42);
+  p.xp = xp; p.chars = xp;
+  p.mutations = (mutations || []).slice();
+  p.journal = (eventTitles || []).map((t) => ({ t: 0, kind: 'event', title: t, text: t }));
+  return p;
+}
+
+// 20a. earnRate: stage base x 1.5 per mutation x journal events x
+// family combos. No size factor.
+{
+  const bases = L.CONFIG.STAGE_EARN_BASE;
+  const thresholds = L.CONFIG.XP_THRESHOLDS;
+  eq('earn: stage bases table is 1/1.5/2/3/5/8/12', JSON.stringify(bases), '[1,1.5,2,3,5,8,12]');
+  for (let i = 0; i < 7; i++) {
+    approx(`earn: plain stage ${i} base`, L.earnRate(ratePlanet(thresholds[i], [], [])), bases[i]);
+  }
+  approx('earn: plain Accretion is 1.5/char', L.earnRate(ratePlanet(100, [], [])), 1.5);
+  approx('earn: plain Civilization is 12/char', L.earnRate(ratePlanet(2200, [], [])), 12);
+  approx('earn: one mutation multiplies by 1.5', L.earnRate(ratePlanet(100, ['green-moon'], [])), 2.25);
+  approx('earn: two mutations multiply by 1.5^2', L.earnRate(ratePlanet(100, ['green-moon', 'crossed-rings'], [])), 3.375);
+  // Journal events: Crystal Bloom +0.5, Aurora +0.3 — and only
+  // 'event' entries pay (born/stage/mutation entries never do).
+  approx('earn: Crystal Bloom adds +0.5', L.earnRate(ratePlanet(2200, [], ['Crystal Bloom'])), 18);
+  approx('earn: Crystal Bloom + Aurora add +0.8', L.earnRate(ratePlanet(2200, [], ['Crystal Bloom', 'Aurora'])), 21.6);
+  const withNonEvents = ratePlanet(2200, [], ['Crystal Bloom']);
+  withNonEvents.journal.push({ t: 0, kind: 'stage', text: 'Reached Civilization' });
+  withNonEvents.journal.push({ t: 0, kind: 'born', text: 'Born' });
+  approx('earn: non-event journal entries pay nothing', L.earnRate(withNonEvents), 18);
+  const unknownEvent = ratePlanet(2200, [], ['Mystery Lights']);
+  approx('earn: an unknown event title pays nothing', L.earnRate(unknownEvent), 12);
+  // Family combos: 2 same-family x1.5, 3 same-family x2, across
+  // families they multiply.
+  approx('earn: 2 moon mutations combo x1.5', L.earnRate(ratePlanet(2200, ['green-moon', 'blood-moon'], [])), 40.5);
+  approx('earn: 3 moon mutations (Moon Lord) combo x2', L.earnRate(ratePlanet(2200, ['green-moon', 'blood-moon', 'big-moon'], [])), 81);
+  approx('earn: Moon Lord + Ring King combos multiply (x2 x x2)',
+    L.earnRate(ratePlanet(2200, ['green-moon', 'blood-moon', 'big-moon', 'crossed-rings', 'colored-rings', 'double-rings'], [])), 546.75);
+  approx('earn: 2 moon + 2 rings combos multiply (x1.5 x x1.5)',
+    L.earnRate(ratePlanet(2200, ['green-moon', 'blood-moon', 'crossed-rings', 'colored-rings'], [])), 136.6875);
+  approx('earn: one mutation per family pays no combo',
+    L.earnRate(ratePlanet(2200, ['green-moon', 'crossed-rings'], [])), 27);
+  // Worked example from the design: Civ + 3 moon + Crystal Bloom +
+  // Aurora = 81 x 1.8 = 145.8.
+  approx('earn: Civ Moon Lord with Crystal Bloom + Aurora is 145.8/char',
+    L.earnRate(ratePlanet(2200, ['green-moon', 'blood-moon', 'big-moon'], ['Crystal Bloom', 'Aurora'])), 145.8);
+  // No size factor (Devon, Nov 14): the same planet earns the same
+  // at size 0.85 and 1.15.
+  const small = ratePlanet(2200, ['green-moon'], []); small.size = 0.85;
+  const big = ratePlanet(2200, ['green-moon'], []); big.size = 1.15;
+  eq('earn: size does not change the rate', L.earnRate(small), L.earnRate(big));
+}
+
+// 20b. The system: the current planet is always in; ring-placed
+// planets earn; archived-only planets do not. Stardust accrues per
+// typed character at the system rate.
+{
+  st = freshWithPlanet(42); // seed 42: Glowing Oceans, stage 0 -> 1 x 1.5 = 1.5
+  approx('system: fresh system is just the current planet', L.systemEarnRate(st), 1.5);
+  eq('system: one planet in the system', L.systemPlanets(st).length, 1);
+  const placed = L.placePlanet(st, 0, st.current.seed, st.generation);
+  check('system: current planet can sit on a ring', placed.ok === true, placed.reason);
+  approx('system: current planet on a ring still earns once (no double count)', L.systemEarnRate(st), 1.5);
+  eq('system: still one planet in the system', L.systemPlanets(st).length, 1);
+  // Grow the first planet to Civilization, archive it, place it on a
+  // ring: the system is now the new current planet + the archived one.
+  // The rng () => 1 never rolls a journal event — an event would add
+  // an earn bonus and the rate would not be exactly 18.
+  L.applyXp(st, 2500, undefined, () => 1);
+  L.addMinerals(st, [{ family: 'moon', mutation: null, source: 'salvage' }]);
+  L.newPlanet(st, seedSeq(30000));
+  st.current.mutations = []; // the newborn's roll is random; pin it plain
+  eq('system: the archived planet stays on its ring', L.slotIndexForPlanet(st, st.past[0].seed, st.past[0].generation), 0);
+  eq('system: two planets in the system now', L.systemPlanets(st).length, 2);
+  approx('system: rate is the sum (1 + 18)', L.systemEarnRate(st), 19);
+  // An archived planet NOT on a ring earns nothing: archive a third
+  // planet and leave it benched.
+  L.addMinerals(st, [{ family: 'moon', mutation: null, source: 'salvage' }]);
+  L.newPlanet(st, seedSeq(31000));
+  st.current.mutations = []; // pin the newest newborn plain too
+  eq('system: the benched planet is not in the system', L.systemPlanets(st).length, 2);
+  approx('system: the benched planet adds nothing', L.systemEarnRate(st), 19);
+  // Stardust accrues per typed character at the system rate.
+  st = freshWithPlanet(42);
+  eq('stardust: starts at 0', st.stardust, 0);
+  const res = L.applyXp(st, 10, undefined, () => 1);
+  eq('stardust: 10 chars at 1.5/char earns 15', st.stardust, 15);
+  eq('stardust: applyXp reports what it earned', res.stardustEarned, 15);
+  // The rate is read after the XP lands: 100 chars stage the
+  // planet up to Accretion (rate 2.25) and all 100 pay at it.
+  const res2 = L.applyXp(st, 100, undefined, () => 1);
+  eq('stardust: a stage-up char earns at the new rate', res2.stardustEarned, 225);
+  // Persistence + migration.
+  const loaded5 = L.deserializeState(L.serializeState(st));
+  eq('stardust: survives a round-trip', loaded5.stardust, st.stardust);
+  const migrated3 = L.deserializeState('{"version":1,"current":null,"past":[],"generation":1,"starterDone":true}');
+  eq('stardust: old saves migrate to 0', migrated3.stardust, 0);
+}
+
+// 20c. Birth cost: the first planet ever is free; every later birth
+// costs 1 plain mineral, and a blocked birth mutates nothing.
+{
+  // First planet free, both paths.
+  let s = L.freshState();
+  const first = L.newPlanet(s, seedSeq());
+  eq('birth cost: first planet through newPlanet is free', first.ok, true);
+  eq('birth cost: first planet grants the starter mineral', s.minerals.length, 1);
+  s = L.freshState();
+  L.startFirstPlanet(s, 42, undefined);
+  eq('birth cost: first planet through startFirstPlanet is free', s.minerals.length, 1);
+  // Blocked without a plain mineral.
+  st = freshWithPlanet(42);
+  st.minerals = st.minerals.filter((m) => m.mutation !== null); // no plain minerals left
+  const curSeed = st.current.seed;
+  const blocked = L.newPlanet(st, seedSeq());
+  eq('birth cost: blocked without a plain mineral', blocked.ok, false);
+  eq('birth cost: refusal reason', blocked.reason, 'no plain mineral');
+  eq('birth cost: blocked birth keeps the current planet', st.current.seed, curSeed);
+  eq('birth cost: blocked birth archives nothing', st.past.length, 0);
+  eq('birth cost: blocked birth spends nothing', st.minerals.length, 0);
+  // A mutation mineral does NOT pay for a birth.
+  const mm = L.makeMineral(st, { family: 'moon', mutation: 'green-moon', source: 'salvage' });
+  st.minerals.push(mm);
+  eq('birth cost: a mutation mineral cannot pay for a birth', L.newPlanet(st, seedSeq()).ok, false);
+  // A plain mineral pays, and a salvaged plain is spent before the
+  // starter gift.
+  st = freshWithPlanet(42);
+  L.addMinerals(st, [{ family: 'rings', mutation: null, source: 'salvage' }]);
+  const paid = L.newPlanet(st, seedSeq());
+  eq('birth cost: a plain mineral pays for the birth', paid.ok, true);
+  check('birth cost: the salvaged plain was spent, the starter kept',
+    st.minerals.length === 1 && st.minerals[0].source === 'starter');
+  // The starter pays when it is the only plain mineral.
+  st = freshWithPlanet(42);
+  const paid2 = L.newPlanet(st, seedSeq());
+  eq('birth cost: the starter pays when it is the only plain mineral', paid2.ok, true);
+  eq('birth cost: starter spent', st.minerals.length, 0);
+  // Seed hatch and prestige are births too.
+  st = freshWithPlanet(42);
+  st.minerals = [];
+  eq('birth cost: seed hatch blocked without a plain mineral',
+    L.hatchFromSeed(st, 805839337).ok, false);
+  eq('birth cost: blocked hatch keeps the current planet', st.current.seed, 42);
+  st = prestigeReadyState();
+  st.minerals = [];
+  const presBlocked = L.prestige(st, { kind: 'current' }, { kind: 'past', index: 0 }, seedSeq());
+  eq('birth cost: prestige blocked without a plain mineral', presBlocked.ok, false);
+  eq('birth cost: blocked prestige leaves parents eligible',
+    L.eligiblePrestigeParents(st).length, 2);
+  // Recycle is self-funding: a young mutated planet yields 1 plain,
+  // which pays for the new birth — net zero, mutation mineral lost.
+  st = freshWithPlanet(42); // Glowing Oceans, 0 XP
+  const rcYoung = L.recycleCurrent(st, seedSeq(32000));
+  eq('birth cost: young recycle ok (self-funded)', rcYoung.ok, true);
+  eq('birth cost: young recycle yields one plain mineral', rcYoung.minerals.length, 1);
+  eq('birth cost: young recycle keeps only the starter', st.minerals.length, 1);
+  eq('birth cost: young recycle lost the mutation mineral', JSON.stringify(rcYoung.lostMutations), '["glowing-oceans"]');
+  // A grown mutated planet keeps its mutation mineral after the
+  // birth cost (the bonus plain pays).
+  st = freshWithPlanet(42);
+  L.applyXp(st, 600, undefined, () => 1); // no events
+  const rcGrown = L.recycleCurrent(st, seedSeq(33000));
+  eq('birth cost: grown recycle ok', rcGrown.ok, true);
+  eq('birth cost: grown recycle yields mutation + bonus', rcGrown.minerals.length, 2);
+  check('birth cost: grown recycle keeps starter + mutation mineral',
+    st.minerals.length === 2 && st.minerals.some((m) => m.mutation === 'glowing-oceans'));
+  eq('birth cost: grown recycle loses nothing', JSON.stringify(rcGrown.lostMutations), '[]');
+}
+
+// 20d. Grow-it-first salvage: a mutated planet below Crust (600 XP)
+// yields only a plain mineral; at Crust+ the mutation minerals
+// come back. Plain planets are unaffected at any stage.
+{
+  const young = ratePlanet(100, ['green-moon'], []);
+  const yg = L.yieldMineralsForPlanet(young);
+  eq('salvage gate: young mutated planet yields one mineral', yg.length, 1);
+  eq('salvage gate: young yield is plain', yg[0].mutation, null);
+  eq('salvage gate: young loss lists the mutation', JSON.stringify(L.salvageLostMutations(young)), '["green-moon"]');
+  check('salvage gate: loss message names the planet and the rule',
+    (L.salvageLostMessage(young, ['green-moon']) || '').includes('too young')
+    && (L.salvageLostMessage(young, ['green-moon']) || '').includes('Green Moon')
+    && (L.salvageLostMessage(young, ['green-moon']) || '').includes('Crust (600 XP)'));
+  const almost = ratePlanet(599, ['green-moon'], []);
+  eq('salvage gate: 599 XP is still too young', L.yieldMineralsForPlanet(almost).length, 1);
+  const grown = ratePlanet(600, ['green-moon'], []);
+  const gg = L.yieldMineralsForPlanet(grown);
+  eq('salvage gate: grown mutated planet yields two minerals', gg.length, 2);
+  eq('salvage gate: grown yield carries the mutation', gg[0].mutation, 'green-moon');
+  eq('salvage gate: grown planet loses nothing', JSON.stringify(L.salvageLostMutations(grown)), '[]');
+  eq('salvage gate: no loss means no message', L.salvageLostMessage(grown, []), null);
+  const plainYoung = ratePlanet(0, [], []);
+  eq('salvage gate: plain young planet still yields one', L.yieldMineralsForPlanet(plainYoung).length, 1);
+  eq('salvage gate: plain planet loses nothing', JSON.stringify(L.salvageLostMutations(plainYoung)), '[]');
+  // Through the real entry points: destroy + salvage report the loss.
+  st = freshWithPlanet(42); // Glowing Oceans, 0 XP
+  const dc = L.destroyCurrent(st);
+  eq('salvage gate: destroy reports the loss', JSON.stringify(dc.lostMutations), '["glowing-oceans"]');
+  eq('salvage gate: destroy yields one plain', dc.minerals.length, 1);
+  st = freshWithPlanet(42);
+  L.applyXp(st, 600, undefined, () => 1); // no events
+  L.newPlanet(st, seedSeq(34000));
+  const sv = L.salvageArchived(st, 0);
+  eq('salvage gate: grown archived salvage keeps the mutation', sv.minerals.length, 2);
+  eq('salvage gate: grown archived salvage loses nothing', JSON.stringify(sv.lostMutations), '[]');
+}
+
+// 20e. Shop: plain mineral + three gambles, all in Stardust, all
+// guarded by the balance. A gamble gives a MINERAL, never a direct
+// mutation — and buying one does not mark it "found".
+{
+  eq('shop: plain price is 500', L.CONFIG.SHOP_PLAIN_PRICE, 500);
+  eq('shop: mystery price is 1000', L.CONFIG.SHOP_MYSTERY_PRICE, 1000);
+  eq('shop: mystery mutation chance is 5%', L.CONFIG.SHOP_MYSTERY_MUTATION_CHANCE, 0.05);
+  eq('shop: wheel price is 5000', L.CONFIG.SHOP_WHEEL_PRICE, 5000);
+  eq('shop: family pick price is 8000', L.CONFIG.SHOP_FAMILY_PICK_PRICE, 8000);
+  st = freshWithPlanet(42);
+  st.stardust = 500;
+  const bought = L.buyPlainMineral(st, () => 0.0);
+  eq('shop: plain mineral deducts 500', st.stardust, 0);
+  eq('shop: plain mineral added', bought.ok, true);
+  eq('shop: bought mineral is plain', bought.mineral.mutation, null);
+  eq('shop: bought mineral is from the shop', bought.mineral.source, 'shop');
+  st.stardust = 499;
+  const broke = L.buyPlainMineral(st, () => 0.0);
+  eq('shop: 499 Stardust cannot buy a plain mineral', broke.ok, false);
+  eq('shop: refusal reason', broke.reason, 'not enough stardust');
+  eq('shop: refused purchase spends nothing', st.stardust, 499);
+  eq('shop: refused purchase adds nothing', st.minerals.length, 2);
+  // Mystery Mineral: stubbed rng — under 5% lands a mutation
+  // mineral, at/over 5% lands a plain one. The boundary is tested
+  // exactly: 0.049 hits, 0.05 misses (the roll must be UNDER 5%).
+  st.stardust = 1000;
+  const mysteryHit = L.buyMysteryMineral(st, () => 0.04);
+  eq('shop: mystery hit ok', mysteryHit.ok, true);
+  eq('shop: mystery hit is a mutation mineral', mysteryHit.isMutation, true);
+  eq('shop: mystery hit is a real mutation', Planet.mutationDef(mysteryHit.mineral.mutation) !== null, true);
+  eq('shop: mystery hit deducts 1000', st.stardust, 0);
+  st.stardust = 1000;
+  const mysteryEdge = L.buyMysteryMineral(st, () => 0.049);
+  eq('shop: mystery at 0.049 still hits (just under 5%)', mysteryEdge.isMutation, true);
+  st.stardust = 1000;
+  const mysteryBoundary = L.buyMysteryMineral(st, () => 0.05);
+  eq('shop: mystery at 0.05 misses (the roll must be under 5%)', mysteryBoundary.isMutation, false);
+  eq('shop: mystery at the boundary is a plain mineral', mysteryBoundary.mineral.mutation, null);
+  st.stardust = 1000;
+  const mysteryMiss = L.buyMysteryMineral(st, () => 0.5);
+  eq('shop: mystery miss ok', mysteryMiss.ok, true);
+  eq('shop: mystery miss is a plain mineral', mysteryMiss.isMutation, false);
+  eq('shop: mystery miss carries no mutation', mysteryMiss.mineral.mutation, null);
+  // Mutation Wheel: always a mutation mineral.
+  st.stardust = 5000;
+  const wheelLow = L.buyMutationWheel(st, () => 0.0);
+  eq('shop: wheel ok', wheelLow.ok, true);
+  eq('shop: wheel gives a mutation mineral', wheelLow.mineral.mutation, 'big-moon');
+  st.stardust = 5000;
+  const wheelHigh = L.buyMutationWheel(st, () => 0.99);
+  eq('shop: wheel at the top of the range gives another mutation', wheelHigh.mineral.mutation, 'glitch');
+  st.stardust = 4999;
+  eq('shop: 4999 cannot spin the wheel', L.buyMutationWheel(st, () => 0.0).ok, false);
+  // Family Pick: the mutation comes from the chosen family.
+  st.stardust = 8000;
+  const pickMoon = L.buyFamilyPick(st, 'moon', () => 0.0);
+  eq('shop: moon pick gives a moon mutation', pickMoon.mineral.mutation, 'big-moon');
+  eq('shop: moon pick family matches', pickMoon.mineral.family, 'moon');
+  st.stardust = 8000;
+  const pickMoonHigh = L.buyFamilyPick(st, 'moon', () => 0.99);
+  eq('shop: moon pick at the top gives blood-moon', pickMoonHigh.mineral.mutation, 'blood-moon');
+  st.stardust = 8000;
+  const pickRings = L.buyFamilyPick(st, 'rings', () => 0.5);
+  eq('shop: rings pick gives a rings mutation', pickRings.mineral.mutation, 'colored-rings');
+  eq('shop: unknown family rejected', L.buyFamilyPick(st, 'bogus', () => 0.0).ok, false);
+  st.stardust = 7999;
+  eq('shop: 7999 cannot family-pick', L.buyFamilyPick(st, 'moon', () => 0.0).ok, false);
+  // Buying a mutation mineral does not mark it "found" — discovery
+  // means seeing it on a planet, not owning the bottle.
+  st = freshWithPlanet(42);
+  st.stardust = 5000;
+  L.buyMutationWheel(st, () => 0.0); // big-moon mineral
+  check('shop: a bought mineral is not discovered', !st.discovered.includes('big-moon'));
+}
+
+// 20f. Mineral inventory: grouped by family/mutation with counts,
+// mutation minerals first, Stardust balance on top.
+{
+  st = freshWithPlanet(42); // starter crystal (glow, plain)
+  const inv0 = L.mineralInventory(st);
+  eq('inventory: balance starts at 0', inv0.stardust, 0);
+  eq('inventory: one mineral total', inv0.total, 1);
+  eq('inventory: one group (the starter)', inv0.groups.length, 1);
+  eq('inventory: starter group label', inv0.groups[0].label, 'Crystal mineral');
+  eq('inventory: starter group count', inv0.groups[0].count, 1);
+  L.addMinerals(st, [
+    { family: 'moon', mutation: 'green-moon', source: 'salvage' },
+    { family: 'moon', mutation: 'green-moon', source: 'salvage' },
+    { family: 'moon', mutation: 'blood-moon', source: 'salvage' },
+    { family: 'moon', mutation: null, source: 'salvage' },
+  ]);
+  st.stardust = 1234;
+  const inv = L.mineralInventory(st);
+  eq('inventory: balance carried', inv.stardust, 1234);
+  eq('inventory: five minerals total', inv.total, 5);
+  eq('inventory: four groups', inv.groups.length, 4);
+  eq('inventory: mutation minerals sort first, alphabetical',
+    inv.groups.map((g) => g.label).join(' | '),
+    'Blood Moon mineral | Green Moon mineral | Crystal mineral | moon mineral');
+  eq('inventory: green-moon count is 2', inv.groups.find((g) => g.mutation === 'green-moon').count, 2);
+}
+
+// 20g. Host wiring: package.json + extension.js for the inventory,
+// the shop, the Stardust display, and the earn-rate display.
+check('pkg: viewMinerals command', cmds.some((c) => c.command === 'protoplanet.viewMinerals'));
+check('pkg: openShop command', cmds.some((c) => c.command === 'protoplanet.openShop'));
+check('ext: registers viewMinerals', extSrc.includes("'protoplanet.viewMinerals'"));
+check('ext: registers openShop', extSrc.includes("'protoplanet.openShop'"));
+check('ext: inventory command reads the grouped inventory', extSrc.includes('Logic.mineralInventory'));
+check('ext: shop buys a plain mineral through the logic', extSrc.includes('Logic.buyPlainMineral'));
+check('ext: shop buys a mystery mineral through the logic', extSrc.includes('Logic.buyMysteryMineral'));
+check('ext: shop spins the wheel through the logic', extSrc.includes('Logic.buyMutationWheel'));
+check('ext: shop family-picks through the logic', extSrc.includes('Logic.buyFamilyPick'));
+check('ext: shop prices read with commas (1,000 not 1000)',
+  extSrc.includes('const price = (n) => n.toLocaleString()') && extSrc.includes('price(Logic.CONFIG.SHOP_WHEEL_PRICE)'));
+check('ext: blocked birth tells the player how to get a mineral', extSrc.includes('Logic.needPlainMineralMessage()'));
+check('ext: lost mutation minerals are reported', extSrc.includes('Logic.salvageLostMessage'));
+check('ext: status bar shows the Stardust balance', extSrc.includes('✦${Math.floor(vm.stardust)'));
+check('ext: view model carries Stardust and the earn rate',
+  extSrc.includes('stardust: this.state.stardust') && extSrc.includes('earnRate: Logic.earnRate(cur)'));
+check('ext: sidebar shows the earn rate', extSrc.includes('earnRateText') && extSrc.includes('earns '));
+check('ext: sidebar shows the Stardust balance', extSrc.includes("Math.floor(msg.stardust).toLocaleString()"));
+check('ext: detail sheet shows the earn rate', extSrc.includes('Earns</td>'));
+check('ext: Index header counts rings, not system membership',
+  extSrc.includes("' on rings'") && !extSrc.includes("' in system'"));
+check('ext: system view model carries the system earn rate', extSrc.includes('systemEarnRate: Logic.systemEarnRate'));
+// Round 14 (Nov 14) — the Stardust balance is VISIBLE in two places:
+// a pill in the solar-system top corner, and a compact line in the
+// sidebar. The chip updates on every state push, so it ticks up live
+// as Stardust is earned per character.
+check('ext: solar system has a Stardust chip in the top bar',
+  extSrc.includes('id="stardustChip"') && extSrc.includes('id="stardustBal"'));
+check('ext: Stardust chip is an amber pill', extSrc.includes('#stardustChip')
+  && extSrc.includes('border-radius: 999px') && extSrc.includes('border: 1px solid #e8b64c'));
+check('ext: Stardust chip updates on every state push',
+  extSrc.includes('function updateStardustChip()')
+  && extSrc.includes("updateRankLine();\n    updateStardustChip();")
+  && extSrc.includes("Math.floor(state.stardust || 0).toLocaleString()"));
+check('ext: Stardust chip hides with the UI', extSrc.includes("body.hide-ui #topbar"));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) {
