@@ -1262,10 +1262,13 @@ check('ext: no Sol label under the sun',
     specks.every((s) => !starSrc.includes(s)),
     specks.filter((s) => starSrc.includes(s)).join(', ') || 'none remain');
 })();
-// (5) Shattered-birth smoke stays close to the core in the solar
-// system (smokeScale 0.5): plume tips reach ~1.3x radius, not ~2.0x,
-// so the haze no longer fills the whole frame. Measured on the real
-// smokeCellAt, along each plume's axis over 4 seconds.
+// (5) Smoke scale plumbing (Nov 12): the solar-system renders pass a
+// reduced smoke scale (0.5), the sidebar/prestige renders keep the
+// full scale (1). (Round 12, Nov 14 — Devon cut the smoke: the
+// renderer draws none anymore, so these scale args are legacy —
+// kept so the positional call sites don't shift. The function-level
+// smokeCellAt checks below still pin the helpers' behavior, and the
+// source-string checks still pin the call signatures.)
 (function () {
   const seed = 12345, r = 18, CX = 68, CY = 38;
   const smoke = Planet.buildSmoke(seed);

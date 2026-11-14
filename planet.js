@@ -222,6 +222,25 @@ const CONFIG = {
     { id: 'blood-moon',        name: 'Blood Moon',       tags: ['moon'],  desc: 'A blood-red moon.' },
     { id: 'glitch',            name: 'Glitch',           tags: ['weird'], desc: 'The planet looks broken — on purpose.' },
   ],
+
+  // --- Birth variants (round 12, Nov 14) ---------------------------------
+  // The Shattered look a planet is BORN with is a seeded variant —
+  // most planets get the classic burst, some get one of four variant
+  // looks (Devon, Nov 14: egg, cracked shell, twin clump, and the
+  // frozen birth-morph frame with disc + ring). Same seed = same
+  // variant, forever — and every seed still looks different INSIDE
+  // its variant (crack path/angle, egg angle, twin colors all vary
+  // per seed). One tunable table, so Devon can retune after playing.
+  BIRTH_VARIANTS: [
+    { id: 'classic', weight: 40 },
+    { id: 'egg',     weight: 15 },
+    { id: 'cracked', weight: 15 },
+    { id: 'twin',    weight: 15 },
+    { id: 'morph',   weight: 15 },
+  ],
+  // Crack glow colors (Nov 14): ONE per seed — purple for even seeds,
+  // neon green for odd. Never both on one planet.
+  BIRTH_CRACK_HUES: [129, 46],
 };
 
 // ---------------------------------------------------------------------------
@@ -966,6 +985,9 @@ function buildFragments(seed) {
 // Each wisp knows its depth: `far` = top half of the disc (the far
 // side of the ring) — far smoke is drawn before the ring and occluded
 // by it, near smoke after the ring and in front of it.
+// (Round 12, Nov 14 — Devon cut the smoke: the renderer no longer
+// draws it, the birth is clean. buildSmoke/smokeCellAt stay exported
+// for scratch tooling and their tests.)
 function buildSmoke(seed) {
   const srng = mulberry32((seed + 31337) >>> 0);
   const puffs = [];
@@ -1105,8 +1127,142 @@ function coreMarkerAt(marker, spin, sec, r) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// BIRTH VARIANTS (round 12, Nov 14) — the Shattered look a planet is
+// born with. Seeded: same seed = same variant, and every seed still
+// looks different INSIDE its variant (Devon, Nov 14).
+// ---------------------------------------------------------------------------
+// Which birth variant this seed gets. A dedicated mulberry32 stream
+// (seed ^ 0xB17) so the pick never consumes draws from the trait
+// generator and can never reshuffle a planet's traits.
+function birthVariant(seed) {
+  const rng = mulberry32(((seed || 0) ^ 0xB17) >>> 0);
+  return weightedPick(rng, CONFIG.BIRTH_VARIANTS).id;
+}
+
+// Display name for a birth variant id (Index / detail sheet later).
+function birthVariantName(id) {
+  return { classic: 'Classic Burst', egg: 'Egg', cracked: 'Cracked Shell', twin: 'Twin Clump', morph: 'Disc & Ring' }[id] || 'Classic Burst';
+}
+
+// Egg warp: stretch an engine-drawn rock core into an oval whose long
+// axis sits at a seeded angle — any direction, so the rotation reads.
+// Ported from the v4 concept still (scratch/birth-stills-shoot.js).
+function warpEggInto(grid, src, coreR, aScale, bScale, th) {
+  const { CX, CY, W, H } = CONFIG;
+  const c = Math.cos(-th), s = Math.sin(-th);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const X = x - CX, Y = 2 * (y - CY);
+    const u = X * c - Y * s, v = X * s + Y * c;
+    const ix = Math.round(CX + (u / aScale)), iy = Math.round(CY + (v / bScale) / 2);
+    if (ix < 0 || ix >= W || iy < 0 || iy >= H) continue;
+    const cell = src[iy][ix];
+    if (!cell || cell[1] === null) continue;
+    // Only warp cells that belong to the source core (inside coreR).
+    const qx = (ix - CX) / coreR, qy = (iy - CY) / (coreR / 2);
+    if (qx * qx + qy * qy > 1.05) continue;
+    grid[y][x] = [cell[0], cell[1]];
+  }
+}
+
+// Cracked shell: glowing cracks across a rock core, the engine's crust
+// recipe — but the crack ANGLES, count and wobble are seeded (Devon,
+// Nov 14: the crack must never be in the same position or style twice),
+// and the glow is ONE color per seed (purple even / neon green odd).
+function applyBirthCracks(grid, cx, cy, coreR, seed) {
+  const { RAMP } = CONFIG;
+  const hue = CONFIG.BIRTH_CRACK_HUES[((seed || 0) % 2 === 0) ? 0 : 1];
+  const crng = mulberry32(((seed || 0) + 0xC4AC) >>> 0);
+  const n = 3 + Math.trunc(crng() * 3); // 3-5 cracks
+  const angles = [];
+  for (let i = 0; i < n; i++) angles.push(crng() * Math.PI * 2);
+  for (let f = 0; f < angles.length; f++) {
+    const a = angles[f];
+    for (let s = 0.08 * coreR; s <= 0.95 * coreR; s += 0.8) {
+      const wob = (valueNoise(s * 0.3, f * 7, seed + 913, 16) - 0.5) * 3.0;
+      const x = cx + s * Math.cos(a) - Math.sin(a) * wob;
+      const y = cy + s * Math.sin(a) * 0.5 + Math.cos(a) * wob * 0.5;
+      const crackNoise = valueNoise(s * 0.25, f * 3, seed + 411, 10);
+      const halfW = 0.4 + 0.6 * crackNoise;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const xx = Math.round(x + dx), yy = Math.round(y + dy);
+        if (xx < 0 || xx >= CONFIG.W || yy < 0 || yy >= CONFIG.H) continue;
+        const px = xx - x, py = (yy - y) * 2;
+        const dist = Math.abs(px * (-Math.sin(a)) + py * Math.cos(a));
+        if (dist > halfW) continue;
+        const c = grid[yy][xx];
+        if (!c || c[1] === null) continue;
+        const b = RAMP.indexOf(c[0]) / RAMP.length;
+        const heat = 0.55 + 0.45 * crackNoise;
+        const cb = Math.max(0.10, Math.min(1.0, (b * 1.25 + 0.12) * heat));
+        grid[yy][xx] = [RAMP[Math.min(RAMP.length - 1, Math.trunc(cb * RAMP.length))], shadeColor(hue, cb, 1.0)];
+      }
+    }
+  }
+}
+
+// Twin clump second core: a DIFFERENT terrain, seeded — so the two
+// clumps are two different colors (Devon, Nov 14).
+function birthTwinSecondPlanet(seed, ownTerrain) {
+  const trng = mulberry32(((seed || 0) + 0x7A1) >>> 0);
+  const others = CONFIG.TERRAINS.filter(t => t.id !== ownTerrain);
+  const pick = others[Math.trunc(trng() * others.length)];
+  return stripMutations(generatePlanet(((seed || 0) + 1) >>> 0, pick.id));
+}
+
+// Draw one of the three core variants (egg / cracked / twin) into the
+// grid, replacing the whole exploded branch: clean, just the core(s)
+// on black — no fragments, debris, sparkles or smoke (Devon, Nov 14).
+// `r` is the stage radius (already zoom x size); the cores are drawn
+// at the same proportions as the v4 concept stills.
+function drawBirthVariant(grid, r, sec, planet, variant) {
+  const { CX, CY } = CONFIG;
+  const seed = planet.seed || 0;
+  const ROCK = STAGES[1]; // Accretion — mode 'rock', "a lumpy little world"
+  const noMuts = new Set(); // birth cores are clean rock, like the stills
+  if (variant === 'egg') {
+    // Egg/oval core: an engine rock core warped into an oval. Long-axis
+    // angle is seeded (any direction), scales vary a little per seed.
+    const erng = mulberry32(((seed || 0) ^ 0xE66) >>> 0);
+    const th = erng() * Math.PI; // 0-180° — an oval has no up/down
+    const aScale = 1.25 + erng() * 0.2, bScale = 0.70 + erng() * 0.1;
+    const src = makeGrid();
+    drawPlanet(src, ROCK, 0.45 * r, sec, planet, 1.0, 'exploded', noMuts);
+    warpEggInto(grid, src, 0.45 * r, aScale, bScale, th);
+    return;
+  }
+  if (variant === 'cracked') {
+    drawPlanet(grid, ROCK, 0.45 * r, sec, planet, 1.0, 'exploded', noMuts);
+    applyBirthCracks(grid, CX, CY, 0.45 * r, seed);
+    return;
+  }
+  // Twin clump: two separate lumpy cores. The second is a different
+  // (seeded) terrain, so the clumps are two different colors; which
+  // side is which alternates by seed parity.
+  const second = birthTwinSecondPlanet(seed, planet.terrain);
+  const gA = makeGrid(), gB = makeGrid();
+  drawPlanet(gA, ROCK, 0.22 * r, sec, planet, 1.0, 'exploded', noMuts);
+  drawPlanet(gB, ROCK, 0.22 * r, sec, second, 1.0, 'exploded', noMuts);
+  const leftFirst = ((seed % 2) === 0);
+  const gL = leftFirst ? gA : gB, gR = leftFirst ? gB : gA;
+  for (let y = 0; y < CONFIG.H; y++) for (let x = 0; x < CONFIG.W; x++) {
+    const ca = gL[y][x], cb = gR[y][x];
+    if (ca[1] !== null) {
+      const xx = Math.round(x - 0.35 * r);
+      if (xx >= 0 && xx < CONFIG.W) grid[y][xx] = [ca[0], ca[1]];
+    }
+    if (cb[1] !== null) {
+      const xx = Math.round(x + 0.35 * r);
+      if (xx >= 0 && xx < CONFIG.W) grid[y][xx] = [cb[0], cb[1]];
+    }
+  }
+}
+
 function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts, smokeScale) {
   if (stage0Style === undefined) stage0Style = 'exploded';
+  // smokeScale is legacy (round 12, Nov 14 — Devon cut the smoke, so the
+  // renderer draws none; the parameter stays so the positional call
+  // sites in extension.js don't shift).
   if (smokeScale === undefined) smokeScale = 1;
   const { CX, CY, RAMP } = CONFIG;
   const mode = st.mode;
@@ -1129,7 +1285,6 @@ function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts, smokeScal
   // Same for the smoke puffs and the bursting sparkles.
   const exploded = (mode === 'dust' && stage0Style === 'exploded');
   const frags = exploded ? buildFragments(seed) : null;
-  const smoke = exploded ? buildSmoke(seed) : null;
   const sparks = exploded ? buildSparkles(seed) : null;
   const coreMarkers = exploded ? buildCoreMarkers(seed) : null;
   // Ring color blending (Nov 11): each fragment knows the NEXT
@@ -1141,6 +1296,17 @@ function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts, smokeScal
       (frags[a].ang + sec * frags[a].spin) - (frags[b].ang + sec * frags[b].spin));
     for (let k = 0; k < order.length; k++) {
       frags[order[k]].next = frags[order[(k + 1) % order.length]];
+    }
+  }
+  // Birth variants (round 12, Nov 14, Devon): the variant cores
+  // (egg/cracked/twin) replace the whole exploded branch — clean,
+  // just the core(s) on black. The morph variant falls through to
+  // the normal exploded branch (render() freezes it at t=1.5s).
+  if (exploded) {
+    const variant = birthVariant(seed);
+    if (variant === 'egg' || variant === 'cracked' || variant === 'twin') {
+      drawBirthVariant(grid, r, sec, planet, variant);
+      return;
     }
   }
   // Stage-0 'exploded' pulse: the core breathes — a SLOW, DEEP glow
@@ -1165,12 +1331,12 @@ function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts, smokeScal
   const y1 = Math.min(CONFIG.H, Math.floor(CY + effR) + 2);
   const x0 = Math.max(0, Math.floor(CX - effR - 1));
   const x1 = Math.min(CONFIG.W, Math.floor(CX + effR) + 2);
-  // Smoke depth tracking (Nov 11 smoke redesign): which cells hold
-  // far smoke / fragments / sparkles / debris, so the far/near smoke
-  // passes and the debris ring layer correctly — far smoke behind the
-  // ring, near smoke in front of it. Per frame, only used in the
-  // stage-0 exploded branch. Keys are y * W + x.
-  const farSmoke = new Set(), fragCells = new Set(), sparkCells = new Set(), debrisCells = new Set();
+  // Layer tracking: which cells hold fragments / sparkles / debris, so
+  // the sparkles and the debris ring only draw on empty cells (never
+  // over a fragment). Per frame, only used in the stage-0 exploded
+  // branch. Keys are y * W + x. (Round 12, Nov 14: the smoke is gone —
+  // Devon cut it — so there is no far/near smoke tracking anymore.)
+  const fragCells = new Set(), sparkCells = new Set(), debrisCells = new Set();
   for (let y = y0; y < y1; y++) {
     for (let x = x0; x < x1; x++) {
       const sx = (x - CX) / r;
@@ -1277,26 +1443,13 @@ function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts, smokeScal
             if (haloB * flick > 0.12) {
               grid[y][x] = ['.', shadeColor(202, haloB * flick, 1.0)];
             }
-            // Smoke base (Nov 11 smoke redesign): the plumes start AT
-            // the core surface — draw them over the faint halo so the
-            // smoke visibly leaves the sphere instead of appearing
-            // out at the ring. No ring inside this annulus, so depth
-            // doesn't apply here; both sides draw.
-            const sc = smokeCellAt(x, y, r, radN, smoke, sec, seed, null, smokeScale);
-            if (sc) grid[y][x] = sc;
             continue;
           }
-          // Depth-aware smoke (Nov 11 smoke redesign): far-side smoke
-          // (top half) is drawn BEFORE the ring, so the fragments and
-          // the debris ring occlude it — it passes BEHIND the ring.
-          const key = y * CONFIG.W + x;
-          const farCell = smokeCellAt(x, y, r, radN, smoke, sec, seed, true, smokeScale);
-          if (farCell) { grid[y][x] = farCell; farSmoke.add(key); }
           // Fragments: glowing chunks flying outward from the core
           // AND orbiting around it — their angle advances with sec,
           // so the ring visibly turns as the debris spirals out.
           // A brightness wave travels around the ring with them.
-          // They overwrite far smoke where they overlap (in front of it).
+          const key = y * CONFIG.W + x;
           for (const f of frags) {
             const frad = f.base + pymod(sec * f.speed + f.phase, 1.1);
             const fang = f.ang + sec * f.spin;
@@ -1328,9 +1481,8 @@ function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts, smokeScal
           // Multicolor sparkles bursting out of the core: seeded
           // varied hues, flying outward, each twinkling on its own
           // rhythm — the eye-catching "it's mutated" signal.
-          // They draw on empty cells, or over far smoke (sparkles are
-          // foreground); never over a fragment.
-          if (grid[y][x][1] === null || (farSmoke.has(key) && !fragCells.has(key))) {
+          // They draw on empty cells; never over a fragment.
+          if (grid[y][x][1] === null) {
             for (const sp of sparks) {
               const srad = sp.base + pymod(sec * sp.speed + sp.phase, 1.0);
               const sang = sp.ang + sec * 0.12;
@@ -1350,11 +1502,8 @@ function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts, smokeScal
           // Debris ring: a sparse dotted ring, slowly rotating, with
           // a brightness wave travelling around it and a slow hue
           // drift through the mutation colors. It draws on empty
-          // cells, or over far smoke only — the ring passes in front
-          // of far-side smoke, never over a fragment or sparkle.
-          if (Math.abs(radN - 1.1) < 0.06
-              && (grid[y][x][1] === null
-                || (farSmoke.has(key) && !fragCells.has(key) && !sparkCells.has(key)))) {
+          // cells only — never over a fragment or sparkle.
+          if (Math.abs(radN - 1.1) < 0.06 && grid[y][x][1] === null) {
             const angR = Math.atan2(2 * sy, sx) - sec * 0.15;
             const rn = noise2(Math.floor(angR * 8), 3, seed + 31);
             if (rn > 0.45) {
@@ -1369,15 +1518,6 @@ function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts, smokeScal
               grid[y][x] = [rn > 0.8 ? '*' : (rn > 0.6 ? '+' : '.'), shadeColor(hue, (0.3 + 0.4 * rn) * wave, 1.0)];
               debrisCells.add(key);
             }
-          }
-          // NEAR smoke (Nov 11 smoke redesign): bottom-half wisps,
-          // drawn AFTER the ring — they pass IN FRONT of it. They
-          // may cover fragment and debris-ring cells, but never a
-          // sparkle. This is the depth cue on the near side: the
-          // smoke crosses over the ring instead of peeling off it.
-          const nearCell = smokeCellAt(x, y, r, radN, smoke, sec, seed, false, smokeScale);
-          if (nearCell && (grid[y][x][1] === null || fragCells.has(key) || debrisCells.has(key))) {
-            grid[y][x] = nearCell;
           }
           continue;
         }
@@ -2135,10 +2275,19 @@ function render(planet, stageIdx, t, sec, zoom, stage0Style, smokeScale, noStars
   if (smokeScale === undefined) smokeScale = 1;
   const st = STAGES[stageIdx];
   const prev = STAGES[(stageIdx - 1 + STAGES.length) % STAGES.length];
-  const m = clamp(t / 3.0); // smooth morph from the previous stage
+  // Birth variants (round 12, Nov 14): a variant planet's stage-0 look
+  // is FROZEN, not morphed in — egg/cracked/twin ARE the settled birth
+  // look (no morph ring), and 'morph' is the t=1.5s frame (disc +
+  // ring squeezing the planet, Devon's pick). Classic planets morph
+  // as before.
+  const variant = (stageIdx === 0) ? birthVariant(planet.seed || 0) : null;
+  let m = clamp(t / 3.0); // smooth morph from the previous stage
+  if (variant === 'morph') m = 0.5;
+  else if (variant === 'egg' || variant === 'cracked' || variant === 'twin') m = 1;
   let radius = lerp(prev.radius, st.radius, m) * zoom * planet.size;
   let ring = lerp(prev.ring, st.ring, m);
   if (planet.ringType === 'none') ring = 0;
+  if (variant === 'morph') ring = 0.5;
   const fade = 0.35 + 0.65 * m; // stages fade in, never pop
   // The mutations on this planet — all of them, from stage 0 (birth
   // rolls, Nov 11). Computed once, passed down to every draw step.
@@ -2147,10 +2296,18 @@ function render(planet, stageIdx, t, sec, zoom, stage0Style, smokeScale, noStars
   // side by side on plain black — no per-planet starfield hugging
   // each one. Standalone frames (sidebar pet, zoom detail) keep the
   // twinkling stars, so this defaults to stars on.
+  // The morph ring is a birth artifact, so it draws even on a ringless
+  // planet — give the ring renderer a thin ring to draw. And it shows
+  // the BASE ring only: a ring mutation (double/colored/crossed) does
+  // not exist yet at stage 0 (cross-stage matrix, test 14g), so the
+  // morph ring gets no mutation visuals.
+  const ringPlanet = (variant === 'morph' && (planet.baseRingType || planet.ringType) === 'none')
+    ? { ...planet, ringType: 'thin', baseRingType: 'thin' } : planet;
+  const ringMuts = (variant === 'morph') ? new Set() : muts;
   const grid = noStars ? makeGrid() : starGrid(sec, planet.atmosphere);
-  if (ring > 0.05) drawRings(grid, radius, ring, sec, false, planet, muts);
+  if (ring > 0.05) drawRings(grid, radius, ring, sec, false, ringPlanet, ringMuts);
   drawPlanet(grid, st, radius, sec, planet, fade, stage0Style, muts, smokeScale);
-  if (ring > 0.05) drawRings(grid, radius, ring, sec, true, planet, muts);
+  if (ring > 0.05) drawRings(grid, radius, ring, sec, true, ringPlanet, ringMuts);
   drawMoons(grid, radius, sec, planet, muts);
   // Sky mutations fly in front of everything (they are in the sky,
   // not on the planet). Glitch goes last — it corrupts the whole frame.
@@ -2850,7 +3007,7 @@ function gridToText(grid) {
 // ---------------------------------------------------------------------------
 const API = {
   CONFIG, STAGES, STARS, STAGE0_STYLES,
-  mulberry32, generatePlanet, stripMutations, generatePlanetName, formatCatalogName, parseCatalogName, buildFragments, buildSmoke, buildSparkles, buildCoreMarkers, coreMarkerAt, smokeCellAt,
+  mulberry32, generatePlanet, stripMutations, generatePlanetName, formatCatalogName, parseCatalogName, birthVariant, birthVariantName, buildFragments, buildSmoke, buildSparkles, buildCoreMarkers, coreMarkerAt, smokeCellAt,
   mutationDef, activeMutations, hasMutation, mutationLabel,
   applyMutationToPlanet, applyRng, planetSummaryFor, MUTATION_OVERRIDE_ORDER,
   collisionFrame, collisionPhase, collisionShardAt, COLLISION_TIMELINE, COLLISION_END,
