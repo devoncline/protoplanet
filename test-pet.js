@@ -2617,15 +2617,20 @@ function ratePlanet(xp, mutations, eventTitles) {
   eq('salvage gate: grown archived salvage loses nothing', JSON.stringify(sv.lostMutations), '[]');
 }
 
-// 20e. Shop: plain mineral + three gambles, all in Stardust, all
+// 20e. Shop: plain mineral + two gambles, all in Stardust, all
 // guarded by the balance. A gamble gives a MINERAL, never a direct
-// mutation — and buying one does not mark it "found".
+// mutation — and buying one does not mark it "found". Round 15:
+// the Mystery Mineral is GONE (Devon — it was a 5% lottery ticket
+// for a plain mineral you could just buy), and the power items
+// cost 10x more (Wheel 50,000, Family Pick 80,000) while the plain
+// mineral stays 500 (cheap fuel for a first planet).
 {
-  eq('shop: plain price is 500', L.CONFIG.SHOP_PLAIN_PRICE, 500);
-  eq('shop: mystery price is 1000', L.CONFIG.SHOP_MYSTERY_PRICE, 1000);
-  eq('shop: mystery mutation chance is 5%', L.CONFIG.SHOP_MYSTERY_MUTATION_CHANCE, 0.05);
-  eq('shop: wheel price is 5000', L.CONFIG.SHOP_WHEEL_PRICE, 5000);
-  eq('shop: family pick price is 8000', L.CONFIG.SHOP_FAMILY_PICK_PRICE, 8000);
+  eq('shop: plain price stays 500', L.CONFIG.SHOP_PLAIN_PRICE, 500);
+  eq('shop: mystery price is gone', L.CONFIG.SHOP_MYSTERY_PRICE, undefined);
+  eq('shop: mystery chance is gone', L.CONFIG.SHOP_MYSTERY_MUTATION_CHANCE, undefined);
+  eq('shop: mystery buy function is gone', typeof L.buyMysteryMineral, 'undefined');
+  eq('shop: wheel price is 50000', L.CONFIG.SHOP_WHEEL_PRICE, 50000);
+  eq('shop: family pick price is 80000', L.CONFIG.SHOP_FAMILY_PICK_PRICE, 80000);
   st = freshWithPlanet(42);
   st.stardust = 500;
   const bought = L.buyPlainMineral(st, () => 0.0);
@@ -2639,55 +2644,38 @@ function ratePlanet(xp, mutations, eventTitles) {
   eq('shop: refusal reason', broke.reason, 'not enough stardust');
   eq('shop: refused purchase spends nothing', st.stardust, 499);
   eq('shop: refused purchase adds nothing', st.minerals.length, 2);
-  // Mystery Mineral: stubbed rng — under 5% lands a mutation
-  // mineral, at/over 5% lands a plain one. The boundary is tested
-  // exactly: 0.049 hits, 0.05 misses (the roll must be UNDER 5%).
-  st.stardust = 1000;
-  const mysteryHit = L.buyMysteryMineral(st, () => 0.04);
-  eq('shop: mystery hit ok', mysteryHit.ok, true);
-  eq('shop: mystery hit is a mutation mineral', mysteryHit.isMutation, true);
-  eq('shop: mystery hit is a real mutation', Planet.mutationDef(mysteryHit.mineral.mutation) !== null, true);
-  eq('shop: mystery hit deducts 1000', st.stardust, 0);
-  st.stardust = 1000;
-  const mysteryEdge = L.buyMysteryMineral(st, () => 0.049);
-  eq('shop: mystery at 0.049 still hits (just under 5%)', mysteryEdge.isMutation, true);
-  st.stardust = 1000;
-  const mysteryBoundary = L.buyMysteryMineral(st, () => 0.05);
-  eq('shop: mystery at 0.05 misses (the roll must be under 5%)', mysteryBoundary.isMutation, false);
-  eq('shop: mystery at the boundary is a plain mineral', mysteryBoundary.mineral.mutation, null);
-  st.stardust = 1000;
-  const mysteryMiss = L.buyMysteryMineral(st, () => 0.5);
-  eq('shop: mystery miss ok', mysteryMiss.ok, true);
-  eq('shop: mystery miss is a plain mineral', mysteryMiss.isMutation, false);
-  eq('shop: mystery miss carries no mutation', mysteryMiss.mineral.mutation, null);
   // Mutation Wheel: always a mutation mineral.
-  st.stardust = 5000;
+  st.stardust = 50000;
   const wheelLow = L.buyMutationWheel(st, () => 0.0);
   eq('shop: wheel ok', wheelLow.ok, true);
   eq('shop: wheel gives a mutation mineral', wheelLow.mineral.mutation, 'big-moon');
-  st.stardust = 5000;
+  eq('shop: wheel deducts 50000', st.stardust, 0);
+  st.stardust = 50000;
   const wheelHigh = L.buyMutationWheel(st, () => 0.99);
   eq('shop: wheel at the top of the range gives another mutation', wheelHigh.mineral.mutation, 'glitch');
-  st.stardust = 4999;
-  eq('shop: 4999 cannot spin the wheel', L.buyMutationWheel(st, () => 0.0).ok, false);
+  st.stardust = 49999;
+  eq('shop: 49999 cannot spin the wheel', L.buyMutationWheel(st, () => 0.0).ok, false);
+  eq('shop: refused wheel spends nothing', st.stardust, 49999);
   // Family Pick: the mutation comes from the chosen family.
-  st.stardust = 8000;
+  st.stardust = 80000;
   const pickMoon = L.buyFamilyPick(st, 'moon', () => 0.0);
   eq('shop: moon pick gives a moon mutation', pickMoon.mineral.mutation, 'big-moon');
   eq('shop: moon pick family matches', pickMoon.mineral.family, 'moon');
-  st.stardust = 8000;
+  eq('shop: moon pick deducts 80000', st.stardust, 0);
+  st.stardust = 80000;
   const pickMoonHigh = L.buyFamilyPick(st, 'moon', () => 0.99);
   eq('shop: moon pick at the top gives blood-moon', pickMoonHigh.mineral.mutation, 'blood-moon');
-  st.stardust = 8000;
+  st.stardust = 80000;
   const pickRings = L.buyFamilyPick(st, 'rings', () => 0.5);
   eq('shop: rings pick gives a rings mutation', pickRings.mineral.mutation, 'colored-rings');
   eq('shop: unknown family rejected', L.buyFamilyPick(st, 'bogus', () => 0.0).ok, false);
-  st.stardust = 7999;
-  eq('shop: 7999 cannot family-pick', L.buyFamilyPick(st, 'moon', () => 0.0).ok, false);
+  st.stardust = 79999;
+  eq('shop: 79999 cannot family-pick', L.buyFamilyPick(st, 'moon', () => 0.0).ok, false);
+  eq('shop: refused family pick spends nothing', st.stardust, 79999);
   // Buying a mutation mineral does not mark it "found" — discovery
   // means seeing it on a planet, not owning the bottle.
   st = freshWithPlanet(42);
-  st.stardust = 5000;
+  st.stardust = 50000;
   L.buyMutationWheel(st, () => 0.0); // big-moon mineral
   check('shop: a bought mineral is not discovered', !st.discovered.includes('big-moon'));
 }
@@ -2727,7 +2715,7 @@ check('ext: registers viewMinerals', extSrc.includes("'protoplanet.viewMinerals'
 check('ext: registers openShop', extSrc.includes("'protoplanet.openShop'"));
 check('ext: inventory command reads the grouped inventory', extSrc.includes('Logic.mineralInventory'));
 check('ext: shop buys a plain mineral through the logic', extSrc.includes('Logic.buyPlainMineral'));
-check('ext: shop buys a mystery mineral through the logic', extSrc.includes('Logic.buyMysteryMineral'));
+check('ext: shop has no mystery item left', !extSrc.includes("kind: 'mystery'") && !extSrc.includes('Logic.buyMysteryMineral') && !extSrc.includes('SHOP_MYSTERY_PRICE'));
 check('ext: shop spins the wheel through the logic', extSrc.includes('Logic.buyMutationWheel'));
 check('ext: shop family-picks through the logic', extSrc.includes('Logic.buyFamilyPick'));
 check('ext: shop prices read with commas (1,000 not 1000)',
@@ -2743,6 +2731,32 @@ check('ext: detail sheet shows the earn rate', extSrc.includes('Earns</td>'));
 check('ext: Index header counts rings, not system membership',
   extSrc.includes("' on rings'") && !extSrc.includes("' in system'"));
 check('ext: system view model carries the system earn rate', extSrc.includes('systemEarnRate: Logic.systemEarnRate'));
+// Round 15 (Nov 14) — the balance + polish pass: no Mystery
+// Mineral, higher power-item prices, the earnings breakdown, and
+// the package.json description no longer promises rebirth.
+// Round 15 revision (Nov 14, Devon — the separate Stardust tab
+// is gone): the breakdown lives on each planet's detail sheet,
+// the Index tiles show just the rate, the top bar is back to
+// three tabs, and the chip is display-only.
+check('pkg: description no longer promises rebirth', !/rebirth/i.test(pkg.description));
+check('pkg: description mentions Stardust', pkg.description.includes('Stardust'));
+check('ext: no Stardust tab in the solar system',
+  !extSrc.includes('id="tabEarnings"') && !extSrc.includes('<section id="earnings">'));
+check('ext: top bar is exactly Orrery / Index / Mutations',
+  extSrc.includes('id="tabOrrery"') && extSrc.includes('id="tabIndex"') && extSrc.includes('id="tabMutations"'));
+check('ext: Stardust chip is display-only (no click into a tab)',
+  !extSrc.includes("getElementById('stardustChip').addEventListener('click'")
+  && !extSrc.includes("setMode('earnings')") && !extSrc.includes('mode-earnings'));
+check('ext: no standalone earnings renderer', !extSrc.includes('function renderEarnings()'));
+check('ext: each renderable planet carries its breakdown',
+  extSrc.includes('earnBreakdown: Logic.earnBreakdown(record)'));
+check('ext: detail sheet renders the breakdown lines under Earns',
+  extSrc.includes('class="earnline"') && extSrc.includes('planet.earnBreakdown'));
+check('ext: view model no longer carries the system breakdown',
+  !extSrc.includes('earnBreakdown: Logic.systemEarnBreakdown'));
+check('ext: detail sheet still re-renders on state pushes',
+  extSrc.includes('if (detailOpen) renderDetail();'));
+
 // Round 14 (Nov 14) — the Stardust balance is VISIBLE in two places:
 // a pill in the solar-system top corner, and a compact line in the
 // sidebar. The chip updates on every state push, so it ticks up live
@@ -2756,6 +2770,167 @@ check('ext: Stardust chip updates on every state push',
   && extSrc.includes("updateRankLine();\n    updateStardustChip();")
   && extSrc.includes("Math.floor(state.stardust || 0).toLocaleString()"));
 check('ext: Stardust chip hides with the UI', extSrc.includes("body.hide-ui #topbar"));
+
+// 20h. Spending boundaries + economy exploits (round 15).
+{
+  // Exact-balance buys succeed and leave 0; one less fails and
+  // spends nothing, and a failed purchase never adds a mineral.
+  st = freshWithPlanet(42);
+  const minerals0 = st.minerals.length;
+  st.stardust = 50000;
+  eq('spend: exact-balance wheel succeeds', L.buyMutationWheel(st, () => 0.0).ok, true);
+  eq('spend: exact-balance wheel leaves 0', st.stardust, 0);
+  eq('spend: exact-balance wheel adds one mineral', st.minerals.length, minerals0 + 1);
+  st.stardust = 80000;
+  eq('spend: exact-balance family pick succeeds', L.buyFamilyPick(st, 'moon', () => 0.0).ok, true);
+  eq('spend: exact-balance family pick leaves 0', st.stardust, 0);
+  st.stardust = 79999;
+  const beforeFail = st.minerals.length;
+  eq('spend: 79999 cannot family-pick', L.buyFamilyPick(st, 'moon', () => 0.0).ok, false);
+  eq('spend: failed family pick spends nothing', st.stardust, 79999);
+  eq('spend: failed family pick adds nothing', st.minerals.length, beforeFail);
+  // A plain-mineral balance cannot buy power items.
+  st.stardust = 500;
+  eq('spend: 500 cannot spin the wheel', L.buyMutationWheel(st, () => 0.0).ok, false);
+  eq('spend: 500 cannot family-pick', L.buyFamilyPick(st, 'moon', () => 0.0).ok, false);
+  eq('spend: the 500 is untouched', st.stardust, 500);
+  // Zero balance buys nothing.
+  st.stardust = 0;
+  eq('spend: 0 cannot buy a plain mineral', L.buyPlainMineral(st, () => 0.0).ok, false);
+  eq('spend: 0 cannot spin the wheel', L.buyMutationWheel(st, () => 0.0).ok, false);
+  eq('spend: 0 cannot family-pick', L.buyFamilyPick(st, 'moon', () => 0.0).ok, false);
+  // No double-spend: buying twice deducts twice; the second buy
+  // with an empty balance fails instead of going negative.
+  st.stardust = 50000;
+  L.buyMutationWheel(st, () => 0.0);
+  eq('spend: second wheel with 0 balance fails', L.buyMutationWheel(st, () => 0.0).ok, false);
+  eq('spend: balance never goes negative', st.stardust, 0);
+  // Fractional balances (rates like 1.5/char accumulate fractions)
+  // spend fine: 500.5 buys a plain mineral and leaves 0.5.
+  st.stardust = 500.5;
+  eq('spend: fractional balance buys a plain mineral', L.buyPlainMineral(st, () => 0.0).ok, true);
+  eq('spend: fractional remainder kept', st.stardust, 0.5);
+  // Typing nothing earns nothing; a planet-less state earns nothing.
+  st = freshWithPlanet(42);
+  const bal0 = st.stardust;
+  const r0 = L.applyXp(st, 0, undefined, () => 1);
+  eq('spend: typing 0 chars earns 0', r0.stardustEarned, 0);
+  eq('spend: typing 0 chars changes nothing', st.stardust, bal0);
+  const rNeg = L.applyXp(st, -5, undefined, () => 1);
+  eq('spend: negative typing earns 0', rNeg.stardustEarned, 0);
+  eq('spend: negative typing changes nothing', st.stardust, bal0);
+  const empty = L.freshState();
+  eq('spend: a planet-less system earns 0/char', L.systemEarnRate(empty), 0);
+  eq('spend: a planet-less applyXp earns 0', L.applyXp(empty, 100, undefined, () => 1).stardustEarned, 0);
+}
+
+// 20i. Current <-> archived transitions (round 15): placing a
+// planet in the system starts its earnings, removing it stops
+// them, and the current planet always earns.
+{
+  st = freshWithPlanet(42); // seed 42: Glowing Oceans, 1.5/char
+  L.applyXp(st, 2500, undefined, () => 1); // Civ, no events: 18/char
+  L.newPlanet(st, seedSeq(40000)); // starter pays for the birth
+  st.current.mutations = []; // pin the newborn plain (1/char at stage 0)
+  const archived = st.past[0];
+  eq('transition: archived planet is benched at first', L.systemPlanets(st).length, 1);
+  approx('transition: only the current planet earns', L.systemEarnRate(st), 1);
+  const placed = L.placePlanet(st, 0, archived.seed, archived.generation);
+  eq('transition: placing the archived planet works', placed.ok, true);
+  eq('transition: two planets in the system', L.systemPlanets(st).length, 2);
+  approx('transition: placing starts its earnings (1 + 18)', L.systemEarnRate(st), 19);
+  const removed = L.removeFromSystem(st, 0);
+  eq('transition: removing from the ring works', removed.ok, true);
+  eq('transition: one planet left in the system', L.systemPlanets(st).length, 1);
+  approx('transition: removing stops its earnings', L.systemEarnRate(st), 1);
+  // Removing again fails — the ring is already empty.
+  eq('transition: removing from an empty ring fails', L.removeFromSystem(st, 0).ok, false);
+  // Place it again, then grow it: the revived planet keeps its
+  // ring and earns as the current planet (once, not twice).
+  L.placePlanet(st, 0, archived.seed, archived.generation);
+  const grown = L.makeCurrent(st, 0);
+  eq('transition: growing the archived planet works', grown.ok, true);
+  eq('transition: the revived planet keeps its ring',
+    L.slotIndexForPlanet(st, archived.seed, archived.generation), 0);
+  approx('transition: revived planet earns once as current + ring', L.systemEarnRate(st), 18);
+  eq('transition: the old current is benched now', L.systemPlanets(st).length, 1);
+}
+
+// 20j. applyXp order (round 15): the stage-up journal event rolls
+// FIRST, before the Stardust rate is read — so the character that
+// triggers a discovery earns at the new rate INCLUDING the new
+// event's bonus, not the pre-event rate.
+{
+  st = freshWithPlanet(42); // Glowing Oceans, stage 0, 1.5/char
+  L.applyXp(st, 99, undefined, () => 1); // 99 XP, no event, still stage 0
+  eq('order: 99 chars at 1.5/char earns 148.5', st.stardust, 148.5);
+  // The next character stages up to Accretion AND triggers an
+  // event: rng 0.0 rolls the event (under 25%), then 0.0 picks the
+  // first fresh event (Meteor Impact, +0.15).
+  let calls = 0;
+  const eventRng = () => { calls++; return calls <= 2 ? 0.0 : 1; };
+  const res = L.applyXp(st, 1, undefined, eventRng);
+  eq('order: the stage-up character triggered an event', res.event !== null, true);
+  eq('order: the event is Meteor Impact', res.event.title, 'Meteor Impact');
+  // New rate: Accretion 1.5 x 1.5 (one mutation) x 1.15 (event) =
+  // 2.5875 — the discovery character earns at the POST-event rate
+  // (the old order paid 2.25, the pre-event rate).
+  approx('order: the discovery character earns at the post-event rate', res.stardustEarned, 2.5875);
+  check('order: not the old pre-event payout', Math.abs(res.stardustEarned - 2.25) > 0.01);
+  eq('order: the event is in the journal',
+    st.current.journal.some((e) => e.kind === 'event' && e.title === 'Meteor Impact'), true);
+  // The NEXT character earns at the post-event rate too.
+  const res2 = L.applyXp(st, 10, undefined, () => 1);
+  approx('order: later characters keep the event bonus', res2.stardustEarned, 25.875);
+}
+
+// 20k. Earnings breakdown (round 15): per-planet factor lines that
+// multiply to the rate, and the system total.
+{
+  // A plain planet is just its stage base.
+  const plain = L.earnBreakdown(ratePlanet(100, [], []));
+  eq('breakdown: plain Accretion rate', plain.rate, 1.5);
+  eq('breakdown: plain Accretion has one line', plain.lines.length, 1);
+  eq('breakdown: plain line label', plain.lines[0].label, 'Accretion base');
+  eq('breakdown: plain line value', plain.lines[0].value, '1.5');
+  // The worked example: Civ Moon Lord = 12 x 3.375 x 2 = 81.
+  const moonLord = L.earnBreakdown(ratePlanet(2200, ['green-moon', 'blood-moon', 'big-moon'], []));
+  eq('breakdown: Moon Lord rate', moonLord.rate, 81);
+  eq('breakdown: Moon Lord has three lines', moonLord.lines.length, 3);
+  eq('breakdown: Moon Lord base line', JSON.stringify(moonLord.lines[0]), JSON.stringify({ label: 'Civilization base', value: '12' }));
+  eq('breakdown: Moon Lord mutations line', JSON.stringify(moonLord.lines[1]), JSON.stringify({ label: '3 mutations', value: '×3.375' }));
+  eq('breakdown: Moon Lord combo line', JSON.stringify(moonLord.lines[2]), JSON.stringify({ label: 'Moon family combo', value: '×2' }));
+  // With journal events: 81 x 1.8 = 145.8, and the events are named.
+  const withEvents = L.earnBreakdown(ratePlanet(2200, ['green-moon', 'blood-moon', 'big-moon'], ['Crystal Bloom', 'Aurora']));
+  approx('breakdown: Moon Lord + events rate', withEvents.rate, 145.8);
+  eq('breakdown: Moon Lord + events has four lines', withEvents.lines.length, 4);
+  eq('breakdown: events line names the events',
+    withEvents.lines[2].label, 'Journal events (Crystal Bloom, Aurora)');
+  eq('breakdown: events line value', withEvents.lines[2].value, '×1.8');
+  // The lines multiply to the rate.
+  const mult = withEvents.lines.slice(1).reduce((m, l) => m * parseFloat(l.value.slice(1)), 1);
+  approx('breakdown: lines multiply to the rate',
+    parseFloat(withEvents.lines[0].value) * mult, withEvents.rate);
+  // The system total sums the planets.
+  st = freshWithPlanet(42); // 1.5/char
+  const bd0 = L.systemEarnBreakdown(st);
+  approx('breakdown: one-planet system total', bd0.total, 1.5);
+  eq('breakdown: one-planet system has one entry', bd0.planets.length, 1);
+  eq('breakdown: system total text', bd0.totalText, '1.5');
+  // Two-planet system: newborn (1) + a Civ on a ring (18) = 19.
+  L.applyXp(st, 2500, undefined, () => 1); // current is now Civ, 18/char
+  L.newPlanet(st, seedSeq(41000)); // starter pays for the birth
+  st.current.mutations = []; // pin the newborn plain
+  L.placePlanet(st, 0, st.past[0].seed, st.past[0].generation);
+  const bd = L.systemEarnBreakdown(st);
+  approx('breakdown: two-planet system total', bd.total, 19);
+  eq('breakdown: two-planet system has two entries', bd.planets.length, 2);
+  eq('breakdown: system total text', bd.totalText, '19');
+  const civCard = bd.planets.find((p) => p.rate === 18);
+  check('breakdown: the Civ card exists', !!civCard);
+  eq('breakdown: the Civ card shows its mutation line',
+    civCard.lines.some((l) => l.label === '1 mutation' && l.value === '×1.5'), true);
+}
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) {

@@ -390,23 +390,21 @@ class ProtoplanetApp {
   }
 
   // Round 14 — the shop: spend Stardust on a plain mineral or one
-  // of three mutation gambles. Every purchase adds a MINERAL, never
+  // of two mutation gambles. Every purchase adds a MINERAL, never
   // a direct mutation — the player still applies it with the 50%
   // coin flip. Insufficient funds = a plain message, no purchase.
-  // The Family Pick asks for the family in a second pick.
+  // The Family Pick asks for the family in a second pick. The
+  // Mystery Mineral is gone (round 15 — Devon): at 5% it was a
+  // lottery ticket for a plain mineral you could just buy for half
+  // the price, so the shop is three items now.
   async openShop() {
     const bal = () => Math.floor(this.state.stardust || 0).toLocaleString();
-    const price = (n) => n.toLocaleString(); // 1,000 reads better than 1000
+    const price = (n) => n.toLocaleString(); // 50,000 reads better than 50000
     const items = [
       {
         label: `Plain mineral — ${price(Logic.CONFIG.SHOP_PLAIN_PRICE)} ✦`,
         description: 'Birthing a planet costs 1 plain mineral',
         kind: 'plain',
-      },
-      {
-        label: `Mystery Mineral — ${price(Logic.CONFIG.SHOP_MYSTERY_PRICE)} ✦`,
-        description: '5% chance of a random mutation mineral, 95% a plain one',
-        kind: 'mystery',
       },
       {
         label: `Mutation Wheel — ${price(Logic.CONFIG.SHOP_WHEEL_PRICE)} ✦`,
@@ -442,12 +440,6 @@ class ProtoplanetApp {
       const res = Logic.buyPlainMineral(this.state);
       if (!res.ok) { this.notify(`Not enough Stardust — a plain mineral costs ${price(Logic.CONFIG.SHOP_PLAIN_PRICE)} ✦.`); return; }
       this.notify(`You bought a ${Logic.mineralName(res.mineral)}!`);
-    } else if (pick.kind === 'mystery') {
-      const res = Logic.buyMysteryMineral(this.state);
-      if (!res.ok) { this.notify(`Not enough Stardust — a Mystery Mineral costs ${price(Logic.CONFIG.SHOP_MYSTERY_PRICE)} ✦.`); return; }
-      this.notify(res.isMutation
-        ? `Mystery Mineral: a ${Logic.mineralName(res.mineral)}! Spend it from 'Protoplanet: Apply a mineral to your planet'.`
-        : `Mystery Mineral: just a ${Logic.mineralName(res.mineral)} this time.`);
     } else if (pick.kind === 'wheel') {
       const res = Logic.buyMutationWheel(this.state);
       if (!res.ok) { this.notify(`Not enough Stardust — the Mutation Wheel costs ${price(Logic.CONFIG.SHOP_WHEEL_PRICE)} ✦.`); return; }
@@ -783,8 +775,13 @@ class ProtoplanetApp {
       stageName: Planet.STAGES[dStage].name,
       // Round 14: Stardust per character this planet earns, so the
       // Index and detail sheet can compare planets at a glance.
+      // Round 15 revision (Devon, Nov 14 — the separate Stardust
+      // tab is gone): the detail sheet shows the FULL breakdown
+      // (stage base, mutations, journal, family combo), so every
+      // renderable planet carries its own breakdown lines.
       earnRate: Logic.earnRate(record),
       earnRateText: Logic.formatRate(Logic.earnRate(record)),
+      earnBreakdown: Logic.earnBreakdown(record),
       planet: traits,
     };
   }
@@ -1656,10 +1653,14 @@ class ProtoplanetApp {
   .tab.active { color: #e8b64c; border-bottom-color: #e8b64c; }
   /* Round 14 — the Stardust balance, top-right: a small pill with a
      star + the number, like other games' currency display. Amber on
-     near-black so it reads against the orrery. */
+     near-black so it reads against the orrery. Display-only (round
+     15 revision, Devon Nov 14 — the separate Stardust tab is gone,
+     so the chip is just the balance; the breakdown lives on each
+     planet's detail sheet). */
   #stardustChip { display: inline-flex; align-items: center; gap: 6px;
     padding: 4px 10px; border: 1px solid #e8b64c; border-radius: 999px;
-    color: #e8b64c; font-size: 12px; white-space: nowrap; }
+    color: #e8b64c; font-size: 12px; white-space: nowrap;
+    background: transparent; }
   /* The orrery takes up the whole screen below the top line — the
      panel never scrolls to a second section anymore. The Index is
      its own mode, reached from the tabs above. */
@@ -1728,6 +1729,11 @@ class ProtoplanetApp {
   #detail table { font-size: 12px; border-collapse: collapse; margin: 0 0 12px; }
   #detail td { padding: 2px 10px 2px 0; vertical-align: top; }
   #detail td.k { opacity: .6; white-space: nowrap; }
+  /* Round 15 revision — the earnings breakdown lines sit directly
+     under the Earns row in the same table, indented so they read as
+     the factors that multiply to the total. */
+  #detail tr.earnline td.k { padding-left: 14px; }
+  #detail tr.earnline td:last-child { color: #ffd75f; }
   #detail .actions { display: flex; gap: 6px; flex-wrap: wrap; }
   #detail .note { font-size: 11px; opacity: .65; margin: 8px 0 0; line-height: 1.5; }
   /* Round 11 — the Discovery Journal: the planet's own history on
@@ -1948,11 +1954,14 @@ class ProtoplanetApp {
     }
     return +Math.min(cellW / _advRatio, cellH).toFixed(2);
   }
-  // --- modes: Orrery <-> Index <-> Mutations -------------------------------
+  // --- modes: Orrery <-> Index <-> Mutations ------------------------------
   // Three full screens, not one crowded one (Devon, Nov 12 — the
   // research's strongest pattern): each mode gets 100% of the panel,
   // so neither the orrery nor the collection has to shrink for the
   // other. The Mutations tab (round 10) is the collection view.
+  // (Round 15 revision, Devon Nov 14: a 4th Stardust tab was built
+  // and rejected — the earnings breakdown belongs on each planet's
+  // detail sheet, not on a separate screen.)
   function setMode(m) {
     if (m === mode) return;
     mode = m;
@@ -2605,6 +2614,19 @@ class ProtoplanetApp {
       }
       journalHtml += '</div>';
     }
+    // Round 15 revision (Devon, Nov 14 — the separate Stardust tab
+    // is gone): the full earnings breakdown lives HERE, under the
+    // Earns row — one indented line per factor that applies (stage
+    // base, mutations, journal events, family combos). The lines
+    // multiply to the total, exact to 3 decimals. A plain planet
+    // shows just its stage base; nothing shows an empty line.
+    var earnLines = '';
+    var bd = planet.earnBreakdown;
+    if (bd && bd.lines) {
+      for (var ei = 0; ei < bd.lines.length; ei++) {
+        earnLines += '<tr class="earnline"><td class="k">' + esc(bd.lines[ei].label) + '</td><td>' + esc(bd.lines[ei].value) + '</td></tr>';
+      }
+    }
     var html = '<button id="detailClose" class="ghost" data-action="close" title="Close">&times;</button>'
       + '<h2>' + esc(planet.name) + '</h2>'
       + '<p class="sub">' + esc(planet.summary) + ' &middot; Seed ' + planet.seed + '</p>'
@@ -2614,6 +2636,7 @@ class ProtoplanetApp {
       + '<tr><td class="k">Terrain</td><td>' + esc(planet.terrainLabel) + '</td></tr>'
       + '<tr><td class="k">Stage</td><td>' + esc(planet.stageName) + (planet.kind === 'current' ? ' &middot; growing now' : '') + '</td></tr>'
       + '<tr><td class="k">Earns</td><td>' + planet.earnRateText + ' ✦ per character' + (planet.kind === 'current' || ring >= 0 ? ' · in your system' : ' · benched — place it in the system to earn') + '</td></tr>'
+      + earnLines
       + '<tr><td class="k">Grown from</td><td>' + planet.chars + ' characters</td></tr>'
       + '<tr><td class="k">Generation</td><td>Gen ' + planet.generation + '</td></tr>'
       + (planet.parents ? '<tr><td class="k">Parents</td><td>' + esc(planet.parents.map(function (p) { return p.name || ('Seed ' + p.seed); }).join(' + ')) + '</td></tr>' : '')

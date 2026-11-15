@@ -171,15 +171,20 @@ const CONFIG = {
   // salvaged at stage 3+ (Crust, 600 XP) — younger, only a plain
   // mineral, and the mutation minerals are lost.
   BIRTH_MIN_STAGE_FOR_MUTATION_MINERALS: 3,
-  // Shop prices (Stardust). The gamble gives a MINERAL, never a
-  // direct mutation — the player still applies it with the 50% coin
-  // flip. Mystery Mineral: this chance of a random mutation mineral,
-  // otherwise a plain one.
+  // Shop prices (Stardust, flat — Devon, Nov 14: no diminishing
+  // returns, too confusing; keep it simple, just higher prices).
+  // The gamble gives a MINERAL, never a direct mutation — the
+  // player still applies it with the 50% coin flip. The plain
+  // mineral STAYS 500 (cheap fuel): a new player must be able to
+  // afford their first planet — never gate core gameplay behind
+  // currency. The power items are expensive instead: a Moon Lord
+  // at 81/char needs ~617 chars for a Wheel (not 62), a plain Civ
+  // at 12/char needs ~4,167. The Mystery Mineral is gone (round
+  // 15): at 5% it was a lottery ticket for a plain mineral you
+  // could just buy for half the price — Devon removed it.
   SHOP_PLAIN_PRICE: 500,
-  SHOP_MYSTERY_PRICE: 1000,
-  SHOP_MYSTERY_MUTATION_CHANCE: 0.05,
-  SHOP_WHEEL_PRICE: 5000,
-  SHOP_FAMILY_PICK_PRICE: 8000,
+  SHOP_WHEEL_PRICE: 50000,
+  SHOP_FAMILY_PICK_PRICE: 80000,
 };
 
 // ---------------------------------------------------------------------------
@@ -331,23 +336,32 @@ function eventMultiplier(planet) {
   return 1 + bonus;
 }
 
-// The family-combo multiplier: group the planet's mutations by
-// family (a mutation's first tag). 2 from one family = x1.5, 3+ =
-// x2, multiplied across families — so a Moon Lord + Ring King on
-// one planet pays x2 x x2 = x4. One mutation in a family pays
-// nothing extra (the 1.5x-per-mutation already covers it).
-function familyComboMultiplier(planet) {
+// The family-combo details: one entry per family with 2+
+// mutations on the planet (2 = x1.5, 3+ = x2). The multiplier
+// below is the product of these — the breakdown UI lists them.
+function familyComboDetails(planet) {
   const byFamily = {};
   for (const id of (planet.mutations || [])) {
     const def = Planet.mutationDef(id);
     const fam = (def && def.tags && def.tags[0]) || 'weird';
     byFamily[fam] = (byFamily[fam] || 0) + 1;
   }
-  let mult = 1;
-  for (const n of Object.values(byFamily)) {
-    if (n >= 3) mult *= CONFIG.FAMILY_COMBO_3;
-    else if (n === 2) mult *= CONFIG.FAMILY_COMBO_2;
+  const out = [];
+  for (const [fam, n] of Object.entries(byFamily)) {
+    if (n >= 3) out.push({ family: fam, count: n, mult: CONFIG.FAMILY_COMBO_3 });
+    else if (n === 2) out.push({ family: fam, count: n, mult: CONFIG.FAMILY_COMBO_2 });
   }
+  return out;
+}
+
+// The family-combo multiplier: group the planet's mutations by
+// family (a mutation's first tag). 2 from one family = x1.5, 3+ =
+// x2, multiplied across families — so a Moon Lord + Ring King on
+// one planet pays x2 x x2 = x4. One mutation in a family pays
+// nothing extra (the 1.5x-per-mutation already covers it).
+function familyComboMultiplier(planet) {
+  let mult = 1;
+  for (const d of familyComboDetails(planet)) mult *= d.mult;
   return mult;
 }
 
@@ -394,6 +408,61 @@ function systemEarnRate(state) {
   let total = 0;
   for (const p of systemPlanets(state)) total += earnRate(p);
   return total;
+}
+
+// --- Earnings breakdown (round 15) ---------------------------------------
+// WHY a planet earns what it earns, line by line, so the economy
+// stays understandable. Only lines that apply are shown (a plain
+// planet is just its stage base). The lines multiply to the rate:
+// e.g. a Civ Moon Lord is 12 x 3.375 x 2 = 81. Multipliers print
+// exact (up to 3 decimals — 3.375, not 3.4): formatRate rounds to
+// one decimal, which would make the lines not multiply to the
+// total and confuse the player doing the math.
+function formatMult(m) {
+  const v = Math.round(m * 1000) / 1000;
+  return Number.isInteger(v) ? String(v) : v.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+// The breakdown for one planet: its rate plus one line per factor
+// (stage base, mutations, journal events, family combos).
+function earnBreakdown(planet) {
+  if (!planet) return null;
+  const stage = stageForXp(planetXp(planet));
+  const stageName = (Planet.STAGES[stage] || Planet.STAGES[0]).name;
+  const base = CONFIG.STAGE_EARN_BASE[stage] || 1;
+  const n = (planet.mutations || []).length;
+  const mutationMult = Math.pow(CONFIG.MUTATION_EARN_MULT, n);
+  const eventMult = eventMultiplier(planet);
+  const eventTitles = planetJournal(planet)
+    .filter((e) => e.kind === 'event' && e.title && (CONFIG.EVENT_EARN_BONUS[e.title] || 0) > 0)
+    .map((e) => e.title);
+  const combos = familyComboDetails(planet);
+  const familyMult = combos.reduce((m, d) => m * d.mult, 1);
+  const rate = base * mutationMult * eventMult * familyMult;
+  const lines = [{ label: `${stageName} base`, value: formatRate(base) }];
+  if (n > 0) lines.push({ label: `${n} mutation${n === 1 ? '' : 's'}`, value: `×${formatMult(mutationMult)}` });
+  if (eventMult > 1) lines.push({ label: `Journal events (${eventTitles.join(', ')})`, value: `×${formatMult(eventMult)}` });
+  for (const d of combos) {
+    lines.push({
+      label: `${d.family.charAt(0).toUpperCase() + d.family.slice(1)} family combo`,
+      value: `×${formatMult(d.mult)}`,
+    });
+  }
+  return {
+    name: nameForPlanet(planet),
+    rate, rateText: formatRate(rate),
+    stageName, base, mutationCount: n, mutationMult,
+    eventMult, eventTitles, familyCombos: combos, familyMult,
+    lines,
+  };
+}
+
+// The whole system's breakdown: the total plus one breakdown per
+// earning planet, in system order (current planet first).
+function systemEarnBreakdown(state) {
+  const planets = systemPlanets(state).map((p) => earnBreakdown(p)).filter(Boolean);
+  const total = planets.reduce((t, b) => t + b.rate, 0);
+  return { total, totalText: formatRate(total), planets };
 }
 
 // ---------------------------------------------------------------------------
@@ -881,23 +950,7 @@ function buyPlainMineral(state, rng) {
   return { ok: true, mineral: m };
 }
 
-// Mystery Mineral (1,000 ✦): 5% chance of a random mutation
-// mineral, 95% a plain one. A lottery ticket (Devon, Nov 14 —
-// lowered from 25%: the gamble should feel like a long shot, not
-// a coin flip).
-function buyMysteryMineral(state, rng) {
-  const roll = typeof rng === 'function' ? rng : Math.random;
-  if ((state.stardust || 0) < CONFIG.SHOP_MYSTERY_PRICE) return { ok: false, reason: 'not enough stardust' };
-  state.stardust -= CONFIG.SHOP_MYSTERY_PRICE;
-  const spec = roll() < CONFIG.SHOP_MYSTERY_MUTATION_CHANCE
-    ? randomMutationMineralSpec(roll)
-    : { family: randomFamily(roll), mutation: null, source: 'shop' };
-  const m = makeMineral(state, spec);
-  state.minerals.push(m);
-  return { ok: true, mineral: m, isMutation: !!m.mutation };
-}
-
-// Mutation Wheel (5,000 ✦): guaranteed a random mutation mineral —
+// Mutation Wheel (50,000 ✦): guaranteed a random mutation mineral —
 // which of the 13 is random.
 function buyMutationWheel(state, rng) {
   const roll = typeof rng === 'function' ? rng : Math.random;
@@ -908,7 +961,7 @@ function buyMutationWheel(state, rng) {
   return { ok: true, mineral: m };
 }
 
-// Family Pick (8,000 ✦): pick a family, get a random mutation
+// Family Pick (80,000 ✦): pick a family, get a random mutation
 // mineral from inside it — the way to hunt a specific set (Moon
 // Lord, Ring King) on purpose instead of hoping.
 function buyFamilyPick(state, family, rng) {
@@ -1418,18 +1471,15 @@ function applyXp(state, n, nextSeed, rng) {
   state.current.xp += n;
   state.current.chars += n;
   const after = stageForXp(state.current.xp);
-  // Round 14 — Stardust: every typed character pays the system's
-  // earn rate. The rate is read AFTER the XP lands, so a character
-  // that stages the planet up already earns at the new stage's rate.
-  // (A multi-char change uses the post-change rate for all of it —
-  // a few Stardust of generosity on a stage-up, not worth splitting.)
-  if (typeof state.stardust !== 'number' || state.stardust < 0) state.stardust = 0;
-  const rate = systemEarnRate(state);
-  const stardustEarned = n * rate;
-  state.stardust += stardustEarned;
   // Round 11 — the Discovery Journal: a stage-up is a journal entry,
   // and a stage-up is also when a rare story event can happen
-  // (journal-only, no visual change).
+  // (journal-only, no visual change). This runs FIRST, before the
+  // Stardust below — deliberate (round 15): a character that stages
+  // the planet up AND triggers a discovery earns at the new stage's
+  // rate INCLUDING the new event's bonus, not the pre-event rate.
+  // The old order (rate first, event after) made the discovery
+  // character pay out one character late — technically fine, but
+  // the discovery should feel rewarding on the spot.
   let event = null;
   if (before !== after) {
     addJournal(state.current, 'stage', `Reached ${Planet.STAGES[after].name}`);
@@ -1439,6 +1489,17 @@ function applyXp(state, n, nextSeed, rng) {
       event = { title: ev.title, text: ev.text };
     }
   }
+  // Round 14 — Stardust: every typed character pays the system's
+  // earn rate. The rate is read AFTER the XP lands and AFTER the
+  // journal event above, so a character that stages the planet up
+  // already earns at the new stage's rate, and a character that
+  // triggers a discovery earns with the new event's bonus included.
+  // (A multi-char change uses the post-change rate for all of it —
+  // a few Stardust of generosity on a stage-up, not worth splitting.)
+  if (typeof state.stardust !== 'number' || state.stardust < 0) state.stardust = 0;
+  const rate = systemEarnRate(state);
+  const stardustEarned = n * rate;
+  state.stardust += stardustEarned;
   return {
     stageChanged: before !== after,
     rebirthed: false,
@@ -1771,10 +1832,11 @@ module.exports = {
   prestigeEligible, eligiblePrestigeParents, inheritanceBoosts,
   lineageRecord, prestige,
   planetXp, planetJournal, formatRate, earnRate, eventMultiplier,
-  familyComboMultiplier, systemPlanets, systemEarnRate,
+  familyComboMultiplier, familyComboDetails, earnBreakdown, systemEarnBreakdown,
+  systemPlanets, systemEarnRate,
   archiveHasRoom, plainMineralIndex, payBirthCost, needPlainMineralMessage,
   salvageLostMutations, salvageLostMessage,
-  buyPlainMineral, buyMysteryMineral, buyMutationWheel, buyFamilyPick,
+  buyPlainMineral, buyMutationWheel, buyFamilyPick,
   mineralInventory,
   shareCardFilename, shareCardMarkdown, SHARE_REPO_URL,
   serializeState, deserializeState,
