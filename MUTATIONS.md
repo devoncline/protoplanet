@@ -74,40 +74,70 @@ model) was too many. Retune after playing. Measured over 10,000 seeds
 (Nov 11, after the City Lights cut): 9.0% any mutation, 0.46% two
 mutations, each mutation 0.63–0.85%. One knob: `CONFIG.MUTATION_CHANCE` (0.007).
 
-## Minerals (BUILT — step 2, Nov 11; reworked round 10, Nov 12)
+## Minerals (BUILT — step 2, Nov 11; reworked round 10, Nov 12; overhauled Nov 15)
 
-The player starts with one free mineral (crystal — glow family),
-granted on first run. Inventory lives in petLogic state
-(`state.minerals`, persisted in globalState); old saves get the
-starter mineral as a one-time gift on load.
+There is NO starter mineral. A new player starts with one free
+planet, zero minerals, zero Stardust. (Devon, Nov 15: the new player
+still has the normal chance of getting a mutation on birth, so no
+starter is needed. This reverses the Nov 14 50/50 moon-or-sky starter
+decision — that decision is dead.) Old saves: an unspent starter
+Crystal becomes one Birth Mineral on migration; all other progress
+is preserved. Inventory lives in petLogic state
+(`state.minerals`, persisted in globalState).
+
+### The two kinds (Nov 15 overhaul — the only kinds)
+
+- **Birth Mineral** — pays for exactly 1 birth, nothing else. No
+  family, no mutation, no mutation function — enforced in logic,
+  not just in the UI. It can never be applied to a planet.
+- **Mutation Mineral** — holds exactly ONE named mutation. Spend
+  it to try to put that mutation on a planet you love (50% apply
+  flip, consumed either way). It can never pay for a birth.
+
+### Odds
+
+| Source | Odds |
+|---|---|
+| Natural birth, per mutation | 0.7% each (`CONFIG.MUTATION_CHANCE`), ~8.7% any mutation, ~0.36% two or more; multiples possible, no cap |
+| Shop — Birth Mineral | 500 ✦, exactly 1 birth, no surprise |
+| Shop — Random Mutation Mineral | 50,000 ✦, 1 of 13, each ~7.69% |
+| Shop — Family Mutation Mineral | 80,000 ✦, Moon/Rings/Glow/Sky only (Storm and Weird removed): Moon 1-in-3 each (Green Moon, Blood Moon, Big Moon), Rings 1-in-3 each (Crossed Rings, Colored Rings, Double Rings), Glow 1-in-3 each (Crystal Crust, Glowing Oceans, Sparkling Surface), Sky 1-in-2 each (Comet, Meteor Shower) |
+| Apply flip | 50% success / 50% failure, mineral consumed either way |
+| Prestige inheritance | 50% if one parent carries it, 75% if both; unheld mutations still roll at the base 0.7% |
+| Salvage — below Crust (600 XP) | 1 Birth Mineral only; the planet's mutation minerals are lost |
+| Salvage — Crust (600 XP) and up | 1 Birth Mineral + 1 Mutation Mineral per mutation the planet carries |
+| Discovery | Only mutations seen on a planet count; buying a mineral never discovers |
 
 **Apply (round 10 — the mineral IS the mutation; feeding is gone):**
 Devon, Nov 12: feeding a mineral to tilt the NEXT planet's birth roll
 was "confusing and clunky". Replaced. Now you spend a mineral on the
 planet you already love — Command Palette: "Protoplanet: Apply a
-mineral to your planet". The pick list only shows minerals that CAN
-go on this planet (one already on it, or a family it already owns
-whole, is not offered). Then a coin flip (`CONFIG.MUTATE_CHANCE`,
-0.5): it takes hold, or it fizzles and the mineral is gone either
-way. A mutation mineral tries THAT mutation; a family mineral tries
-a random mutation in its family the planet doesn't already have.
-Success bakes the exact same visuals a planet born with that
-mutation would have (same shared code, seeded per planet +
-mutation, so it always looks the same way). The sidebar flashes
-gold on the new mutation label, and the toast names it
-("✦ Green Moon took hold on GJ-1281e!"). A blocked mineral is
-never consumed. No preview of the mutation before it lands — the
-surprise is the fun (Devon: he once glitched a planet randomly,
-thought it was broken, realized it was mutated — "felt awesome").
+mineral to your planet". The pick list only shows Mutation minerals
+whose mutation this planet doesn't already have (a Birth mineral
+can never be applied — it pays for births). Then a 50% flip
+(`CONFIG.MUTATE_CHANCE`, 0.5): it takes hold, or it fizzles and the
+mineral is gone either way. A Mutation mineral tries THAT mutation
+and only that mutation — there is no family branch anymore. Success
+bakes the exact same visuals a planet born with that mutation would
+have (same shared code, seeded per planet + mutation, so it always
+looks the same way). The sidebar flashes gold on the new mutation
+label, and the toast names it ("✦ Green Moon took hold on
+GJ-1281e!"). A blocked mineral is never consumed. No preview of the
+mutation before it lands — the surprise is the fun (Devon: he once
+glitched a planet randomly, thought it was broken, realized it was
+mutated — "felt awesome").
 
 **Seed protection:** a shared seed hatches the SAME base planet
 WITHOUT mutations (seed hatch strips them). Nobody gets your rare
 mutated planet just by pasting its seed — mutations stay unique to
-the original. A mutation mineral only comes from destroying a
-planet that had the mutation.
+the original. A Mutation mineral comes from salvaging a planet that
+had the mutation (at Crust or above) or from the shop — never from
+a birth.
 
 Mineral families: moon / rings / glow / storm / sky / weird (each
-mutation carries tags for the mapping).
+mutation carries tags for the mapping). The Family Mutation Mineral
+in the shop only offers Moon, Rings, Glow, and Sky — Storm and
+Weird were removed (Nov 15 overhaul).
 
 ## Sets (BUILT — round 10, Nov 12)
 
@@ -128,7 +158,10 @@ found is recorded forever (`state.discovered`) — even after the
 planet is destroyed. Found entries are gold with ✦, the name, the
 family, the odds ("about 1 in 143 births"), and which planets carry
 it now ("On: GJ-1281e" — or "Found — but its planet is gone.").
-Missing entries are dimmed with ? and the same odds. The sets row
+Missing entries are dimmed with ? and the same odds. The header
+also carries the any-mutation line: "About 1 in 10 planets is born
+with a mutation". Only mutations seen on a planet count as
+discovered — buying a mineral never discovers. The sets row
 on top names each set, what it needs, and who holds it
 ("Held by GJ-1281e" / "Not earned yet."). The Index itself can be
 filtered (All / Mutated only / one mutation) and sorted by "Most
@@ -159,14 +192,15 @@ minerals and roll again.
 - **Salvage an ARCHIVED planet:** destroyed for minerals, no new
   planet.
 
-Yields: one mineral per mutation the planet carries (each carrying
-that mutation — the mineral remembers where it came from) **plus
-one extra plain mineral** if the planet was mutated at all (round
-10 perk — a mutated planet is worth more); a plain planet yields
-one plain mineral of a family derived from its own seed. The
-mineral count shows in the status bar (◆N) and the pet window's
-meta line. A destroyed planet's mutations stay discovered in the
-Mutation Index.
+Yields (Nov 15 overhaul): every salvage yields **1 Birth Mineral**.
+A planet at Crust (600 XP) or above yields **1 Mutation Mineral per
+mutation it carries** on top of that Birth Mineral. A planet below
+Crust yields the 1 Birth Mineral only — its mutation minerals are
+lost, and the game warns you about exactly what would be lost
+before you confirm. A plain planet yields 1 Birth Mineral either
+way. The mineral count shows in the status bar (◆N) and the pet
+window's meta line. A destroyed planet's mutations stay discovered
+in the Mutation Index.
 
 **System Rank weight (round 10):** a double-rings planet counts
 double toward System Rank (finished planets / 3) — a double ring
@@ -181,7 +215,8 @@ new seed starting as dust, whose birth roll is tilted by the
 parents' mutations — each parent mutation passes at a real chance
 (50% if one parent has it, 75% if both — Devon's call, Nov 12:
 inheritance is genetics, not a lottery ticket); mutations neither
-parent has still roll at the base chance. The offspring becomes the
+parent has still roll at the base chance. Prestiging costs 1 Birth
+mineral, stated before you confirm. The offspring becomes the
 new current planet; the old current planet is archived. Command Palette: "Prestige two
 planets" (two-step pick, then confirm).
 
@@ -215,12 +250,16 @@ child's record carries the lineage and the family tree stays visible
 even though the parent planets are gone. Merge is realistic, lineage
 keeps the memory.
 
-## Economy (PARKED — Phase 2, Devon Nov 12)
+## Economy (SHIPPED — rounds 14–15, overhauled Nov 15)
 
-Once a planet reaches Civilization it has an economy, and a heavily
-mutated planet earns more — a reason to farm mutations beyond
-showing off. Held off until the mutation rework above is in place
-and feels good. Do not build until Devon says so.
+Stardust is earned per character typed, never passively over time,
+from every planet in the active system. The shop sells exactly
+three items with exact odds on the label: Birth Mineral 500 ✦,
+Random Mutation Mineral 50,000 ✦ (1 of 13, ~7.69% each), Family
+Mutation Mineral 80,000 ✦ (Moon/Rings/Glow/Sky only). See the odds
+table under Minerals. A Birth Mineral pays for exactly one birth
+and nothing else; a Mutation Mineral tries exactly one named
+mutation at a stated 50%.
 
 ## Second planet (flag for Devon)
 
@@ -234,8 +273,9 @@ not invent one on your own.
 
 ## Onboarding (step 3 — NOT built yet)
 
-First run: a curated pick — pick 1 of 3 starter minerals, each with a
-one-line flavor hint of what it could become. A fun, limited, hook-y
-first choice, NOT a shop menu. The starter mineral is your first
-mutate attempt. Until onboarding lands, the starter mineral
-(crystal) is granted automatically on first run.
+First run: the first planet is free — no starter mineral, no
+starter choice. The intro teaches mutations with one line
+(Devon, Nov 15): "Every planet has a small chance of being born
+with a rare mutation — about 1 in 10." No salvage or shop
+explanation in onboarding; those are introduced at first
+encounter with the relevant action.

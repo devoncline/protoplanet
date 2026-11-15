@@ -259,6 +259,8 @@ check('starter: every starter terrain exists', L.CONFIG.STARTER_TERRAINS.every((
 st = freshWithPlanet(42);
 L.applyXp(st, 500, seedSeq());
 const beforeSeed = st.current.seed;
+// Round 16 — a birth after the first costs 1 Birth mineral; fund it.
+L.addMinerals(st, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
 const np = L.newPlanet(st, seedSeq(777));
 eq('new planet: old one archived', st.past.length, 1);
 eq('new planet: archived chars 500', st.past[0].chars, 500);
@@ -278,7 +280,7 @@ st = freshWithPlanet(1234);
 L.applyXp(st, 250, seedSeq());
 const mock = new MockState();
 mock.update('protoplanet.state', L.serializeState(st));
-const loaded = L.deserializeState(mock.get('protoplanet.state', ''));
+const loaded = L.deserializeState(mock.get('protoplanet.state', '')).state;
 eq('persist: seed survives', loaded.current.seed, 1234);
 eq('persist: xp survives', loaded.current.xp, 250);
 eq('persist: chars survive', loaded.current.chars, 250);
@@ -286,13 +288,31 @@ eq('persist: generation survives', loaded.generation, 1);
 eq('persist: starterDone survives', loaded.starterDone, true);
 eq('persist: terrain survives', loaded.current.terrain, st.current.terrain);
 eq('persist: past survives', loaded.past.length, st.past.length);
+eq('persist: version stamps 2 on serialize', JSON.parse(L.serializeState(st)).version, 2);
 
-// --- 10. Bad stored data falls back to fresh -----------------------------------
-eq('persist: garbage JSON -> fresh state', L.deserializeState('not json {').current, null);
-eq('persist: wrong version -> fresh state', L.deserializeState('{"version":99}').current, null);
-eq('persist: empty string -> fresh state', L.deserializeState('').starterDone, false);
-const badCurrent = L.deserializeState('{"version":1,"current":{"seed":"nope"},"past":[],"generation":1,"starterDone":true}');
-eq('persist: malformed current -> fresh state', badCurrent.current, null);
+// --- 10. Bad stored data: fresh state + backup, never a silent reset ------
+// deserializeState returns { state, backupJson, notice, migrated }:
+// empty input is a brand-new install (fresh, no backup, no notice);
+// corrupt JSON / unknown version / malformed planet is "fresh because
+// backup-needed" (raw JSON handed back for backup + a one-time
+// notice). The caller must stash backupJson under
+// protoplanet.state.backup.v1 BEFORE any save overwrites it.
+eq('persist: empty string -> fresh state, no backup, no notice',
+  L.deserializeState('').state.starterDone === false
+  && L.deserializeState('').backupJson === null
+  && L.deserializeState('').notice === null, true);
+const garbage = L.deserializeState('not json {');
+eq('persist: garbage JSON -> fresh state', garbage.state.current, null);
+eq('persist: garbage JSON -> raw JSON handed back for backup', garbage.backupJson, 'not json {');
+eq('persist: garbage JSON -> one-time notice', garbage.notice, 'Your save couldn’t be read — backed up, starting fresh.');
+const wrongVersion = L.deserializeState('{"version":99}');
+eq('persist: wrong version -> fresh state', wrongVersion.state.current, null);
+eq('persist: wrong version -> raw JSON handed back for backup', wrongVersion.backupJson, '{"version":99}');
+eq('persist: wrong version -> one-time notice', wrongVersion.notice !== null, true);
+eq('persist: wrong version -> not flagged migrated', wrongVersion.migrated, false);
+const badCurrentRes = L.deserializeState('{"version":1,"current":{"seed":"nope"},"past":[],"generation":1,"starterDone":true}');
+eq('persist: malformed current -> fresh state', badCurrentRes.state.current, null);
+eq('persist: malformed current -> raw JSON handed back for backup', badCurrentRes.backupJson !== null, true);
 
 // --- 11. package.json contract + extension.js wiring ---------------------------
 const pkgPath = path.join(__dirname, 'package.json');
@@ -384,32 +404,104 @@ function carrierSeed(id) {
 function prestigeReadyState() {
   const s = freshWithPlanet(42);
   L.applyXp(s, 2300, seedSeq(5000));
+  // Round 16 — the new-planet birth AND the fusion each cost 1
+  // Birth mineral; fund both from the test's own pocket.
+  L.addMinerals(s, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
   L.newPlanet(s, seedSeq(6000));
   L.applyXp(s, 2300, seedSeq(7000));
-  // Round 14 — the fusion itself costs 1 plain mineral (the birth
-  // cost); the starter was spent on the new planet above.
-  L.addMinerals(s, [{ family: 'glow', mutation: null, source: 'salvage' }]);
+  L.addMinerals(s, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
   return s;
 }
 
-// 12a. Starter mineral: one free crystal on first run, once ever.
+// 12a. No starter (round 16 overhaul, Nov 15 — Devon): a first run
+// grants NOTHING. First planet free, zero minerals, zero Stardust,
+// no mutation item. The starter mineral, its flag, and its grant
+// function are all gone.
 st = freshWithPlanet(42);
-eq('minerals: first run grants one starter mineral', st.minerals.length, 1);
-eq('minerals: starter is crystal', st.minerals[0].kind, 'crystal');
-eq('minerals: starter family is glow', st.minerals[0].family, 'glow');
-eq('minerals: starter carries no mutation', st.minerals[0].mutation, null);
-eq('minerals: starter flag set', st.starterMineralGranted, true);
-eq('minerals: starter name', L.mineralName(st.minerals[0]), 'Crystal mineral');
-check('minerals: starter is your first mutate attempt (glow family)', L.mineralApplyText(st.minerals[0]).includes('glow'));
-eq('minerals: second grant is a no-op', L.grantStarterMineral(st), null);
-eq('minerals: still one after second grant', st.minerals.length, 1);
+eq('minerals: first run grants no minerals', st.minerals.length, 0);
+eq('minerals: first run starts at zero Stardust', st.stardust, 0);
+eq('minerals: first planet is still free (starterDone set)', st.starterDone, true);
+eq('minerals: no STARTER_MINERAL in CONFIG', L.CONFIG.STARTER_MINERAL, undefined);
+eq('minerals: no grantStarterMineral export', typeof L.grantStarterMineral, 'undefined');
+eq('minerals: no starterMineralGranted flag on a fresh state', st.starterMineralGranted, undefined);
+eq('minerals: fresh state is version 2', L.freshState().version, 2);
+check('minerals: mineralName has no crystal special case',
+  L.mineralName({ kind: 'crystal', family: 'glow', mutation: null }) === 'Birth mineral');
+// A Birth mineral's name / apply text state its one job.
+{
+  const bm = L.makeMineral(st, { kind: 'birth', family: null, mutation: null, source: 'shop' });
+  eq('minerals: Birth mineral name', L.mineralName(bm), 'Birth mineral');
+  check('minerals: Birth mineral apply text says it pays for a birth',
+    L.mineralApplyText(bm).includes('Pays for 1 birth'));
+  const mm = L.makeMineral(st, { family: 'moon', mutation: 'green-moon', source: 'salvage' });
+  eq('minerals: Mutation mineral name', L.mineralName(mm), 'Green Moon mineral');
+  check('minerals: Mutation mineral apply text states 50% + the name',
+    L.mineralApplyText(mm).includes('50%') && L.mineralApplyText(mm).includes('Green Moon'));
+  check('minerals: Mutation mineral apply text says it is gone on a fizzle',
+    L.mineralApplyText(mm).includes('gone if it fizzles'));
+  eq('minerals: makeMineral derives kind birth from no mutation',
+    L.makeMineral(st, { family: 'moon', mutation: null, source: 'salvage' }).kind, 'birth');
+  eq('minerals: a Birth mineral never carries a family',
+    L.makeMineral(st, { family: 'moon', mutation: null, source: 'salvage' }).family, null);
+  eq('minerals: makeMineral derives kind mutation from a mutation',
+    L.makeMineral(st, { mutation: 'green-moon', source: 'salvage' }).kind, 'mutation');
+  eq('minerals: a Mutation mineral family comes from its tags',
+    L.makeMineral(st, { mutation: 'green-moon', source: 'salvage' }).family, 'moon');
+}
+
+// 12a2. Shared probability helpers (round 16 overhaul): the same
+// functions display the odds and drive the rolls — derived from
+// Planet.CONFIG / CONFIG, never literals.
+{
+  const birth = L.birthMutationOdds();
+  eq('odds: birth per-mutation is the 0.7% chance', birth.perMutation, Planet.CONFIG.MUTATION_CHANCE);
+  check('odds: birth any-mutation is ~8.7% (computed, not a literal)',
+    Math.abs(birth.any - (1 - Math.pow(1 - Planet.CONFIG.MUTATION_CHANCE, Planet.CONFIG.MUTATIONS.length))) < 1e-12
+    && birth.any > 0.08 && birth.any < 0.09, `${(birth.any * 100).toFixed(2)}%`);
+  check('odds: birth two-or-more is ~0.36% (computed, not a literal)',
+    Math.abs(birth.twoPlus - 0.0036) < 0.0005, `${(birth.twoPlus * 100).toFixed(3)}%`);
+  const apply = L.applyOdds();
+  eq('odds: apply success is the 50% flip', apply.success, L.CONFIG.MUTATE_CHANCE);
+  eq('odds: apply failure is 50%', apply.failure, 0.5);
+  const wheel = L.wheelOdds();
+  check('odds: wheel is 1 in 13 (computed from the mutation count)',
+    Math.abs(wheel.perMutation - 1 / Planet.CONFIG.MUTATIONS.length) < 1e-12
+    && Math.abs(wheel.perMutation - 1 / 13) < 1e-12, `${wheel.perMutation}`);
+  const moon = L.familyPickOdds('moon');
+  eq('odds: moon pick is 1 in 3', moon.perMutation, 1 / 3);
+  eq('odds: moon pick names its mutations', moon.mutations.join(','), 'big-moon,green-moon,blood-moon');
+  eq('odds: rings pick is 1 in 3', L.familyPickOdds('rings').perMutation, 1 / 3);
+  eq('odds: glow pick is 1 in 3', L.familyPickOdds('glow').perMutation, 1 / 3);
+  eq('odds: sky pick is 1 in 2', L.familyPickOdds('sky').perMutation, 1 / 2);
+  eq('odds: sky pick names its mutations', L.familyPickOdds('sky').mutations.join(','), 'meteor-shower,comet');
+  eq('odds: storm pick is not offered', L.familyPickOdds('storm').ok, false);
+  eq('odds: storm rejection reason', L.familyPickOdds('storm').reason, 'not offered');
+  eq('odds: weird pick is not offered', L.familyPickOdds('weird').ok, false);
+  eq('odds: weird rejection reason', L.familyPickOdds('weird').reason, 'not offered');
+  eq('odds: unknown family rejected', L.familyPickOdds('bogus').ok, false);
+  eq('odds: prestige with no parent is the base chance', L.inheritanceOdds(0), Planet.CONFIG.MUTATION_CHANCE);
+  eq('odds: prestige with one parent is 50%', L.inheritanceOdds(1), 0.5);
+  eq('odds: prestige with two parents is 75%', L.inheritanceOdds(2), 0.75);
+  eq('odds: prestige chances come from CONFIG, not literals',
+    L.inheritanceOdds(1) === L.CONFIG.PRESTIGE_INHERIT_CHANCE_ONE
+    && L.inheritanceOdds(2) === L.CONFIG.PRESTIGE_INHERIT_CHANCE_BOTH, true);
+  eq('odds: format 50%', L.formatOdds(0.5), '50%');
+  eq('odds: format 1 in 13 as a percent', L.formatOdds(1 / 13), '7.69%');
+  eq('odds: format 0.7%', L.formatOdds(0.007), '0.7%');
+  eq('odds: format 1 in 13', L.formatOdds(1 / 13, 'one-in'), '1 in 13');
+  eq('odds: format 1 in 143', L.formatOdds(0.007, 'one-in'), '1 in 143');
+  eq('odds: format 1 in 2', L.formatOdds(0.5, 'one-in'), '1 in 2');
+  check('odds: format of the computed any-mutation chance agrees with the helper',
+    L.formatOdds(birth.any) === '8.73%' && L.formatOdds(birth.any, 'one-in') === '1 in 11',
+    `${L.formatOdds(birth.any)} / ${L.formatOdds(birth.any, 'one-in')}`);
+}
 
 // 12b. The mutate attempt (round 10 — the mineral IS the mutation):
 // spend a mineral on the planet you love, coin flip. Success adds
 // the mutation (with its visuals); failure eats the mineral and
 // nothing changes; a mineral the planet already has is blocked and
-// NOT consumed. A family mineral tries a random mutation in its
-// family that the planet doesn't already have.
+// NOT consumed. A Birth mineral is refused outright (round 16
+// overhaul) — it pays for births and can never apply a mutation.
 {
   // Success: fixed rng 0.1 < 0.5 — the Green Moon lands.
   st = freshWithPlanet(42);
@@ -446,26 +538,26 @@ eq('minerals: still one after second grant', st.minerals.length, 1);
   const ok3 = L.attemptMutation(st, gm3.id, () => 0.1);
   eq('apply: already-has-it is blocked', ok3.ok, false);
   eq('apply: blocked mineral stays in inventory', st.minerals.some((m) => m.id === gm3.id), true);
-  // Family mineral: constant rng 0.0 picks the first candidate the
-  // planet doesn't own (moon family order: big-moon first) and the
-  // same stream's second draw (0.0 < 0.5) lands it.
+  // Birth mineral (round 16 overhaul): a Birth mineral can NEVER
+  // apply — it pays for births, nothing else. Refused outright,
+  // consumed nothing, planet untouched. (There is no family branch
+  // anymore: no mineral tries a random mutation from a family.)
   st = freshWithPlanet(42);
   st.current.mutations = [];
-  const fam = L.makeMineral(st, { family: 'moon', mutation: null, source: 'salvage' });
-  st.minerals.push(fam);
-  const ok4 = L.attemptMutation(st, fam.id, () => 0.0);
-  eq('apply: family mineral tries big-moon first', ok4.mutationId, 'big-moon');
-  eq('apply: family attempt succeeds', ok4.success, true);
-  check('apply: big moon baked (a moon is radius 5)',
-    st.current.moons.some((m) => m.radius === 5.0 && (m.mutantIds || []).includes('big-moon')));
-  // Family mineral blocked when the planet owns the whole family.
-  st = freshWithPlanet(42);
-  st.current.mutations = ['big-moon', 'green-moon', 'blood-moon'];
-  const fam2 = L.makeMineral(st, { family: 'moon', mutation: null, source: 'salvage' });
-  st.minerals.push(fam2);
-  const ok5 = L.attemptMutation(st, fam2.id, () => 0.1);
-  eq('apply: whole family owned is blocked', ok5.ok, false);
-  eq('apply: blocked family mineral stays', st.minerals.some((m) => m.id === fam2.id), true);
+  const bm = L.makeMineral(st, { kind: 'birth', family: null, mutation: null, source: 'shop' });
+  st.minerals.push(bm);
+  const ok4 = L.attemptMutation(st, bm.id, () => 0.0);
+  eq('apply: Birth mineral is refused', ok4.ok, false);
+  eq('apply: Birth refusal reason', ok4.reason, 'birth mineral cannot be applied');
+  eq('apply: refused Birth mineral stays in inventory', st.minerals.some((m) => m.id === bm.id), true);
+  check('apply: refused Birth mineral leaves the planet plain', st.current.mutations.length === 0);
+  // A mineral with no mutation at all (legacy shape) is refused the
+  // same way — the kind IS the job, never the hidden family.
+  const legacyPlain = L.makeMineral(st, { family: 'moon', mutation: null, source: 'salvage' });
+  st.minerals.push(legacyPlain);
+  eq('apply: a no-mutation mineral is refused too',
+    L.attemptMutation(st, legacyPlain.id, () => 0.0).ok, false);
+  eq('apply: the no-mutation mineral stays too', st.minerals.some((m) => m.id === legacyPlain.id), true);
   eq('apply: unknown id rejected', L.attemptMutation(st, 'min-999', () => 0.1).ok, false);
   st = L.freshState();
   eq('apply: no current planet rejected', L.attemptMutation(st, 'min-1', () => 0.1).ok, false);
@@ -502,8 +594,8 @@ eq('minerals: still one after second grant', st.minerals.length, 1);
 }
 
 // 12d. Salvage yields: a mutated planet yields a mineral OF its
-// mutation PLUS one extra plain mineral (round 10 perk); a plain
-// planet yields one plain mineral (stable per seed).
+// mutation PLUS one extra Birth mineral (round 10 perk); a plain
+// planet yields one Birth mineral (stable per seed).
 // Round 14 — grow it first: the mutation minerals only come back
 // when the planet was grown to Crust (600 XP), so the carriers
 // here are grown first; a young carrier is covered in section 18.
@@ -514,15 +606,19 @@ eq('minerals: still one after second grant', st.minerals.length, 1);
   eq('salvage: mutated planet yields two minerals', gm.length, 2);
   eq('salvage: first carries the mutation', gm[0].mutation, 'green-moon');
   eq('salvage: family matches the mutation', gm[0].family, 'moon');
-  eq('salvage: bonus is a plain mineral', gm[1].mutation, null);
-  check('salvage: bonus family is a real family', L.CONFIG.MINERAL_FAMILIES.includes(gm[1].family));
+  eq('salvage: first is a Mutation mineral', gm[0].kind, 'mutation');
+  eq('salvage: bonus is a Birth mineral', gm[1].mutation, null);
+  eq('salvage: bonus kind is birth', gm[1].kind, 'birth');
+  eq('salvage: bonus carries no family', gm[1].family, null);
+  eq('salvage: bonus is from salvage', gm[1].source, 'salvage');
   const plain = Planet.generatePlanet(42); plain.mutations = [];
   const yp = L.yieldMineralsForPlanet(plain);
   eq('salvage: plain planet yields one mineral', yp.length, 1);
   eq('salvage: plain yield carries no mutation', yp[0].mutation, null);
-  check('salvage: plain yield family is a real family', L.CONFIG.MINERAL_FAMILIES.includes(yp[0].family));
+  eq('salvage: plain yield is a Birth mineral', yp[0].kind, 'birth');
+  eq('salvage: plain yield carries no family', yp[0].family, null);
   eq('salvage: plain yield is stable per seed',
-    L.yieldMineralsForPlanet(plain)[0].family, yp[0].family);
+    JSON.stringify(L.yieldMineralsForPlanet(plain)[0]), JSON.stringify(yp[0]));
   let two = null;
   for (let s = 0; s < 4000 && !two; s++) {
     const pl = Planet.generatePlanet(s);
@@ -536,7 +632,7 @@ eq('minerals: still one after second grant', st.minerals.length, 1);
 // 12e. Recycle: destroy the current planet for minerals, hatch a fresh
 // one immediately. The destroyed planet is NOT archived.
 // Round 14 — the carrier is grown to Crust first (grow it first),
-// and the new birth costs the bonus plain mineral, so the net keep
+// and the new birth costs the bonus Birth mineral, so the net keep
 // is the mutation mineral.
 st = freshWithPlanet(carrierSeed('green-moon'));
 L.applyXp(st, 600, seedSeq());
@@ -561,6 +657,8 @@ eq('recycle: no current planet is a no-op', L.recycleCurrent(st, seedSeq()).ok, 
 // mineral comes back.
 st = freshWithPlanet(carrierSeed('glitch'));
 L.applyXp(st, 600, seedSeq());
+// Round 16 — the birth costs 1 Birth mineral; fund it.
+L.addMinerals(st, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
 L.newPlanet(st, seedSeq(8000));
 eq('salvage: one archived planet', st.past.length, 1);
 const sv = L.salvageArchived(st, 0);
@@ -595,6 +693,8 @@ eq('prestige: same planet twice rejected',
   L.prestige(st, { kind: 'current' }, { kind: 'current' }, seedSeq()).ok, false);
 st = freshWithPlanet(42);
 L.applyXp(st, 500, seedSeq());
+// Round 16 — the birth costs 1 Birth mineral; fund it.
+L.addMinerals(st, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
 L.newPlanet(st, seedSeq());
 L.applyXp(st, 500, seedSeq());
 eq('prestige: young planets are not eligible',
@@ -637,19 +737,29 @@ eq('prestigeTilt: inheritance boosts pass through',
 eq('prestigeTilt: empty boosts is a null tilt', L.prestigeTilt({}), null);
 
 // 12h. Persistence: minerals + discovered survive a round-trip, and
-// old saves (from before minerals) get the one-time starter gift.
-// A pre-round-10 save with a legacy fedMineral migrates: its mutation
-// is discovered, and the fed slot is deleted — there is no fed slot
-// anymore.
+// old saves (from before minerals) get NO starter gift anymore
+// (round 16 overhaul — the starter is gone). A pre-round-10 save
+// with a legacy fedMineral migrates: its mutation is discovered,
+// and the fed slot is deleted — there is no fed slot anymore.
 st = freshWithPlanet(42);
-const loaded2 = L.deserializeState(L.serializeState(st));
+L.addMinerals(st, [
+  { kind: 'birth', family: null, mutation: null, source: 'shop' },
+  { kind: 'mutation', family: 'moon', mutation: 'green-moon', source: 'salvage' },
+]);
+const loaded2 = L.deserializeState(L.serializeState(st)).state;
 eq('persist: minerals survive', loaded2.minerals.length, st.minerals.length);
-eq('persist: discovered survives', loaded2.discovered.join(','), st.discovered.join(','));
-eq('persist: starter flag survives', loaded2.starterMineralGranted, true);
+check('persist: discovered survives', loaded2.discovered.includes('glowing-oceans'));
+check('persist: load rebuild credits the salvage mineral (narrowed rule: salvage discovers)',
+  loaded2.discovered.includes('green-moon'));
+eq('persist: round-trip stays version 2', loaded2.version, 2);
+eq('persist: round-trip is not flagged migrated', L.deserializeState(L.serializeState(st)).migrated, false);
+eq('persist: round-trip needs no backup', L.deserializeState(L.serializeState(st)).backupJson, null);
 const migrated = L.deserializeState('{"version":1,"current":null,"past":[],"generation":1,"starterDone":true}');
-eq('persist: old save gets the starter gift', migrated.minerals.length, 1);
-eq('persist: old save starter is crystal', migrated.minerals[0].kind, 'crystal');
-eq('persist: old save flag set', migrated.starterMineralGranted, true);
+eq('persist: old save gets NO starter gift', migrated.state.minerals.length, 0);
+eq('persist: old save migrates to version 2', migrated.state.version, 2);
+eq('persist: old save is flagged migrated', migrated.migrated, true);
+eq('persist: old save raw JSON handed back for backup', migrated.backupJson !== null, true);
+eq('persist: old save needs no notice', migrated.notice, null);
 const legacy = L.deserializeState(JSON.stringify({
   version: 1,
   current: { seed: 42, xp: 0, mutations: ['glitch'] },
@@ -657,15 +767,99 @@ const legacy = L.deserializeState(JSON.stringify({
   generation: 1, starterDone: true, minerals: [],
   fedMineral: { id: 'min-9', kind: 'mutation', family: 'moon', mutation: 'green-moon', source: 'salvage' },
   mineralSeq: 9, starterMineralGranted: true,
-}));
+})).state;
 check('persist: legacy fed mineral mutation is discovered', legacy.discovered.includes('green-moon'));
 check('persist: legacy current mutation is discovered', legacy.discovered.includes('glitch'));
 check('persist: legacy archived mutation is discovered', legacy.discovered.includes('comet'));
 eq('persist: legacy fed slot is deleted', legacy.fedMineral, undefined);
+eq('persist: legacy starter flag is deleted', legacy.starterMineralGranted, undefined);
 const summary = L.mineralSummary(freshWithPlanet(42));
-eq('summary: one mineral total', summary.total, 1);
-eq('summary: one glow mineral', summary.byFamily.glow, 1);
+eq('summary: fresh state has zero minerals total', summary.total, 0);
+eq('summary: fresh state has zero Birth minerals', summary.birth, 0);
+eq('summary: fresh state has zero Mutation minerals', summary.mutation, 0);
+eq('summary: no byFamily anymore', summary.byFamily, undefined);
 eq('summary: no fed field anymore', summary.fed, undefined);
+{
+  const s2 = freshWithPlanet(42);
+  L.addMinerals(s2, [
+    { kind: 'birth', family: null, mutation: null, source: 'shop' },
+    { kind: 'birth', family: null, mutation: null, source: 'salvage' },
+    { kind: 'mutation', family: 'moon', mutation: 'green-moon', source: 'salvage' },
+  ]);
+  const sum2 = L.mineralSummary(s2);
+  eq('summary: two Birth minerals counted', sum2.birth, 2);
+  eq('summary: one Mutation mineral counted', sum2.mutation, 1);
+  eq('summary: three total', sum2.total, 3);
+}
+
+// 12i. Migration v1 -> v2 (round 16 overhaul): every row of the
+// §8 table, idempotency, and the discovery narrowing.
+{
+  const v1 = {
+    version: 1,
+    current: null, past: [], generation: 1, starterDone: true,
+    mineralSeq: 5,
+    starterMineralGranted: true,
+    minerals: [
+      // Mutation mineral, any source -> unchanged.
+      { id: 'min-1', kind: 'mutation', family: 'moon', mutation: 'green-moon', source: 'salvage' },
+      { id: 'min-2', kind: 'mutation', family: 'sky', mutation: 'comet', source: 'shop' },
+      // Plain / family mineral (mutation null, any family, shop or
+      // salvage) -> Birth mineral, 1:1, family dropped.
+      { id: 'min-3', kind: 'family', family: 'moon', mutation: null, source: 'shop' },
+      { id: 'min-4', kind: 'family', family: 'glow', mutation: null, source: 'salvage' },
+      // Starter Crystal -> one Birth mineral.
+      { id: 'min-5', kind: 'crystal', family: 'glow', mutation: null, source: 'starter' },
+    ],
+  };
+  const once = L.migrateV1toV2(JSON.parse(JSON.stringify(v1)));
+  eq('migrate: version stamped 2', once.version, 2);
+  eq('migrate: count preserved 1:1', once.minerals.length, 5);
+  eq('migrate: salvage mutation mineral unchanged', once.minerals[0].mutation, 'green-moon');
+  eq('migrate: salvage mutation mineral kind', once.minerals[0].kind, 'mutation');
+  eq('migrate: shop mutation mineral unchanged', once.minerals[1].mutation, 'comet');
+  eq('migrate: shop plain mineral becomes Birth', once.minerals[2].kind, 'birth');
+  eq('migrate: shop plain mineral family dropped', once.minerals[2].family, null);
+  eq('migrate: salvage family mineral becomes Birth', once.minerals[3].kind, 'birth');
+  eq('migrate: salvage family mineral family dropped', once.minerals[3].family, null);
+  eq('migrate: starter Crystal becomes one Birth mineral', once.minerals[4].kind, 'birth');
+  eq('migrate: starter Crystal family dropped', once.minerals[4].family, null);
+  eq('migrate: starter Crystal keeps its source', once.minerals[4].source, 'starter');
+  eq('migrate: starter flag deleted', once.starterMineralGranted, undefined);
+  // Idempotency: migrate twice = migrate once.
+  const twice = L.migrateV1toV2(JSON.parse(JSON.stringify(once)));
+  eq('migrate: second run is a no-op', JSON.stringify(twice), JSON.stringify(once));
+  // A v2 state is a no-op too.
+  const v2 = L.freshState();
+  eq('migrate: v2 state returned unchanged', L.migrateV1toV2(v2), v2);
+  // Through the loader: v1 in -> v2 out, raw JSON kept for backup.
+  const loadedV1 = L.deserializeState(JSON.stringify(v1));
+  eq('migrate: loader migrates v1 to v2', loadedV1.state.version, 2);
+  eq('migrate: loader flags the migration', loadedV1.migrated, true);
+  eq('migrate: loader hands back the raw v1 JSON for backup', loadedV1.backupJson, JSON.stringify(v1));
+  eq('migrate: loader kept all five minerals', loadedV1.state.minerals.length, 5);
+  // Reload round-trip: serialize -> deserialize -> serialize is stable.
+  const rt1 = L.serializeState(loadedV1.state);
+  const rt2 = L.serializeState(L.deserializeState(rt1).state);
+  eq('migrate: reload round-trip is stable', rt2, rt1);
+  // Discovery narrowing: a salvage-sourced mutation mineral
+  // discovers; a shop-sourced one never does.
+  const discShop = L.deserializeState(JSON.stringify({
+    version: 1, current: null, past: [], generation: 1, starterDone: true,
+    minerals: [{ id: 'min-1', kind: 'mutation', family: 'moon', mutation: 'green-moon', source: 'shop' }],
+    mineralSeq: 1, discovered: [],
+  })).state;
+  check('migrate: shop-bought mutation mineral does NOT discover', !discShop.discovered.includes('green-moon'));
+  const discSalvage = L.deserializeState(JSON.stringify({
+    version: 1, current: null, past: [], generation: 1, starterDone: true,
+    minerals: [{ id: 'min-1', kind: 'mutation', family: 'moon', mutation: 'green-moon', source: 'salvage' }],
+    mineralSeq: 1, discovered: [],
+  })).state;
+  check('migrate: salvage mutation mineral DOES discover', discSalvage.discovered.includes('green-moon'));
+  // A v2 round-trip keeps discovery as-is (no re-derivation loss).
+  const discRt = L.deserializeState(L.serializeState(discSalvage)).state;
+  check('migrate: discovery survives a v2 round-trip', discRt.discovered.includes('green-moon'));
+}
 
 // --- 13. Solar system (step 4): System Rank, slots, names, overflow -------
 // Helper: grow `n` finished planets — each one typed to Civilization
@@ -675,7 +869,7 @@ function growFinished(st, n, seedStart) {
   const seq = seedSeq(seedStart === undefined ? 10000 : seedStart);
   for (let i = 0; i < n; i++) {
     L.applyXp(st, 2500, seq);
-    // Round 14 — every birth costs 1 plain mineral; fund each one
+    // Round 14 — every birth costs 1 Birth mineral; fund each one
     // from the test's own pocket so the rank ladder still grows.
     L.addMinerals(st, [{ family: 'moon', mutation: null, source: 'salvage' }]);
     L.newPlanet(st, seq);
@@ -746,6 +940,8 @@ eq('remove: bad ring rejected', L.removeFromSystem(st, 99).ok, false);
 st = freshWithPlanet(42);
 pl = L.placePlanet(st, 0, st.current.seed, st.generation);
 eq('place: current planet can be placed', pl.ok, true);
+// Round 16 — the birth costs 1 Birth mineral; fund it.
+L.addMinerals(st, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
 L.newPlanet(st, seedSeq(20000));
 eq('place: slot survives the new planet (same seed+generation)',
   L.slotIndexForPlanet(st, 42, 1), 0);
@@ -755,6 +951,8 @@ eq('place: the old planet is now archived', st.past.some((p) => p.seed === 42), 
 st = freshWithPlanet(42);
 eq('name: current planet has its seed name',
   st.current.name, Planet.generatePlanetName(42));
+// Round 16 — the birth costs 1 Birth mineral; fund it.
+L.addMinerals(st, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
 L.newPlanet(st, seedSeq(21000));
 eq('name: archived record stores the name',
   st.past[0].name, Planet.generatePlanetName(42));
@@ -805,6 +1003,8 @@ eq('overflow: current planet fills the 5th ring',
   L.placePlanet(st, 4, st.current.seed, st.generation).ok, true);
 eq('overflow: all 5 rings used', st.system.filter(Boolean).length, 5);
 const beforePast = st.past.length;
+// Round 16 — the birth costs 1 Birth mineral; fund it.
+L.addMinerals(st, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
 L.newPlanet(st, seedSeq(22000));
 eq('overflow: a new planet archives with a full system', st.past.length, beforePast + 1);
 eq('overflow: a new planet hatches', st.current.xp, 0);
@@ -812,7 +1012,7 @@ eq('overflow: the 5 rings are untouched by the new planet',
   st.system.filter(Boolean).length, 5);
 eq('overflow: the new planet is not forced into the system',
   L.slotIndexForPlanet(st, st.current.seed, st.generation), -1);
-// Round 14 — the second manual birth costs a plain mineral; fund it.
+// Round 14 — the second manual birth costs a Birth mineral; fund it.
 L.addMinerals(st, [{ family: 'moon', mutation: null, source: 'salvage' }]);
 const np2 = L.newPlanet(st, seedSeq(23000));
 eq('overflow: manual new planet also archives with a full system',
@@ -824,10 +1024,10 @@ check('overflow: the new planet is the current one', np2.planet === st.current);
 st = freshWithPlanet(42);
 growFinished(st, 2);
 L.placePlanet(st, 0, st.past[0].seed, st.past[0].generation);
-const loaded3 = L.deserializeState(L.serializeState(st));
+const loaded3 = L.deserializeState(L.serializeState(st)).state;
 eq('persist: system survives', loaded3.system[0] && loaded3.system[0].seed, st.past[0].seed);
 eq('persist: rank survives', L.systemRank(loaded3).totalSlots, L.systemRank(st).totalSlots);
-const migrated2 = L.deserializeState('{"version":1,"current":null,"past":[],"generation":1,"starterDone":true}');
+const migrated2 = L.deserializeState('{"version":1,"current":null,"past":[],"generation":1,"starterDone":true}').state;
 check('persist: old save gets a 4-ring system',
   Array.isArray(migrated2.system) && migrated2.system.length === 4 && migrated2.system.every((s) => s === null));
 
@@ -1435,7 +1635,7 @@ check('panel-logic: lineage records carry the parents’ names',
   pr2.planet.parents.map((p) => p.name).join(' + '));
 eq('panel-logic: lineage records carry the parents’ generations',
   pr2.planet.parents.map((p) => p.generation).sort().join(','), '1,2');
-const loaded4 = L.deserializeState(L.serializeState(st));
+const loaded4 = L.deserializeState(L.serializeState(st)).state;
 eq('panel-logic: the offspring’s lineage survives a round-trip',
   loaded4.current.parents.length, 2);
 eq('panel-logic: the lineage names survive a round-trip',
@@ -1680,6 +1880,8 @@ check('seed input: tagged out-of-range rejected', L.parseSeedInput('1000000000-i
   const st = freshWithPlanet(mutSeed);
   const oldName = st.current.name;
   const oldMuts = st.current.mutations.slice();
+  // Round 16 — the hatch is a birth: fund it with 1 Birth mineral.
+  L.addMinerals(st, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
   const p = L.hatchFromSeed(st, 805839337).planet;
   check('seed hatch: current archived', st.past.length === 1 && st.past[0].seed === mutSeed);
   check('seed hatch: archived planet KEEPS its mutations', JSON.stringify(st.past[0].mutations) === JSON.stringify(oldMuts), oldMuts.join(','));
@@ -1693,6 +1895,8 @@ check('seed input: tagged out-of-range rejected', L.parseSeedInput('1000000000-i
 {
   const live = L.makePlanet(948502300, 'icy');
   const st = freshWithPlanet(42);
+  // Round 16 — the hatch is a birth: fund it with 1 Birth mineral.
+  L.addMinerals(st, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
   const p = L.hatchFromSeed(st, 948502300, 'icy').planet;
   check('seed hatch tagged: current is the pinned planet', st.current === p && p.seed === 948502300 && p.terrain === 'icy');
   check('seed hatch tagged: same name/size/rings as the live planet',
@@ -1701,27 +1905,32 @@ check('seed input: tagged out-of-range rejected', L.parseSeedInput('1000000000-i
   check('seed hatch tagged: generation +1', st.generation === 2);
   check('seed hatch tagged: old planet archived', st.past.length === 1 && st.past[0].seed === 42);
 }
-// A seed hatch is a birth (round 14): it costs exactly 1 plain
+// A seed hatch is a birth (round 14): it costs exactly 1 Birth
 // mineral — the hatch itself is the seed's canonical planet, not a
-// roll, so no mineral is spent on a tilt. The starter pays it here.
+// roll, so no mineral is spent on a tilt. The Birth mineral pays it.
 {
   const st = freshWithPlanet(42);
+  L.addMinerals(st, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
   const before = st.minerals.length;
   const res = L.hatchFromSeed(st, 805839337);
   check('seed hatch: ok', res.ok === true, res.reason);
-  check('seed hatch: costs exactly one plain mineral', st.minerals.length === before - 1, `before ${before}, after ${st.minerals.length}`);
-  check('seed hatch: the starter paid for it', st.minerals.length === 0);
+  check('seed hatch: costs exactly one Birth mineral', st.minerals.length === before - 1, `before ${before}, after ${st.minerals.length}`);
+  check('seed hatch: the Birth mineral paid for it', st.minerals.length === 0);
+  check('seed hatch: the spent mineral was a Birth mineral', res.spentMineral !== null && res.spentMineral.kind === 'birth');
   check('seed hatch: no fed slot exists', st.fedMineral === undefined);
 }
 // No current planet yet (first run): the seed hatch IS the first
-// planet — starter done + the one free starter mineral, still Gen 1.
+// planet — starter done, still Gen 1, free, and it grants NOTHING
+// (round 16 overhaul — no starter mineral anymore).
 {
   const st = L.freshState();
   const p = L.hatchFromSeed(st, 805839337);
   check('seed hatch first run: planet hatched', !!st.current && st.current.seed === 805839337);
   check('seed hatch first run: still Gen 1', st.generation === 1);
   check('seed hatch first run: starter done', st.starterDone === true);
-  check('seed hatch first run: starter mineral granted', st.minerals.length === 1);
+  check('seed hatch first run: no mineral granted', st.minerals.length === 0);
+  check('seed hatch first run: zero Stardust', st.stardust === 0);
+  check('seed hatch first run: the hatch was free', p.spentMineral === null);
   check('seed hatch first run: no archive', st.past.length === 0);
 }
 // Hatching from the current planet's own seed: the archived original
@@ -1729,6 +1938,8 @@ check('seed input: tagged out-of-range rejected', L.parseSeedInput('1000000000-i
 {
   const st = freshWithPlanet(42);
   const oldName = st.current.name;
+  // Round 16 — the hatch is a birth: fund it with 1 Birth mineral.
+  L.addMinerals(st, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
   const p = L.hatchFromSeed(st, 42).planet;
   check('seed hatch: same-seed name nudged (old name taken)', p.name !== oldName, `${oldName} -> ${p.name}`);
   check('seed hatch: seed still the input seed', p.seed === 42);
@@ -1994,6 +2205,8 @@ function grownState() {
   L.applyXp(st, 350, seedSeq());
   const oldSeed = st.current.seed;
   const oldName = st.current.name;
+  // Round 16 — the birth costs 1 Birth mineral; fund it.
+  L.addMinerals(st, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
   L.newPlanet(st, seedSeq(5000));
   return { st, oldSeed, oldName };
 }
@@ -2031,6 +2244,8 @@ function grownState() {
   st.current.mutations = ['blood-moon'];
   const oldTerrain = st.current.terrain;
   L.applyXp(st, 100, seedSeq());
+  // Round 16 — the birth costs 1 Birth mineral; fund it.
+  L.addMinerals(st, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
   L.newPlanet(st, seedSeq(6000));
   L.makeCurrent(st, 0);
   check('r7: revived planet keeps its mutation', (st.current.mutations || []).includes('blood-moon'));
@@ -2054,11 +2269,12 @@ function grownState() {
   // rewritten by a later switch.
   const st = freshWithPlanet(42);
   eq('r7: first planet stamped Gen 1', st.current.generation, 1);
+  // Round 16 — each birth after the first costs 1 Birth mineral; fund them.
+  L.addMinerals(st, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
   L.newPlanet(st, seedSeq(7000));
   eq('r7: second planet stamped Gen 2', st.current.generation, 2);
   eq('r7: currentGeneration reads the stamp', L.currentGeneration(st), 2);
-  // Round 14 — the second birth costs a plain mineral; fund it.
-  L.addMinerals(st, [{ family: 'moon', mutation: null, source: 'salvage' }]);
+  L.addMinerals(st, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
   L.newPlanet(st, seedSeq(8000));
   eq('r7: third planet stamped Gen 3', st.current.generation, 3);
   eq('r7: first archived record kept Gen 1', st.past[0].generation, 1);
@@ -2074,11 +2290,14 @@ function grownState() {
   check('r7: bad index refused', L.makeCurrent(st, 5).ok === false);
   check('r7: negative index refused', L.makeCurrent(st, -1).ok === false);
   const st2 = freshWithPlanet(42);
+  // Round 16 — the birth costs 1 Birth mineral; fund it.
+  L.addMinerals(st2, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
   L.newPlanet(st2, seedSeq(9000));
   delete st2.past[0].planet;
   check('r7: snapshot-less record refused', L.makeCurrent(st2, 0).ok === false);
   eq('r7: refused switch leaves the current planet alone', st2.current.generation, 2);
   const st3 = freshWithPlanet(42);
+  L.addMinerals(st3, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
   L.newPlanet(st3, seedSeq(9500));
   st3.current = null;
   const res3 = L.makeCurrent(st3, 0);
@@ -2151,14 +2370,14 @@ check('ext: sidebar always shows the planet settled',
   const oldSeed = st.current.seed;
   const placed = L.placePlanet(st, 0, oldSeed, 1);
   check('r9: setup planet on ring 0', placed.ok === true, placed.reason);
-  const starterCount = st.minerals.length;
+  const beforeCount = st.minerals.length;
   const dc = L.destroyCurrent(st);
   check('r9: destroy ok', dc.ok === true, dc.reason);
   check('r9: current is null after destroy', st.current === null);
   check('r9: destroyed planet NOT archived', !st.past.some((p) => p.seed === oldSeed));
   check('r9: destroyed planet NOT on any ring anymore', L.slotIndexForPlanet(st, oldSeed, 1) === -1);
   check('r9: generation does NOT move (no new life)', st.generation === 1);
-  check('r9: minerals untouched by the destroy (no fed slot to consume)', st.minerals.length === starterCount + dc.minerals.length);
+  check('r9: minerals untouched by the destroy (no fed slot to consume)', st.minerals.length === beforeCount + dc.minerals.length);
   check('r9: minerals yielded (mutation + bonus)', dc.minerals.length === 2 && st.minerals.some((m) => m.source === 'salvage'));
   check('r9: destroy with no current is a no-op', L.destroyCurrent(st).ok === false);
   // Birth from the empty state: random, no archive crash.
@@ -2183,17 +2402,18 @@ check('ext: sidebar always shows the planet settled',
 }
 
 // Host wiring: the salvage list offers the destroy choice, the
-// post-destroy prompt offers grow / birth / birth-with-pick, the
-// sidebar clears to its placeholder when nothing is growing, and the
-// share panel does not crash on a planet-less push.
+// post-destroy prompt offers grow / birth / birth-with-terrain-pick
+// (Hole G — round 16 overhaul, was "birth with a starter mineral"),
+// the sidebar clears to its placeholder when nothing is growing, and
+// the share panel does not crash on a planet-less push.
 check('ext: salvage offers a destroy-with-no-new-planet choice',
   extSrc.includes('Destroy current planet — ${this.state.current.summary}')
   && extSrc.includes("kind: 'destroyCurrent'"));
-check('ext: post-destroy prompt offers grow old / birth / birth with pick',
+check('ext: post-destroy prompt offers grow old / birth / birth with terrain pick',
   extSrc.includes('async promptAfterDestroy()')
   && extSrc.includes("label: 'Grow an old planet'")
   && extSrc.includes("label: 'Birth a new planet'")
-  && extSrc.includes("label: 'Birth a new planet with a starter mineral'"));
+  && extSrc.includes("label: 'Birth a new planet — pick a terrain'"));
 check('ext: sidebar clears to its placeholder on an empty push',
   extSrc.includes("postMessage(viewModel || { type: 'empty', destroyed: !!this.state.starterDone })")
   && extSrc.includes("if (msg.type === 'empty')")
@@ -2329,6 +2549,8 @@ check('ext: mutationChance view model carries the base chance for the panel',
   // Grow entry: growing an old planet again writes "Grew again".
   st = freshWithPlanet(42);
   L.applyXp(st, 500, seedSeq());
+  // Round 16 — the birth costs 1 Birth mineral; fund it.
+  L.addMinerals(st, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
   L.newPlanet(st, seedSeq(8000));
   const grow = L.makeCurrent(st, 0);
   eq('journal: grow ok', grow.ok, true);
@@ -2336,11 +2558,13 @@ check('ext: mutationChance view model carries the base chance for the panel',
   // Migration: an old save without journals gets a seeded birth entry.
   st = freshWithPlanet(42);
   L.applyXp(st, 500, seedSeq());
+  // Round 16 — the birth costs 1 Birth mineral; fund it.
+  L.addMinerals(st, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
   L.newPlanet(st, seedSeq(8000));
   delete st.current.journal;
   delete st.past[0].journal;
   delete st.past[0].planet.journal;
-  const loaded = L.deserializeState(L.serializeState(st));
+  const loaded = L.deserializeState(L.serializeState(st)).state;
   check('journal: migration seeds the current planet', loaded.current.journal.length === 1 && loaded.current.journal[0].kind === 'born');
   check('journal: migration seeds archived snapshots', loaded.past[0].planet.journal.length === 1 && loaded.past[0].planet.journal[0].kind === 'born');
 }
@@ -2351,7 +2575,7 @@ check('ext: mutationChance view model carries the base chance for the panel',
   const firstSeed = st.current.seed;
   for (let i = 0; i < 200; i++) {
     L.applyXp(st, 2500, seedSeq(30000 + i * 100));
-    // Round 14 — every birth costs 1 plain mineral; fund each one.
+    // Round 14 — every birth costs 1 Birth mineral; fund each one.
     L.addMinerals(st, [{ family: 'moon', mutation: null, source: 'salvage' }]);
     const r = L.newPlanet(st, seedSeq(40000 + i * 100));
     eq('archive: birth ' + i + ' ok', r.ok, true);
@@ -2404,10 +2628,10 @@ check('ext: archived planet can be salvaged from its detail sheet',
   extSrc.includes('data-action="salvage"') && extSrc.includes("type: 'salvage'"));
 
 // --- 20. Stardust economy / anti-farming (round 14, Nov 14 — Devon) -----
-// Births cost a plain mineral, Stardust is earned per character
+// Births cost a Birth mineral, Stardust is earned per character
 // typed (never over time), a mutated planet only yields its mutation
-// minerals when grown to Crust, and the shop sells plain minerals
-// plus three mutation gambles. Families pay the big money (combos),
+// minerals when grown to Crust, and the shop sells a Birth mineral
+// plus two mutation gambles. Families pay the big money (combos),
 // so farming every mutation onto one planet is not the best play.
 function approx(name, got, want) {
   check(name, Math.abs(got - want) < 1e-9, 'got ' + got + ', want ' + want);
@@ -2504,29 +2728,31 @@ function ratePlanet(xp, mutations, eventTitles) {
   const res2 = L.applyXp(st, 100, undefined, () => 1);
   eq('stardust: a stage-up char earns at the new rate', res2.stardustEarned, 225);
   // Persistence + migration.
-  const loaded5 = L.deserializeState(L.serializeState(st));
+  const loaded5 = L.deserializeState(L.serializeState(st)).state;
   eq('stardust: survives a round-trip', loaded5.stardust, st.stardust);
-  const migrated3 = L.deserializeState('{"version":1,"current":null,"past":[],"generation":1,"starterDone":true}');
+  const migrated3 = L.deserializeState('{"version":1,"current":null,"past":[],"generation":1,"starterDone":true}').state;
   eq('stardust: old saves migrate to 0', migrated3.stardust, 0);
 }
 
 // 20c. Birth cost: the first planet ever is free; every later birth
-// costs 1 plain mineral, and a blocked birth mutates nothing.
+// costs 1 Birth mineral, and a blocked birth mutates nothing.
 {
-  // First planet free, both paths.
+  // First planet free, both paths — and free means FREE: no mineral
+  // granted, zero Stardust, zero minerals (round 16 overhaul).
   let s = L.freshState();
   const first = L.newPlanet(s, seedSeq());
   eq('birth cost: first planet through newPlanet is free', first.ok, true);
-  eq('birth cost: first planet grants the starter mineral', s.minerals.length, 1);
+  eq('birth cost: first planet grants nothing', s.minerals.length, 0);
+  eq('birth cost: first planet starts at zero Stardust', s.stardust, 0);
   s = L.freshState();
   L.startFirstPlanet(s, 42, undefined);
-  eq('birth cost: first planet through startFirstPlanet is free', s.minerals.length, 1);
-  // Blocked without a plain mineral.
+  eq('birth cost: first planet through startFirstPlanet grants nothing', s.minerals.length, 0);
+  // Blocked without a Birth mineral.
   st = freshWithPlanet(42);
-  st.minerals = st.minerals.filter((m) => m.mutation !== null); // no plain minerals left
+  st.minerals = st.minerals.filter((m) => m.mutation !== null); // no Birth minerals left
   const curSeed = st.current.seed;
   const blocked = L.newPlanet(st, seedSeq());
-  eq('birth cost: blocked without a plain mineral', blocked.ok, false);
+  eq('birth cost: blocked without a Birth mineral', blocked.ok, false);
   eq('birth cost: refusal reason', blocked.reason, 'no plain mineral');
   eq('birth cost: blocked birth keeps the current planet', st.current.seed, curSeed);
   eq('birth cost: blocked birth archives nothing', st.past.length, 0);
@@ -2535,59 +2761,86 @@ function ratePlanet(xp, mutations, eventTitles) {
   const mm = L.makeMineral(st, { family: 'moon', mutation: 'green-moon', source: 'salvage' });
   st.minerals.push(mm);
   eq('birth cost: a mutation mineral cannot pay for a birth', L.newPlanet(st, seedSeq()).ok, false);
-  // A plain mineral pays, and a salvaged plain is spent before the
-  // starter gift.
+  // A Birth mineral pays, and only the Birth mineral is spent.
   st = freshWithPlanet(42);
-  L.addMinerals(st, [{ family: 'rings', mutation: null, source: 'salvage' }]);
+  L.addMinerals(st, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
   const paid = L.newPlanet(st, seedSeq());
-  eq('birth cost: a plain mineral pays for the birth', paid.ok, true);
-  check('birth cost: the salvaged plain was spent, the starter kept',
-    st.minerals.length === 1 && st.minerals[0].source === 'starter');
-  // The starter pays when it is the only plain mineral.
+  eq('birth cost: a Birth mineral pays for the birth', paid.ok, true);
+  check('birth cost: the Birth mineral was spent, nothing left',
+    st.minerals.length === 0 && paid.spentMineral !== null && paid.spentMineral.kind === 'birth');
+  eq('birth cost: needPlainMineralMessage names the Birth mineral + price',
+    L.needPlainMineralMessage(), 'Birthing a planet costs 1 Birth mineral — buy one in the shop (500 ✦) or salvage a planet.');
+  // birthMineralIndex finds kind === 'birth' only.
   st = freshWithPlanet(42);
-  const paid2 = L.newPlanet(st, seedSeq());
-  eq('birth cost: the starter pays when it is the only plain mineral', paid2.ok, true);
-  eq('birth cost: starter spent', st.minerals.length, 0);
+  L.addMinerals(st, [
+    { kind: 'mutation', family: 'moon', mutation: 'green-moon', source: 'salvage' },
+    { kind: 'birth', family: null, mutation: null, source: 'salvage' },
+  ]);
+  eq('birth cost: birthMineralIndex skips the Mutation mineral', L.birthMineralIndex(st), 1);
+  eq('birth cost: plainMineralIndex is gone', typeof L.plainMineralIndex, 'undefined');
+  st.minerals = st.minerals.filter((m) => m.mutation !== null);
+  eq('birth cost: birthMineralIndex is -1 with no Birth mineral', L.birthMineralIndex(st), -1);
   // Seed hatch and prestige are births too.
   st = freshWithPlanet(42);
   st.minerals = [];
-  eq('birth cost: seed hatch blocked without a plain mineral',
+  eq('birth cost: seed hatch blocked without a Birth mineral',
     L.hatchFromSeed(st, 805839337).ok, false);
   eq('birth cost: blocked hatch keeps the current planet', st.current.seed, 42);
   st = prestigeReadyState();
   st.minerals = [];
   const presBlocked = L.prestige(st, { kind: 'current' }, { kind: 'past', index: 0 }, seedSeq());
-  eq('birth cost: prestige blocked without a plain mineral', presBlocked.ok, false);
+  eq('birth cost: prestige blocked without a Birth mineral', presBlocked.ok, false);
   eq('birth cost: blocked prestige leaves parents eligible',
     L.eligiblePrestigeParents(st).length, 2);
-  // Recycle is self-funding: a young mutated planet yields 1 plain,
-  // which pays for the new birth — net zero, mutation mineral lost.
+  // A Mutation mineral does NOT pay for a seed hatch or a prestige
+  // either — only a Birth mineral funds any birth. Blocked, and the
+  // mineral is unspent.
+  st = freshWithPlanet(42);
+  L.addMinerals(st, [{ kind: 'mutation', family: 'moon', mutation: 'green-moon', source: 'salvage' }]);
+  const hatchMM = L.hatchFromSeed(st, 805839337);
+  eq('birth cost: seed hatch blocked with only a Mutation mineral', hatchMM.ok, false);
+  eq('birth cost: blocked hatch keeps the current planet', st.current.seed, 42);
+  eq('birth cost: blocked hatch spends nothing', st.minerals.length, 1);
+  st = prestigeReadyState();
+  st.minerals = [];
+  L.addMinerals(st, [{ kind: 'mutation', family: 'moon', mutation: 'green-moon', source: 'salvage' }]);
+  const presMM = L.prestige(st, { kind: 'current' }, { kind: 'past', index: 0 }, seedSeq());
+  eq('birth cost: prestige blocked with only a Mutation mineral', presMM.ok, false);
+  eq('birth cost: blocked prestige spends nothing', st.minerals.length, 1);
+  eq('birth cost: blocked prestige leaves parents eligible',
+    L.eligiblePrestigeParents(st).length, 2);
+  // Recycle is self-funding: a young mutated planet yields 1 Birth
+  // mineral, which pays for the new birth — net zero, mutation
+  // mineral lost.
   st = freshWithPlanet(42); // Glowing Oceans, 0 XP
   const rcYoung = L.recycleCurrent(st, seedSeq(32000));
   eq('birth cost: young recycle ok (self-funded)', rcYoung.ok, true);
-  eq('birth cost: young recycle yields one plain mineral', rcYoung.minerals.length, 1);
-  eq('birth cost: young recycle keeps only the starter', st.minerals.length, 1);
+  eq('birth cost: young recycle yields one Birth mineral', rcYoung.minerals.length, 1);
+  eq('birth cost: young recycle yields a Birth mineral', rcYoung.minerals[0].kind, 'birth');
+  eq('birth cost: young recycle keeps nothing (the Birth mineral paid)', st.minerals.length, 0);
   eq('birth cost: young recycle lost the mutation mineral', JSON.stringify(rcYoung.lostMutations), '["glowing-oceans"]');
   // A grown mutated planet keeps its mutation mineral after the
-  // birth cost (the bonus plain pays).
+  // birth cost (the bonus Birth mineral pays).
   st = freshWithPlanet(42);
   L.applyXp(st, 600, undefined, () => 1); // no events
   const rcGrown = L.recycleCurrent(st, seedSeq(33000));
   eq('birth cost: grown recycle ok', rcGrown.ok, true);
   eq('birth cost: grown recycle yields mutation + bonus', rcGrown.minerals.length, 2);
-  check('birth cost: grown recycle keeps starter + mutation mineral',
-    st.minerals.length === 2 && st.minerals.some((m) => m.mutation === 'glowing-oceans'));
+  check('birth cost: grown recycle keeps only the mutation mineral',
+    st.minerals.length === 1 && st.minerals.some((m) => m.mutation === 'glowing-oceans'));
   eq('birth cost: grown recycle loses nothing', JSON.stringify(rcGrown.lostMutations), '[]');
 }
 
 // 20d. Grow-it-first salvage: a mutated planet below Crust (600 XP)
-// yields only a plain mineral; at Crust+ the mutation minerals
+// yields only a Birth mineral; at Crust+ the mutation minerals
 // come back. Plain planets are unaffected at any stage.
 {
   const young = ratePlanet(100, ['green-moon'], []);
   const yg = L.yieldMineralsForPlanet(young);
   eq('salvage gate: young mutated planet yields one mineral', yg.length, 1);
-  eq('salvage gate: young yield is plain', yg[0].mutation, null);
+  eq('salvage gate: young yield is a Birth mineral', yg[0].mutation, null);
+  eq('salvage gate: young yield kind is birth', yg[0].kind, 'birth');
+  eq('salvage gate: young yield carries no family', yg[0].family, null);
   eq('salvage gate: young loss lists the mutation', JSON.stringify(L.salvageLostMutations(young)), '["green-moon"]');
   check('salvage gate: loss message names the planet and the rule',
     (L.salvageLostMessage(young, ['green-moon']) || '').includes('too young')
@@ -2599,6 +2852,8 @@ function ratePlanet(xp, mutations, eventTitles) {
   const gg = L.yieldMineralsForPlanet(grown);
   eq('salvage gate: grown mutated planet yields two minerals', gg.length, 2);
   eq('salvage gate: grown yield carries the mutation', gg[0].mutation, 'green-moon');
+  eq('salvage gate: grown yield bonus is a Birth mineral', gg[1].kind, 'birth');
+  eq('salvage gate: grown yield bonus carries no family', gg[1].family, null);
   eq('salvage gate: grown planet loses nothing', JSON.stringify(L.salvageLostMutations(grown)), '[]');
   eq('salvage gate: no loss means no message', L.salvageLostMessage(grown, []), null);
   const plainYoung = ratePlanet(0, [], []);
@@ -2608,59 +2863,105 @@ function ratePlanet(xp, mutations, eventTitles) {
   st = freshWithPlanet(42); // Glowing Oceans, 0 XP
   const dc = L.destroyCurrent(st);
   eq('salvage gate: destroy reports the loss', JSON.stringify(dc.lostMutations), '["glowing-oceans"]');
-  eq('salvage gate: destroy yields one plain', dc.minerals.length, 1);
+  eq('salvage gate: destroy yields one Birth mineral', dc.minerals.length, 1);
+  eq('salvage gate: destroy yield is a Birth mineral', dc.minerals[0].kind, 'birth');
   st = freshWithPlanet(42);
   L.applyXp(st, 600, undefined, () => 1); // no events
+  // Round 16 — the birth costs 1 Birth mineral; fund it.
+  L.addMinerals(st, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
   L.newPlanet(st, seedSeq(34000));
   const sv = L.salvageArchived(st, 0);
   eq('salvage gate: grown archived salvage keeps the mutation', sv.minerals.length, 2);
   eq('salvage gate: grown archived salvage loses nothing', JSON.stringify(sv.lostMutations), '[]');
+  // salvagePreview: the exact yield + exact losses, before confirm.
+  const pvYoung = L.salvagePreview(ratePlanet(100, ['green-moon'], []));
+  eq('salvage preview: young yield is one Birth mineral', JSON.stringify(pvYoung.yields),
+    JSON.stringify([{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]));
+  eq('salvage preview: young loss names the mutation', JSON.stringify(pvYoung.lost), '["green-moon"]');
+  const pvGrown = L.salvagePreview(ratePlanet(600, ['green-moon', 'blood-moon'], []));
+  eq('salvage preview: grown yield is two mutation minerals + Birth', pvGrown.yields.length, 3);
+  eq('salvage preview: grown yield mutations in order',
+    pvGrown.yields.filter((y) => y.mutation).map((y) => y.mutation).join(','), 'green-moon,blood-moon');
+  eq('salvage preview: grown yield bonus is a Birth mineral', pvGrown.yields[2].kind, 'birth');
+  eq('salvage preview: grown loses nothing', JSON.stringify(pvGrown.lost), '[]');
+  const pvPlain = L.salvagePreview(ratePlanet(0, [], []));
+  eq('salvage preview: plain yield is one Birth mineral', pvPlain.yields.length, 1);
+  eq('salvage preview: plain loses nothing', JSON.stringify(pvPlain.lost), '[]');
+  // Previewing destroys nothing — the planet is untouched.
+  const pvPlanet = ratePlanet(100, ['green-moon'], []);
+  L.salvagePreview(pvPlanet);
+  eq('salvage preview: preview does not mutate the planet', pvPlanet.mutations.join(','), 'green-moon');
 }
 
-// 20e. Shop: plain mineral + two gambles, all in Stardust, all
+// 20e. Shop: Birth mineral + two gambles, all in Stardust, all
 // guarded by the balance. A gamble gives a MINERAL, never a direct
 // mutation — and buying one does not mark it "found". Round 15:
 // the Mystery Mineral is GONE (Devon — it was a 5% lottery ticket
-// for a plain mineral you could just buy), and the power items
-// cost 10x more (Wheel 50,000, Family Pick 80,000) while the plain
-// mineral stays 500 (cheap fuel for a first planet).
+// for a Birth mineral you could just buy), and the power items
+// cost 10x more (Random Mutation 50,000, Family Pick 80,000) while
+// the Birth mineral stays 500 (cheap fuel for a first planet).
+// Round 16 overhaul: the plain mineral is a Birth mineral now
+// (kind 'birth', no family), the Wheel is buyRandomMutationMineral.
 {
-  eq('shop: plain price stays 500', L.CONFIG.SHOP_PLAIN_PRICE, 500);
+  eq('shop: Birth price stays 500', L.CONFIG.SHOP_BIRTH_PRICE, 500);
+  eq('shop: old plain price const is gone', L.CONFIG.SHOP_PLAIN_PRICE, undefined);
   eq('shop: mystery price is gone', L.CONFIG.SHOP_MYSTERY_PRICE, undefined);
   eq('shop: mystery chance is gone', L.CONFIG.SHOP_MYSTERY_MUTATION_CHANCE, undefined);
   eq('shop: mystery buy function is gone', typeof L.buyMysteryMineral, 'undefined');
-  eq('shop: wheel price is 50000', L.CONFIG.SHOP_WHEEL_PRICE, 50000);
+  eq('shop: old plain buy function is gone', typeof L.buyPlainMineral, 'undefined');
+  eq('shop: old wheel buy function is gone', typeof L.buyMutationWheel, 'undefined');
+  eq('shop: old wheel price const is gone', L.CONFIG.SHOP_WHEEL_PRICE, undefined);
+  eq('shop: Random Mutation price is 50000', L.CONFIG.SHOP_RANDOM_MUTATION_PRICE, 50000);
   eq('shop: family pick price is 80000', L.CONFIG.SHOP_FAMILY_PICK_PRICE, 80000);
+  eq('shop: Family Pick families are moon/rings/glow/sky',
+    L.CONFIG.FAMILY_PICK_FAMILIES.join(','), 'moon,rings,glow,sky');
   st = freshWithPlanet(42);
   st.stardust = 500;
-  const bought = L.buyPlainMineral(st, () => 0.0);
-  eq('shop: plain mineral deducts 500', st.stardust, 0);
-  eq('shop: plain mineral added', bought.ok, true);
-  eq('shop: bought mineral is plain', bought.mineral.mutation, null);
+  const bought = L.buyBirthMineral(st);
+  eq('shop: Birth mineral deducts 500', st.stardust, 0);
+  eq('shop: Birth mineral added', bought.ok, true);
+  eq('shop: bought mineral is a Birth mineral', bought.mineral.kind, 'birth');
+  eq('shop: bought mineral carries no mutation', bought.mineral.mutation, null);
+  eq('shop: bought mineral carries no family', bought.mineral.family, null);
   eq('shop: bought mineral is from the shop', bought.mineral.source, 'shop');
+  eq('shop: bought mineral is named Birth mineral', L.mineralName(bought.mineral), 'Birth mineral');
   st.stardust = 499;
-  const broke = L.buyPlainMineral(st, () => 0.0);
-  eq('shop: 499 Stardust cannot buy a plain mineral', broke.ok, false);
+  const broke = L.buyBirthMineral(st);
+  eq('shop: 499 Stardust cannot buy a Birth mineral', broke.ok, false);
   eq('shop: refusal reason', broke.reason, 'not enough stardust');
   eq('shop: refused purchase spends nothing', st.stardust, 499);
-  eq('shop: refused purchase adds nothing', st.minerals.length, 2);
-  // Mutation Wheel: always a mutation mineral.
+  eq('shop: refused purchase adds nothing', st.minerals.length, 1);
+  // Random Mutation Mineral: always a mutation mineral.
   st.stardust = 50000;
-  const wheelLow = L.buyMutationWheel(st, () => 0.0);
-  eq('shop: wheel ok', wheelLow.ok, true);
-  eq('shop: wheel gives a mutation mineral', wheelLow.mineral.mutation, 'big-moon');
-  eq('shop: wheel deducts 50000', st.stardust, 0);
+  const wheelLow = L.buyRandomMutationMineral(st, () => 0.0);
+  eq('shop: random mutation ok', wheelLow.ok, true);
+  eq('shop: random mutation gives a mutation mineral', wheelLow.mineral.mutation, 'big-moon');
+  eq('shop: random mutation mineral kind', wheelLow.mineral.kind, 'mutation');
+  eq('shop: random mutation deducts 50000', st.stardust, 0);
   st.stardust = 50000;
-  const wheelHigh = L.buyMutationWheel(st, () => 0.99);
-  eq('shop: wheel at the top of the range gives another mutation', wheelHigh.mineral.mutation, 'glitch');
+  const wheelHigh = L.buyRandomMutationMineral(st, () => 0.99);
+  eq('shop: random mutation at the top of the range gives another mutation', wheelHigh.mineral.mutation, 'glitch');
   st.stardust = 49999;
-  eq('shop: 49999 cannot spin the wheel', L.buyMutationWheel(st, () => 0.0).ok, false);
-  eq('shop: refused wheel spends nothing', st.stardust, 49999);
+  eq('shop: 49999 cannot buy a Random Mutation mineral', L.buyRandomMutationMineral(st, () => 0.0).ok, false);
+  eq('shop: refused random mutation spends nothing', st.stardust, 49999);
+  // Uniform 1-of-13: a sweep across the rng range hits every
+  // mutation exactly once (the draw is uniform over MUTATIONS).
+  st = freshWithPlanet(42);
+  st.stardust = 50000 * 13;
+  const seenWheel = new Set();
+  for (let i = 0; i < 13; i++) {
+    const r = L.buyRandomMutationMineral(st, () => (i + 0.5) / 13);
+    seenWheel.add(r.mineral.mutation);
+  }
+  eq('shop: wheel sweep hits all 13 mutations', seenWheel.size, 13);
+  eq('shop: wheel sweep hits exactly the mutation list',
+    [...seenWheel].sort().join(','), Planet.CONFIG.MUTATIONS.map((m) => m.id).sort().join(','));
   // Family Pick: the mutation comes from the chosen family.
   st.stardust = 80000;
   const pickMoon = L.buyFamilyPick(st, 'moon', () => 0.0);
   eq('shop: moon pick gives a moon mutation', pickMoon.mineral.mutation, 'big-moon');
   eq('shop: moon pick family matches', pickMoon.mineral.family, 'moon');
+  eq('shop: moon pick kind is mutation', pickMoon.mineral.kind, 'mutation');
   eq('shop: moon pick deducts 80000', st.stardust, 0);
   st.stardust = 80000;
   const pickMoonHigh = L.buyFamilyPick(st, 'moon', () => 0.99);
@@ -2668,6 +2969,27 @@ function ratePlanet(xp, mutations, eventTitles) {
   st.stardust = 80000;
   const pickRings = L.buyFamilyPick(st, 'rings', () => 0.5);
   eq('shop: rings pick gives a rings mutation', pickRings.mineral.mutation, 'colored-rings');
+  st.stardust = 80000;
+  const pickGlow = L.buyFamilyPick(st, 'glow', () => 0.99);
+  eq('shop: glow pick at the top gives crystal-crust', pickGlow.mineral.mutation, 'crystal-crust');
+  st.stardust = 80000;
+  const pickSky = L.buyFamilyPick(st, 'sky', () => 0.0);
+  eq('shop: sky pick gives a sky mutation', pickSky.mineral.mutation, 'meteor-shower');
+  eq('shop: sky pick is 1 in 2 (two mutations)', L.familyPickOdds('sky').mutations.length, 2);
+  // Storm / Weird are NOT offered — a pick there would be a
+  // guaranteed Giant Storm / Glitch. Rejected before any spend.
+  st.stardust = 80000;
+  const beforeStorm = st.minerals.length;
+  const stormPick = L.buyFamilyPick(st, 'storm', () => 0.0);
+  eq('shop: storm pick rejected', stormPick.ok, false);
+  eq('shop: storm rejection reason', stormPick.reason, 'not offered');
+  eq('shop: rejected storm pick spends nothing', st.stardust, 80000);
+  eq('shop: rejected storm pick adds nothing', st.minerals.length, beforeStorm);
+  const weirdPick = L.buyFamilyPick(st, 'weird', () => 0.0);
+  eq('shop: weird pick rejected', weirdPick.ok, false);
+  eq('shop: weird rejection reason', weirdPick.reason, 'not offered');
+  eq('shop: rejected weird pick spends nothing', st.stardust, 80000);
+  eq('shop: rejected weird pick adds nothing', st.minerals.length, beforeStorm);
   eq('shop: unknown family rejected', L.buyFamilyPick(st, 'bogus', () => 0.0).ok, false);
   st.stardust = 79999;
   eq('shop: 79999 cannot family-pick', L.buyFamilyPick(st, 'moon', () => 0.0).ok, false);
@@ -2676,35 +2998,44 @@ function ratePlanet(xp, mutations, eventTitles) {
   // means seeing it on a planet, not owning the bottle.
   st = freshWithPlanet(42);
   st.stardust = 50000;
-  L.buyMutationWheel(st, () => 0.0); // big-moon mineral
+  L.buyRandomMutationMineral(st, () => 0.0); // big-moon mineral
   check('shop: a bought mineral is not discovered', !st.discovered.includes('big-moon'));
 }
 
-// 20f. Mineral inventory: grouped by family/mutation with counts,
-// mutation minerals first, Stardust balance on top.
+// 20f. Mineral inventory: grouped by KIND with counts — Birth
+// minerals together, then Mutation minerals by mutation — mutation
+// minerals first, Stardust balance on top.
 {
-  st = freshWithPlanet(42); // starter crystal (glow, plain)
+  st = freshWithPlanet(42); // no starter anymore: zero minerals
   const inv0 = L.mineralInventory(st);
   eq('inventory: balance starts at 0', inv0.stardust, 0);
-  eq('inventory: one mineral total', inv0.total, 1);
-  eq('inventory: one group (the starter)', inv0.groups.length, 1);
-  eq('inventory: starter group label', inv0.groups[0].label, 'Crystal mineral');
-  eq('inventory: starter group count', inv0.groups[0].count, 1);
+  eq('inventory: zero minerals total', inv0.total, 0);
+  eq('inventory: zero groups', inv0.groups.length, 0);
   L.addMinerals(st, [
     { family: 'moon', mutation: 'green-moon', source: 'salvage' },
     { family: 'moon', mutation: 'green-moon', source: 'salvage' },
     { family: 'moon', mutation: 'blood-moon', source: 'salvage' },
-    { family: 'moon', mutation: null, source: 'salvage' },
+    { kind: 'birth', family: null, mutation: null, source: 'salvage' },
+    { kind: 'birth', family: null, mutation: null, source: 'shop' },
   ]);
   st.stardust = 1234;
   const inv = L.mineralInventory(st);
   eq('inventory: balance carried', inv.stardust, 1234);
   eq('inventory: five minerals total', inv.total, 5);
-  eq('inventory: four groups', inv.groups.length, 4);
-  eq('inventory: mutation minerals sort first, alphabetical',
+  eq('inventory: three groups (two mutations + Birth)', inv.groups.length, 3);
+  eq('inventory: mutation minerals sort first, alphabetical, Birth last',
     inv.groups.map((g) => g.label).join(' | '),
-    'Blood Moon mineral | Green Moon mineral | Crystal mineral | moon mineral');
+    'Blood Moon mineral | Green Moon mineral | Birth mineral');
   eq('inventory: green-moon count is 2', inv.groups.find((g) => g.mutation === 'green-moon').count, 2);
+  eq('inventory: Birth minerals group together', inv.groups.find((g) => g.kind === 'birth').count, 2);
+  eq('inventory: Birth group kind is birth', inv.groups.find((g) => g.label === 'Birth mineral').kind, 'birth');
+  eq('inventory: Birth group carries no mutation', inv.groups.find((g) => g.kind === 'birth').mutation, null);
+  eq('inventory: Birth group says it pays for 1 birth',
+    inv.groups.find((g) => g.kind === 'birth').applyText, 'Pays for 1 birth — cannot be applied');
+  eq('inventory: mutation group kind is mutation',
+    inv.groups.find((g) => g.mutation === 'green-moon').kind, 'mutation');
+  check('inventory: mutation group apply text states 50%',
+    inv.groups.find((g) => g.mutation === 'green-moon').applyText.includes('50%'));
 }
 
 // 20g. Host wiring: package.json + extension.js for the inventory,
@@ -2714,12 +3045,103 @@ check('pkg: openShop command', cmds.some((c) => c.command === 'protoplanet.openS
 check('ext: registers viewMinerals', extSrc.includes("'protoplanet.viewMinerals'"));
 check('ext: registers openShop', extSrc.includes("'protoplanet.openShop'"));
 check('ext: inventory command reads the grouped inventory', extSrc.includes('Logic.mineralInventory'));
-check('ext: shop buys a plain mineral through the logic', extSrc.includes('Logic.buyPlainMineral'));
+check('ext: shop buys a Birth mineral through the logic', extSrc.includes('Logic.buyBirthMineral'));
 check('ext: shop has no mystery item left', !extSrc.includes("kind: 'mystery'") && !extSrc.includes('Logic.buyMysteryMineral') && !extSrc.includes('SHOP_MYSTERY_PRICE'));
-check('ext: shop spins the wheel through the logic', extSrc.includes('Logic.buyMutationWheel'));
+check('ext: shop buys a Random Mutation Mineral through the logic', extSrc.includes('Logic.buyRandomMutationMineral'));
 check('ext: shop family-picks through the logic', extSrc.includes('Logic.buyFamilyPick'));
 check('ext: shop prices read with commas (1,000 not 1000)',
-  extSrc.includes('const price = (n) => n.toLocaleString()') && extSrc.includes('price(Logic.CONFIG.SHOP_WHEEL_PRICE)'));
+  extSrc.includes('const price = (n) => n.toLocaleString()') && extSrc.includes('price(Logic.CONFIG.SHOP_RANDOM_MUTATION_PRICE)'));
+check('ext: shop has no old plain/wheel wiring left',
+  !extSrc.includes('Logic.buyPlainMineral') && !extSrc.includes('Logic.buyMutationWheel')
+  && !extSrc.includes('SHOP_PLAIN_PRICE') && !extSrc.includes('SHOP_WHEEL_PRICE')
+  && !extSrc.includes('Mutation Wheel'));
+check('ext: shop labels the three new items',
+  extSrc.includes('Birth Mineral —') && extSrc.includes('Random Mutation Mineral —') && extSrc.includes('Family Mutation Mineral —'));
+check('ext: shop Birth label states it creates one planet',
+  extSrc.includes("description: 'Creates one planet · 100% success'"));
+check('ext: shop Random label states 1-of-13 and the 50% apply chance',
+  extSrc.includes('1 of ${mutationCount} mutations') && extSrc.includes('application chance')
+  && extSrc.includes('each equally likely'));
+check('ext: shop Random odds come from the shared helpers',
+  extSrc.includes('Logic.wheelOdds()') && extSrc.includes('Logic.applyOdds()'));
+check('ext: shop family step lists only the four offered families',
+  extSrc.includes('Logic.CONFIG.FAMILY_PICK_FAMILIES') && !extSrc.includes('Logic.CONFIG.MINERAL_FAMILIES.map'));
+check('ext: shop family rows name mutations and exact odds',
+  extSrc.includes("formatOdds(odds.perMutation, 'one-in')") && extSrc.includes('each: ${names.join'));
+check('ext: shop insufficient-funds copy uses the new names',
+  extSrc.includes('a Birth Mineral costs') && extSrc.includes('a Random Mutation Mineral costs')
+  && extSrc.includes('a Family Mutation Mineral costs'));
+check('ext: shop family step can only offer the four families (no Storm/Weird rows)',
+  extSrc.includes('Logic.CONFIG.FAMILY_PICK_FAMILIES.map') && !extSrc.includes("'storm'") && !extSrc.includes('Storm'));
+  // Note: 'weird' still appears once in extension.js, as the
+  // Mutation Index entry's family fallback — not a shop row.
+
+// Round 16 overhaul (Nov 15) — steps 5–7 host wiring: load backup,
+// apply confirm, salvage warning, prestige numbers, Hole G relabel,
+// Mutation Index header, birth-toast prefix. Every number below is
+// rendered from the shared probability helpers, never hardcoded.
+check('ext: load writes the v1 backup before any save can overwrite it',
+  extSrc.includes('Logic.deserializeState(context.globalState.get(STATE_KEY') &&
+  extSrc.includes("protoplanet.state.backup.v1") && extSrc.includes('loaded.backupJson'));
+check('ext: load shows the unreadable-save notice once',
+  extSrc.includes('loaded.notice') && extSrc.includes('if (loaded.notice) this.notify(loaded.notice)'));
+check('ext: load takes the state from the deserialize result object',
+  extSrc.includes('this.state = loaded.state;'));
+check('ext: apply filters to mutation minerals the planet does not own',
+  extSrc.includes('m.mutation && !owned.has(m.mutation)') && !extSrc.includes('m.family))'));
+check('ext: apply confirm states the 50% odds from the shared helper',
+  extSrc.includes('Apply ${mutName}?') && extSrc.includes('success, ${Logic.formatOdds(odds.failure)} failure. Mineral is consumed either way.')
+  && extSrc.includes('Logic.applyOdds()'));
+check('ext: apply confirm offers Apply / Cancel and cancelling consumes nothing',
+  extSrc.includes("'Apply',\n      'Cancel'") && extSrc.includes("if (confirm !== 'Apply') return;"));
+check('ext: apply empty state for no minerals points at shop/salvage',
+  extSrc.includes('No minerals yet — salvage a planet to get one, or buy one in the Protoplanet shop.'));
+check('ext: apply empty state for Birth-only inventory names the rule',
+  extSrc.includes("Birth minerals can't be applied — they pay for births. Get a Mutation mineral from the shop or salvage."));
+check('ext: new-planet confirm states the Birth mineral cost',
+  extSrc.includes('Costs 1 Birth mineral (first planet free)'));
+check('ext: seed-hatch confirm states the Birth mineral cost',
+  extSrc.includes("never carries mutations. Costs 1 Birth mineral (first planet free)"));
+check('ext: salvage confirm is built from salvagePreview',
+  extSrc.includes('Logic.salvagePreview(planet)') && extSrc.includes('salvageConfirmMessage'));
+check('ext: salvage confirm states the exact yield',
+  extSrc.includes('It would yield: ${yields}.'));
+check('ext: salvage confirm warns sub-Crust loss and how to keep the minerals',
+  extSrc.includes('below stage 4, its') && extSrc.includes('would be lost')
+  && extSrc.includes('grow it to stage 4 (Crust, 600 XP) first to keep its mutation minerals.'));
+check('ext: salvage loss warning is conditional on the preview (not at Crust+, not for plain planets)',
+  extSrc.includes('if (preview.lost.length > 0)'));
+check('ext: salvage pick-list detail uses the new Birth wording for plain planets',
+  extSrc.includes('No mutation — yields one Birth mineral'));
+check('ext: detail-sheet salvage uses the same warning confirm',
+  extSrc.includes('this.salvageConfirmMessage(doomedPanel'));
+check('ext: post-destroy relabel is pick-a-terrain (Hole G)',
+  extSrc.includes('Birth a new planet — pick a terrain') && extSrc.includes("kind: 'birthTerrain'")
+  && !extSrc.includes('with a starter mineral') && !extSrc.includes("kind: 'birthMineral'"));
+check('ext: prestige confirm states the 1-Birth-mineral cost',
+  extSrc.includes('Costs 1 Birth mineral. Their offspring starts as dust.'));
+check('ext: prestige confirm lists per-mutation chances from the shared helper',
+  extSrc.includes('Logic.inheritanceOdds(mutCounts[id])') && extSrc.includes('both parents') && extSrc.includes('one parent'));
+check('ext: prestige confirm keeps the parents-stay fate',
+  extSrc.includes("The parents stay in your collection but can't be parents again."));
+check('ext: prestige confirm no longer says boosted odds',
+  !extSrc.includes('boosted odds'));
+check('ext: prestige long inheritance list falls back to a second QuickPick step',
+  extSrc.includes('inheritance chances — pick any row to continue to the confirm'));
+check('ext: prestige view model carries the Birth cost line',
+  extSrc.includes("birthCost: 'Costs 1 Birth mineral'") && extSrc.includes('state.birthCost'));
+check('ext: Mutation Index header carries the any-mutation line',
+  extSrc.includes('About 1 in 10 planets is born with a mutation') && extSrc.includes('anyOddsText'));
+check('ext: Mutation Index header per-mutation number comes from the shared helper',
+  extSrc.includes("Logic.birthMutationOdds().perMutation, 'one-in'"));
+check('ext: Mutation Index header never renders the raw 1-in-11 any-mutation chance',
+  !extSrc.includes('About 1 in 11'));
+check('ext: birth toast prefixes the mutation toast with ✦',
+  extSrc.includes('Logic.mutationMessage(this.state.current)') && extSrc.includes('`✦ ${msg}`'));
+check('ext: status bar still shows the total mineral count from the new summary shape',
+  extSrc.includes('vm.minerals.total') && extSrc.includes('◆${vm.minerals.total}'));
+check('ext: blocked births still key off the unchanged refusal reason',
+  (extSrc.match(/'no plain mineral'/g) || []).length === 7);
 check('ext: blocked birth tells the player how to get a mineral', extSrc.includes('Logic.needPlainMineralMessage()'));
 check('ext: lost mutation minerals are reported', extSrc.includes('Logic.salvageLostMessage'));
 check('ext: status bar shows the Stardust balance', extSrc.includes('✦${Math.floor(vm.stardust)'));
@@ -2777,10 +3199,14 @@ check('ext: Stardust chip hides with the UI', extSrc.includes("body.hide-ui #top
   // spends nothing, and a failed purchase never adds a mineral.
   st = freshWithPlanet(42);
   const minerals0 = st.minerals.length;
+  st.stardust = 500;
+  eq('spend: exact-balance Birth mineral succeeds', L.buyBirthMineral(st).ok, true);
+  eq('spend: exact-balance Birth mineral leaves 0', st.stardust, 0);
+  eq('spend: exact-balance Birth mineral adds one mineral', st.minerals.length, minerals0 + 1);
   st.stardust = 50000;
-  eq('spend: exact-balance wheel succeeds', L.buyMutationWheel(st, () => 0.0).ok, true);
-  eq('spend: exact-balance wheel leaves 0', st.stardust, 0);
-  eq('spend: exact-balance wheel adds one mineral', st.minerals.length, minerals0 + 1);
+  eq('spend: exact-balance Random Mutation succeeds', L.buyRandomMutationMineral(st, () => 0.0).ok, true);
+  eq('spend: exact-balance Random Mutation leaves 0', st.stardust, 0);
+  eq('spend: exact-balance Random Mutation adds one mineral', st.minerals.length, minerals0 + 2);
   st.stardust = 80000;
   eq('spend: exact-balance family pick succeeds', L.buyFamilyPick(st, 'moon', () => 0.0).ok, true);
   eq('spend: exact-balance family pick leaves 0', st.stardust, 0);
@@ -2789,26 +3215,26 @@ check('ext: Stardust chip hides with the UI', extSrc.includes("body.hide-ui #top
   eq('spend: 79999 cannot family-pick', L.buyFamilyPick(st, 'moon', () => 0.0).ok, false);
   eq('spend: failed family pick spends nothing', st.stardust, 79999);
   eq('spend: failed family pick adds nothing', st.minerals.length, beforeFail);
-  // A plain-mineral balance cannot buy power items.
+  // A Birth-mineral balance cannot buy power items.
   st.stardust = 500;
-  eq('spend: 500 cannot spin the wheel', L.buyMutationWheel(st, () => 0.0).ok, false);
+  eq('spend: 500 cannot buy a Random Mutation mineral', L.buyRandomMutationMineral(st, () => 0.0).ok, false);
   eq('spend: 500 cannot family-pick', L.buyFamilyPick(st, 'moon', () => 0.0).ok, false);
   eq('spend: the 500 is untouched', st.stardust, 500);
   // Zero balance buys nothing.
   st.stardust = 0;
-  eq('spend: 0 cannot buy a plain mineral', L.buyPlainMineral(st, () => 0.0).ok, false);
-  eq('spend: 0 cannot spin the wheel', L.buyMutationWheel(st, () => 0.0).ok, false);
+  eq('spend: 0 cannot buy a Birth mineral', L.buyBirthMineral(st).ok, false);
+  eq('spend: 0 cannot buy a Random Mutation mineral', L.buyRandomMutationMineral(st, () => 0.0).ok, false);
   eq('spend: 0 cannot family-pick', L.buyFamilyPick(st, 'moon', () => 0.0).ok, false);
   // No double-spend: buying twice deducts twice; the second buy
   // with an empty balance fails instead of going negative.
   st.stardust = 50000;
-  L.buyMutationWheel(st, () => 0.0);
-  eq('spend: second wheel with 0 balance fails', L.buyMutationWheel(st, () => 0.0).ok, false);
+  L.buyRandomMutationMineral(st, () => 0.0);
+  eq('spend: second Random Mutation with 0 balance fails', L.buyRandomMutationMineral(st, () => 0.0).ok, false);
   eq('spend: balance never goes negative', st.stardust, 0);
   // Fractional balances (rates like 1.5/char accumulate fractions)
-  // spend fine: 500.5 buys a plain mineral and leaves 0.5.
+  // spend fine: 500.5 buys a Birth mineral and leaves 0.5.
   st.stardust = 500.5;
-  eq('spend: fractional balance buys a plain mineral', L.buyPlainMineral(st, () => 0.0).ok, true);
+  eq('spend: fractional balance buys a Birth mineral', L.buyBirthMineral(st).ok, true);
   eq('spend: fractional remainder kept', st.stardust, 0.5);
   // Typing nothing earns nothing; a planet-less state earns nothing.
   st = freshWithPlanet(42);
@@ -2830,7 +3256,9 @@ check('ext: Stardust chip hides with the UI', extSrc.includes("body.hide-ui #top
 {
   st = freshWithPlanet(42); // seed 42: Glowing Oceans, 1.5/char
   L.applyXp(st, 2500, undefined, () => 1); // Civ, no events: 18/char
-  L.newPlanet(st, seedSeq(40000)); // starter pays for the birth
+  // Round 16 — the birth costs 1 Birth mineral; fund it.
+  L.addMinerals(st, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
+  L.newPlanet(st, seedSeq(40000)); // Birth mineral pays for the birth
   st.current.mutations = []; // pin the newborn plain (1/char at stage 0)
   const archived = st.past[0];
   eq('transition: archived planet is benched at first', L.systemPlanets(st).length, 1);
@@ -2919,7 +3347,9 @@ check('ext: Stardust chip hides with the UI', extSrc.includes("body.hide-ui #top
   eq('breakdown: system total text', bd0.totalText, '1.5');
   // Two-planet system: newborn (1) + a Civ on a ring (18) = 19.
   L.applyXp(st, 2500, undefined, () => 1); // current is now Civ, 18/char
-  L.newPlanet(st, seedSeq(41000)); // starter pays for the birth
+  // Round 16 — the birth costs 1 Birth mineral; fund it.
+  L.addMinerals(st, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
+  L.newPlanet(st, seedSeq(41000)); // Birth mineral pays for the birth
   st.current.mutations = []; // pin the newborn plain
   L.placePlanet(st, 0, st.past[0].seed, st.past[0].generation);
   const bd = L.systemEarnBreakdown(st);

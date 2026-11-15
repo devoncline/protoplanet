@@ -76,13 +76,24 @@ const CONFIG = {
   SAVE_DEBOUNCE_MS: 3000,
 
   // --- Minerals, salvage/recycle, prestige (step 2, Nov 11) -----------
-  // A mineral IS a mutation, bottled: a mutated planet yields a
-  // mineral OF its mutation when destroyed. Spend it to try to put
-  // that mutation on the planet you love — right now, same planet,
+  // A mineral has ONE job, carried by `kind` (round 16 overhaul,
+  // Nov 15 — Devon): 'birth' pays for exactly one birth and can do
+  // nothing else; 'mutation' carries exactly one named mutation and
+  // can never pay for a birth. There are no family minerals anymore
+  // (families survive only as mutation tags / sets / earn combos /
+  // the Family Pick selection). A mutated planet yields a mineral OF
+  // its mutation when destroyed. Spend it to try to put that
+  // mutation on the planet you love — right now, same planet,
   // same moment (round 10, Nov 12 — Devon's call: feeding a mineral
   // to tilt the NEXT planet's birth was confusing and clunky, cause
   // on one planet, effect on another, later. Feeding is gone.)
   MINERAL_FAMILIES: ['moon', 'rings', 'glow', 'storm', 'sky', 'weird'],
+
+  // Families the shop's Family Mutation Mineral may draw from
+  // (round 16 overhaul): Moon/Rings/Glow/Sky only. Storm/Weird are
+  // NOT offered — a Storm pick would be a guaranteed Giant Storm
+  // and a Weird pick a guaranteed Glitch.
+  FAMILY_PICK_FAMILIES: ['moon', 'rings', 'glow', 'sky'],
 
   // The mutate attempt (round 10): spend a mineral, coin flip — it
   // takes hold or it fizzles and the mineral is gone. One knob.
@@ -129,10 +140,6 @@ const CONFIG = {
   SYSTEM_FINISHED_PER_RANK: 3, // finished planets per +1 ring
   SYSTEM_MAX_RINGS: 12, // the orrery gets unreadable past this; retune if needed
 
-  // The one free starter mineral, granted on first run (crystal —
-  // a random glow-family mutation when spent on your planet).
-  STARTER_MINERAL: { kind: 'crystal', family: 'glow', mutation: null, source: 'starter' },
-
   // --- Stardust economy (round 14, Nov 14 — Devon) ---------------------
   // The anti-farming update: births are no longer free spins for a
   // mutation. Stardust is earned PER CHARACTER TYPED (never over
@@ -165,25 +172,26 @@ const CONFIG = {
     'Meteor Impact': 0.15,
     'Deep Tremor': 0.1,
   },
-  // Birth cost: every birth after the first costs 1 plain mineral
-  // (mutation: null) from the inventory. The first planet ever is
-  // free. A mutated planet only yields its mutation minerals when
-  // salvaged at stage 3+ (Crust, 600 XP) — younger, only a plain
-  // mineral, and the mutation minerals are lost.
+  // Birth cost: every birth after the first costs 1 Birth mineral
+  // from the inventory. The first planet ever is free. A mutated
+  // planet only yields its mutation minerals when salvaged at stage
+  // 3+ (Crust, 600 XP) — younger, only a Birth mineral, and the
+  // mutation minerals are lost.
   BIRTH_MIN_STAGE_FOR_MUTATION_MINERALS: 3,
   // Shop prices (Stardust, flat — Devon, Nov 14: no diminishing
   // returns, too confusing; keep it simple, just higher prices).
   // The gamble gives a MINERAL, never a direct mutation — the
-  // player still applies it with the 50% coin flip. The plain
+  // player still applies it with the 50% coin flip. The Birth
   // mineral STAYS 500 (cheap fuel): a new player must be able to
   // afford their first planet — never gate core gameplay behind
   // currency. The power items are expensive instead: a Moon Lord
-  // at 81/char needs ~617 chars for a Wheel (not 62), a plain Civ
-  // at 12/char needs ~4,167. The Mystery Mineral is gone (round
-  // 15): at 5% it was a lottery ticket for a plain mineral you
-  // could just buy for half the price — Devon removed it.
-  SHOP_PLAIN_PRICE: 500,
-  SHOP_WHEEL_PRICE: 50000,
+  // at 81/char needs ~617 chars for a Random Mutation Mineral
+  // (not 62), a plain Civ at 12/char needs ~4,167. The Mystery
+  // Mineral is gone (round 15): at 5% it was a lottery ticket for
+  // a Birth mineral you could just buy for half the price — Devon
+  // removed it.
+  SHOP_BIRTH_PRICE: 500,
+  SHOP_RANDOM_MUTATION_PRICE: 50000,
   SHOP_FAMILY_PICK_PRICE: 80000,
 };
 
@@ -685,7 +693,7 @@ function uniquePlanetName(baseName, seed, taken) {
 
 function freshState() {
   return {
-    version: 1,
+    version: 2,
     starterDone: false, // has the first-run terrain pick been done?
     generation: 1, // how many planet lives so far (new planets: manual, recycle, prestige)
     current: null, // the living planet (makePlanet result), or null
@@ -698,7 +706,6 @@ function freshState() {
     // Step 2: the mineral inventory.
     minerals: [], // [{ id, kind, family, mutation, source }]
     mineralSeq: 0, // counter for mineral ids
-    starterMineralGranted: false,
     // Round 10: the Mutation Index — every mutation id ever seen on
     // a planet you grew (birth roll, successful apply, prestige
     // offspring). A mutation is "found" forever, even after the
@@ -713,24 +720,93 @@ function freshState() {
 }
 
 // First run: hatch the first planet, optionally biased by the starter
-// terrain the user picked (undefined = fully random). Grants the one
-// free starter mineral (crystal — a random glow-family mutation when
-// spent on your planet). The birth is recorded in the Mutation Index.
+// terrain the user picked (undefined = fully random). No starter
+// mineral anymore (round 16 overhaul, Nov 15 — Devon): the first
+// planet is free, and the player starts with zero minerals and zero
+// Stardust. The birth is recorded in the Mutation Index.
 function startFirstPlanet(state, seed, starterTerrain) {
   state.current = makePlanet(seed, starterTerrain, undefined, takenNamesFor(state), state.generation);
   recordDiscovery(state, state.current);
   state.starterDone = true;
-  grantStarterMineral(state);
   return state.current;
+}
+
+// ---------------------------------------------------------------------------
+// Shared probability helpers (round 16 overhaul, Nov 15 — Devon).
+// ONE source of truth: these functions drive the actual rolls AND
+// the odds the UI displays, so a displayed number can never drift
+// from the real roll. No probability constant is duplicated anywhere
+// else — the rolls below call these helpers, they do not restate
+// the numbers. All odds are derived from Planet.CONFIG
+// (MUTATION_CHANCE, MUTATIONS) and petLogic CONFIG (MUTATE_CHANCE,
+// PRESTIGE_INHERIT_CHANCE_*), never from literals.
+// ---------------------------------------------------------------------------
+
+// Birth odds: one independent roll per mutation at MUTATION_CHANCE.
+// perMutation is the per-mutation chance; any is the chance of at
+// least one mutation; twoPlus is the chance of two or more.
+function birthMutationOdds() {
+  const p = Planet.CONFIG.MUTATION_CHANCE;
+  const n = Planet.CONFIG.MUTATIONS.length;
+  const none = Math.pow(1 - p, n);
+  const exactlyOne = n * p * Math.pow(1 - p, n - 1);
+  return { perMutation: p, any: 1 - none, twoPlus: 1 - none - exactlyOne };
+}
+
+// The apply coin flip: success or fizzle, mineral consumed either way.
+function applyOdds() {
+  return { success: CONFIG.MUTATE_CHANCE, failure: 1 - CONFIG.MUTATE_CHANCE };
+}
+
+// The Random Mutation Mineral: a uniform draw over all mutations.
+function wheelOdds() {
+  return { perMutation: 1 / Planet.CONFIG.MUTATIONS.length };
+}
+
+// The Family Mutation Mineral: a uniform draw over the mutations in
+// one family. Storm/Weird are NOT offered (a pick there would be a
+// guaranteed Giant Storm / Glitch), and unknown families are
+// rejected too — the caller gets { ok: false } and refuses the buy.
+function familyPickOdds(family) {
+  if (!CONFIG.MINERAL_FAMILIES.includes(family)) return { ok: false, reason: 'unknown family' };
+  if (!CONFIG.FAMILY_PICK_FAMILIES.includes(family)) return { ok: false, reason: 'not offered' };
+  const mutations = Planet.CONFIG.MUTATIONS
+    .filter((m) => (m.tags || []).includes(family))
+    .map((m) => m.id);
+  return { ok: true, family, perMutation: 1 / mutations.length, mutations };
+}
+
+// Prestige inheritance: the chance one parent mutation passes to
+// the offspring — 50% from one parent, 75% from both, and the base
+// birth chance when neither parent carries it.
+function inheritanceOdds(parentsCarrying) {
+  if (parentsCarrying >= 2) return CONFIG.PRESTIGE_INHERIT_CHANCE_BOTH;
+  if (parentsCarrying === 1) return CONFIG.PRESTIGE_INHERIT_CHANCE_ONE;
+  return Planet.CONFIG.MUTATION_CHANCE;
+}
+
+// One formatter for every displayed odd, so "1 in 143" and "0.7%"
+// can never disagree. Default is a percent ("50%", "7.69%",
+// "0.7%"); style 'one-in' is the "1 in N" form ("1 in 13",
+// "1 in 143", "1 in 2"). The intro's "about 1 in 10" is prose,
+// not a formatter output — the exact computed any-mutation chance
+// is 1 in 11 (8.73%).
+function formatOdds(p, style) {
+  if (typeof p !== 'number' || !(p > 0)) return style === 'one-in' ? 'never' : '0%';
+  if (p >= 1) return style === 'one-in' ? '1 in 1' : '100%';
+  if (style === 'one-in') return `1 in ${Math.round(1 / p)}`;
+  const pct = (p * 100).toFixed(2).replace(/\.?0+$/, '');
+  return `${pct}%`;
 }
 
 // ---------------------------------------------------------------------------
 // Minerals (step 2) — the inventory and the mutate attempt (round 10).
 // A mineral is { id, kind, family, mutation, source }:
-//   * family: one of CONFIG.MINERAL_FAMILIES (moon/rings/glow/...).
-//   * mutation: the mutation id it carries, or null for a plain family
-//     mineral. A mutated planet yields a mineral OF its mutation.
-//   * source: 'starter' | 'salvage' | 'prestige' (where it came from).
+//   * kind is the JOB (round 16 overhaul): 'birth' pays for exactly
+//     one birth (family null, mutation null) and can do nothing else;
+//     'mutation' carries exactly one mutation (family = its family)
+//     and can never pay for a birth. No other kinds exist.
+//   * source: 'shop' | 'salvage' (where it came from).
 // A mineral IS the mutation, bottled: spend it to try to put that
 // mutation on the planet you love — the attempt below. Feeding (tilt
 // the NEXT planet's birth) was cut in round 10: cause on one planet,
@@ -743,8 +819,7 @@ function mineralName(mineral) {
     const def = Planet.mutationDef(mineral.mutation);
     return `${def ? def.name : mineral.mutation} mineral`;
   }
-  if (mineral.kind === 'crystal') return 'Crystal mineral';
-  return `${mineral.family} mineral`;
+  return 'Birth mineral';
 }
 
 // Plain words for the UI: what does spending this mineral try to do?
@@ -752,29 +827,27 @@ function mineralApplyText(mineral) {
   if (!mineral) return '';
   if (mineral.mutation) {
     const def = Planet.mutationDef(mineral.mutation);
-    return `try to put ${def ? def.name : mineral.mutation} on your planet (coin flip)`;
+    const odds = applyOdds();
+    return `${formatOdds(odds.success)} chance to put ${def ? def.name : mineral.mutation} on your planet — gone if it fizzles`;
   }
-  return `try a random ${mineral.family} mutation on your planet (coin flip)`;
+  return 'Pays for 1 birth — cannot be applied';
 }
 
 function makeMineral(state, spec) {
   state.mineralSeq += 1;
+  const mutation = spec.mutation || null;
+  let family = null;
+  if (mutation) {
+    const def = Planet.mutationDef(mutation);
+    family = spec.family || (def && def.tags && def.tags[0]) || 'weird';
+  }
   return {
     id: `min-${state.mineralSeq}`,
-    kind: spec.kind || (spec.mutation ? 'mutation' : 'family'),
-    family: spec.family,
-    mutation: spec.mutation || null,
+    kind: spec.kind || (mutation ? 'mutation' : 'birth'),
+    family,
+    mutation,
     source: spec.source || 'salvage',
   };
-}
-
-// The one free starter mineral (crystal). Once per state, ever.
-function grantStarterMineral(state) {
-  if (state.starterMineralGranted) return null;
-  state.starterMineralGranted = true;
-  const m = makeMineral(state, CONFIG.STARTER_MINERAL);
-  state.minerals.push(m);
-  return m;
 }
 
 // The Mutation Index (round 10): record every mutation on this planet
@@ -805,37 +878,34 @@ function setsForPlanet(planet) {
 // whether the attempt works or not — the price is the mineral, and
 // the mineral came from destroying a planet that had the mutation.
 //   * A mutation mineral tries THAT mutation.
-//   * A family mineral tries a RANDOM mutation in its family that the
-//     planet doesn't already have.
+//   * A Birth mineral is REFUSED outright — it pays for births and
+//     can never apply a mutation (round 16 overhaul; the UI filters
+//     too, this is the logic-level enforcement).
 //   * Blocked (mineral NOT consumed): the planet already has that
-//     mutation, or owns every mutation in the family.
+//     mutation.
 // `rng` is the coin flip (defaults to Math.random; tests pass a fixed
-// one). The visuals use a SEEDED rng (seed + mutation), so the same
-// apply always looks the same way. Returns { ok, success,
-// mutationId, mutationName, setsCompleted } — setsCompleted lists the
-// set ids the planet completed with this mutation, if any.
+// one). The flip uses applyOdds() — the same helper the UI displays
+// — never a restated 0.5. The visuals use a SEEDED rng (seed +
+// mutation), so the same apply always looks the same way. Returns
+// { ok, success, mutationId, mutationName, setsCompleted } —
+// setsCompleted lists the set ids the planet completed with this
+// mutation, if any.
 function attemptMutation(state, mineralId, rng) {
   const roll = typeof rng === 'function' ? rng : Math.random;
   if (!state.current) return { ok: false, reason: 'no current planet' };
   const idx = (state.minerals || []).findIndex((m) => m.id === mineralId);
   if (idx < 0) return { ok: false, reason: 'no such mineral' };
   const mineral = state.minerals[idx];
-  const owned = new Set(state.current.mutations || []);
-  let targetId = null;
-  if (mineral.mutation) {
-    if (owned.has(mineral.mutation)) return { ok: false, reason: 'planet already has it' };
-    targetId = mineral.mutation;
-  } else {
-    const candidates = Planet.CONFIG.MUTATIONS
-      .filter((m) => (m.tags || []).includes(mineral.family) && !owned.has(m.id))
-      .map((m) => m.id);
-    if (candidates.length === 0) return { ok: false, reason: 'planet already has them all' };
-    targetId = candidates[Math.trunc(roll() * candidates.length)];
+  if (mineral.kind === 'birth' || !mineral.mutation) {
+    return { ok: false, reason: 'birth mineral cannot be applied' };
   }
+  const owned = new Set(state.current.mutations || []);
+  if (owned.has(mineral.mutation)) return { ok: false, reason: 'planet already has it' };
+  const targetId = mineral.mutation;
   // The mineral is spent — success or fizzle, it's gone.
   state.minerals.splice(idx, 1);
   const def = Planet.mutationDef(targetId);
-  if (roll() >= CONFIG.MUTATE_CHANCE) {
+  if (roll() >= applyOdds().success) {
     return { ok: true, success: false, mutationId: targetId, mutationName: def ? def.name : targetId, setsCompleted: [] };
   }
   const setsBefore = new Set(setsForPlanet(state.current));
@@ -861,21 +931,26 @@ function prestigeTilt(extraBoosts) {
   return Object.keys(boosts).length > 0 ? { boosts } : null;
 }
 
-// What the status bar / pet window shows about minerals.
+// What the status bar / pet window shows about minerals: totals by
+// KIND (round 16 overhaul) — Birth minerals pay for births,
+// Mutation minerals each carry one mutation.
 function mineralSummary(state) {
-  const byFamily = {};
-  for (const f of CONFIG.MINERAL_FAMILIES) byFamily[f] = 0;
-  for (const m of state.minerals || []) byFamily[m.family] = (byFamily[m.family] || 0) + 1;
+  let birth = 0, mutation = 0;
+  for (const m of state.minerals || []) {
+    if (m.kind === 'mutation' || (m.kind !== 'birth' && m.mutation)) mutation += 1;
+    else birth += 1;
+  }
   return {
     total: (state.minerals || []).length,
-    byFamily,
+    birth,
+    mutation,
   };
 }
 
 // ---------------------------------------------------------------------------
 // Birth cost (round 14) — births are no longer free spins for a
 // mutation. The anti-farming rule: the first planet ever is free,
-// every later birth costs 1 plain mineral from the inventory.
+// every later birth costs 1 Birth mineral from the inventory.
 // ---------------------------------------------------------------------------
 
 // The archive has room for one more planet. A pure capacity read
@@ -885,25 +960,24 @@ function archiveHasRoom(state) {
   return (state.past || []).length < CONFIG.PAST_LIMIT;
 }
 
-// Index of a plain mineral (mutation: null) the birth cost can
-// spend. Prefers a salvaged/bought plain mineral over the starter
-// gift — the starter is the free mutation attempt, not birth
-// currency — and falls back to the starter when it is the only
-// plain mineral left. -1 when there is no plain mineral at all.
-function plainMineralIndex(state) {
-  const ms = state.minerals || [];
-  let idx = ms.findIndex((m) => !m.mutation && m.source !== 'starter');
-  if (idx < 0) idx = ms.findIndex((m) => !m.mutation);
-  return idx;
+// Index of a Birth mineral (kind === 'birth') the birth cost can
+// spend. A Mutation mineral can never pay for a birth (round 16
+// overhaul — the kind IS the job). -1 when there is no Birth
+// mineral at all.
+function birthMineralIndex(state) {
+  return (state.minerals || []).findIndex((m) => m.kind === 'birth');
 }
 
 // Pay for a birth: the first planet ever is free (starterDone is
 // false — the player has never had a planet). Every later birth
-// costs 1 plain mineral from the inventory. Returns { ok, free,
+// costs 1 Birth mineral from the inventory. Returns { ok, free,
 // spent } or { ok: false, reason: 'no plain mineral' }.
+// NOTE: the reason string is deliberately unchanged — extension.js
+// keys its blocked-birth notice off 'no plain mineral' (7 call
+// sites); the extension.js phase renames both sides together.
 function payBirthCost(state) {
   if (!state.starterDone) return { ok: true, free: true, spent: null };
-  const idx = plainMineralIndex(state);
+  const idx = birthMineralIndex(state);
   if (idx < 0) return { ok: false, reason: 'no plain mineral' };
   const [spent] = state.minerals.splice(idx, 1);
   return { ok: true, free: false, spent };
@@ -911,7 +985,7 @@ function payBirthCost(state) {
 
 // Plain words for a blocked birth (the host shows it).
 function needPlainMineralMessage() {
-  return 'Birthing a planet costs 1 plain mineral — buy one in the Protoplanet shop (500 ✦ Stardust) or salvage a planet.';
+  return 'Birthing a planet costs 1 Birth mineral — buy one in the shop (500 ✦) or salvage a planet.';
 }
 
 // ---------------------------------------------------------------------------
@@ -921,11 +995,12 @@ function needPlainMineralMessage() {
 // flip). A shop-bought mutation mineral does NOT mark the mutation
 // "found" in the Mutation Index — discovery means seeing it on a
 // planet (birth or a landed apply), not owning the bottle.
+// Round 16 overhaul: the shop sells exactly three items — a Birth
+// mineral (500 ✦, no family, no surprise), a Random Mutation
+// Mineral (50,000 ✦, uniform 1 of 13), a Family Mutation Mineral
+// (80,000 ✦, Moon/Rings/Glow/Sky only). There is no random-family
+// draw anywhere anymore.
 // ---------------------------------------------------------------------------
-
-function randomFamily(rng) {
-  return CONFIG.MINERAL_FAMILIES[Math.trunc(rng() * CONFIG.MINERAL_FAMILIES.length)];
-}
 
 function randomMutationId(rng) {
   const all = Planet.CONFIG.MUTATIONS;
@@ -938,56 +1013,67 @@ function randomMutationMineralSpec(rng) {
   return { family: (def && def.tags && def.tags[0]) || 'weird', mutation: id, source: 'shop' };
 }
 
-// Buy a plain mineral (500 ✦). The family is random — a plain
-// mineral is birth currency first, and a family mineral second
-// (spend it to try a random mutation in its family).
-function buyPlainMineral(state, rng) {
-  const roll = typeof rng === 'function' ? rng : Math.random;
-  if ((state.stardust || 0) < CONFIG.SHOP_PLAIN_PRICE) return { ok: false, reason: 'not enough stardust' };
-  state.stardust -= CONFIG.SHOP_PLAIN_PRICE;
-  const m = makeMineral(state, { family: randomFamily(roll), mutation: null, source: 'shop' });
+// Buy a Birth mineral (500 ✦): exactly one birth, no family, no
+// surprise — it can never apply a mutation. No rng needed: there is
+// nothing random about it.
+function buyBirthMineral(state) {
+  if ((state.stardust || 0) < CONFIG.SHOP_BIRTH_PRICE) return { ok: false, reason: 'not enough stardust' };
+  state.stardust -= CONFIG.SHOP_BIRTH_PRICE;
+  const m = makeMineral(state, { kind: 'birth', family: null, mutation: null, source: 'shop' });
   state.minerals.push(m);
   return { ok: true, mineral: m };
 }
 
-// Mutation Wheel (50,000 ✦): guaranteed a random mutation mineral —
-// which of the 13 is random.
-function buyMutationWheel(state, rng) {
+// Random Mutation Mineral (50,000 ✦): guaranteed a random mutation
+// mineral — which of the 13 is uniform (see wheelOdds()).
+function buyRandomMutationMineral(state, rng) {
   const roll = typeof rng === 'function' ? rng : Math.random;
-  if ((state.stardust || 0) < CONFIG.SHOP_WHEEL_PRICE) return { ok: false, reason: 'not enough stardust' };
-  state.stardust -= CONFIG.SHOP_WHEEL_PRICE;
+  if ((state.stardust || 0) < CONFIG.SHOP_RANDOM_MUTATION_PRICE) return { ok: false, reason: 'not enough stardust' };
+  state.stardust -= CONFIG.SHOP_RANDOM_MUTATION_PRICE;
   const m = makeMineral(state, randomMutationMineralSpec(roll));
   state.minerals.push(m);
   return { ok: true, mineral: m };
 }
 
-// Family Pick (80,000 ✦): pick a family, get a random mutation
-// mineral from inside it — the way to hunt a specific set (Moon
-// Lord, Ring King) on purpose instead of hoping.
+// Family Mutation Mineral (80,000 ✦): pick a family, get a random
+// mutation mineral from inside it — the way to hunt a specific set
+// (Moon Lord, Ring King) on purpose instead of hoping. Moon/Rings/
+// Glow/Sky only; Storm/Weird are not offered (the draw would be a
+// guaranteed Giant Storm / Glitch). The draw uses familyPickOdds(),
+// the same helper the UI displays, so the odds can't drift.
 function buyFamilyPick(state, family, rng) {
   const roll = typeof rng === 'function' ? rng : Math.random;
-  if (!CONFIG.MINERAL_FAMILIES.includes(family)) return { ok: false, reason: 'unknown family' };
+  const odds = familyPickOdds(family);
+  if (!odds.ok) return { ok: false, reason: odds.reason };
   if ((state.stardust || 0) < CONFIG.SHOP_FAMILY_PICK_PRICE) return { ok: false, reason: 'not enough stardust' };
   state.stardust -= CONFIG.SHOP_FAMILY_PICK_PRICE;
-  const candidates = Planet.CONFIG.MUTATIONS.filter((m) => (m.tags || []).includes(family));
-  const id = candidates[Math.trunc(roll() * candidates.length)].id;
-  const m = makeMineral(state, { family, mutation: id, source: 'shop' });
+  const id = odds.mutations[Math.trunc(roll() * odds.mutations.length)];
+  const m = makeMineral(state, { kind: 'mutation', family, mutation: id, source: 'shop' });
   state.minerals.push(m);
   return { ok: true, mineral: m };
 }
 
 // The mineral inventory for the inventory screen: minerals grouped
-// by family/mutation with counts, plus the Stardust balance.
-// Mutation minerals first (alphabetical), then plain minerals
-// (alphabetical) — the rares read first.
+// by KIND (round 16 overhaul) — all Birth minerals together ("Pays
+// for 1 birth"), then Mutation minerals by mutation — plus the
+// Stardust balance. Mutation minerals first (alphabetical), then
+// the Birth group.
 function mineralInventory(state) {
   const byKey = new Map();
   for (const m of (state.minerals || [])) {
-    const key = `${m.family}|${m.mutation || ''}`;
-    if (!byKey.has(key)) byKey.set(key, { family: m.family, mutation: m.mutation || null, count: 0, sample: m });
+    const key = m.kind === 'birth' || !m.mutation ? 'birth|' : `mutation|${m.mutation}`;
+    if (!byKey.has(key)) {
+      byKey.set(key, {
+        kind: m.kind === 'birth' || !m.mutation ? 'birth' : 'mutation',
+        family: m.kind === 'birth' || !m.mutation ? null : m.family,
+        mutation: m.kind === 'birth' || !m.mutation ? null : m.mutation,
+        count: 0, sample: m,
+      });
+    }
     byKey.get(key).count += 1;
   }
   const groups = [...byKey.values()].map((g) => ({
+    kind: g.kind,
     family: g.family,
     mutation: g.mutation,
     count: g.count,
@@ -995,7 +1081,7 @@ function mineralInventory(state) {
     applyText: mineralApplyText(g.sample),
   }));
   groups.sort((a, b) => {
-    if (!!a.mutation !== !!b.mutation) return a.mutation ? -1 : 1;
+    if (a.kind !== b.kind) return a.kind === 'mutation' ? -1 : 1;
     return a.label.localeCompare(b.label);
   });
   return {
@@ -1011,36 +1097,40 @@ function mineralInventory(state) {
 
 // What a destroyed planet yields. One mineral per mutation it carries
 // (each carrying that mutation — the mineral remembers where it came
-// from), PLUS one extra plain mineral when it was mutated at all
+// from), PLUS one extra Birth mineral when it was mutated at all
 // (round 10 perk: a mutated planet is worth more than a plain one);
-// a plain planet yields one plain mineral of a family derived from
-// its own seed, so the yield is stable and testable.
+// a plain planet yields one Birth mineral. Counts are identical to
+// before the overhaul — only the bonus mineral's kind changed: it is
+// a Birth mineral now, never a random-family mineral.
 function yieldMineralsForPlanet(planet) {
   const yields = [];
   const muts = planet.mutations || [];
+  const birthSpec = () => ({ kind: 'birth', family: null, mutation: null, source: 'salvage' });
   // Round 14 — grow it first: a mutated planet only yields its
   // mutation minerals if it was grown to Crust (stage 3, 600 XP).
-  // Salvaged younger, only a plain mineral comes back — the
+  // Salvaged younger, only a Birth mineral comes back — the
   // mutation minerals are lost (see salvageLostMutations). A plain
-  // planet is unaffected: one plain mineral at any stage.
+  // planet is unaffected: one Birth mineral at any stage.
   if (muts.length > 0 && stageForXp(planetXp(planet)) < CONFIG.BIRTH_MIN_STAGE_FOR_MUTATION_MINERALS) {
-    const fams = CONFIG.MINERAL_FAMILIES;
-    const pick = fams[Math.trunc(Planet.mulberry32(planet.seed || 0)() * fams.length)];
-    return [{ family: pick, mutation: null, source: 'salvage' }];
+    return [birthSpec()];
   }
-  if (muts.length > 0) {
-    for (const id of muts) {
-      const def = Planet.mutationDef(id);
-      yields.push({ family: (def && def.tags && def.tags[0]) || 'weird', mutation: id, source: 'salvage' });
-    }
-    const fams = CONFIG.MINERAL_FAMILIES;
-    const pick = fams[Math.trunc(Planet.mulberry32(((planet.seed || 0) ^ 0xB0A7) >>> 0)() * fams.length)];
-    yields.push({ family: pick, mutation: null, source: 'salvage' });
-    return yields;
+  for (const id of muts) {
+    const def = Planet.mutationDef(id);
+    yields.push({ kind: 'mutation', family: (def && def.tags && def.tags[0]) || 'weird', mutation: id, source: 'salvage' });
   }
-  const fams = CONFIG.MINERAL_FAMILIES;
-  const pick = fams[Math.trunc(Planet.mulberry32(planet.seed || 0)() * fams.length)];
-  return [{ family: pick, mutation: null, source: 'salvage' }];
+  yields.push(birthSpec());
+  return yields;
+}
+
+// What a salvage WOULD yield, before the player confirms: the exact
+// mineral specs plus the exact mutations that would be lost to the
+// grow-it-first rule. Pure — the UI states yield + losses before
+// the confirm, nothing is destroyed by asking.
+function salvagePreview(planet) {
+  return {
+    yields: yieldMineralsForPlanet(planet),
+    lost: salvageLostMutations(planet),
+  };
 }
 
 // The mutation ids a salvage LOSES to the grow-it-first rule: the
@@ -1083,9 +1173,9 @@ function recycleCurrent(state, nextSeed) {
   const destroyed = state.current;
   const lostMutations = salvageLostMutations(destroyed);
   const minerals = addMinerals(state, yieldMineralsForPlanet(destroyed));
-  // Round 14 — the new birth costs 1 plain mineral, paid out of the
+  // Round 14 — the new birth costs 1 Birth mineral, paid out of the
   // yield + inventory. It always succeeds here: the yield has at
-  // least 1 plain mineral, so a recycle is self-funding — a plain
+  // least 1 Birth mineral, so a recycle is self-funding — a plain
   // planet breaks even (net zero), a grown mutated planet keeps its
   // mutation minerals.
   const cost = payBirthCost(state);
@@ -1179,8 +1269,11 @@ function parentKey(desc) {
 }
 
 // The offspring's inheritance boosts: each parent mutation passes at
-// a multiplied chance — ~2x if one parent has it, ~3x if both.
+// a multiplied chance — 50% if one parent has it, 75% if both.
 // Mutations neither parent has still roll at the base chance.
+// The boost is the inheritance CHANCE (see inheritanceOdds())
+// divided by the base — generatePlanet rolls each mutation at base
+// chance x boost. The boost itself stays internal, never displayed.
 function inheritanceBoosts(parentMutationsA, parentMutationsB) {
   const boosts = {};
   const count = {};
@@ -1190,8 +1283,7 @@ function inheritanceBoosts(parentMutationsA, parentMutationsB) {
   // chance divided by the base (0.5 / 0.007 ≈ 71x). The panel shows
   // the chance itself, never the boost — nobody wants to read "71x".
   for (const [id, n] of Object.entries(count)) {
-    const chance = n >= 2 ? CONFIG.PRESTIGE_INHERIT_CHANCE_BOTH : CONFIG.PRESTIGE_INHERIT_CHANCE_ONE;
-    boosts[id] = chance / Planet.CONFIG.MUTATION_CHANCE;
+    boosts[id] = inheritanceOdds(n) / Planet.CONFIG.MUTATION_CHANCE;
   }
   return boosts;
 }
@@ -1241,7 +1333,7 @@ function prestige(state, parentA, parentB, nextSeed) {
   if (willArchive && (state.past || []).length >= CONFIG.PAST_LIMIT) {
     return { ok: false, reason: 'archive full' };
   }
-  // Round 14 — the offspring is a birth: it costs 1 plain mineral.
+  // Round 14 — the offspring is a birth: it costs 1 Birth mineral.
   // Checked here, after the archive check and before any parent is
   // marked or journaled, so a refused fusion mutates nothing.
   const cost = payBirthCost(state);
@@ -1513,7 +1605,7 @@ function applyXp(state, n, nextSeed, rng) {
 // "New planet" command: archive the living planet (if any) and hatch a
 // fresh one. Generation +1 — a manual new planet is a new life, on
 // demand. The birth roll is plain (no tilt — feeding is gone).
-// starterTerrain (round 9 — Devon): the mineral pick is only for the
+// starterTerrain (round 9 — Devon): the terrain pick is only for the
 // first planet; later births are random by default, but the
 // post-destroy prompt can still offer the pick — pass the picked
 // terrain here and the birth is tilted toward it, like the first run.
@@ -1526,10 +1618,11 @@ function newPlanet(state, nextSeed, starterTerrain) {
   const cost = payBirthCost(state);
   if (!cost.ok) return { ok: false, reason: cost.reason };
   // A first planet through this path (unreachable in the UI — the
-  // first-run pick owns it) still gets the starter treatment.
+  // first-run pick owns it) still gets the free-first-birth treatment:
+  // starterDone is set, nothing is granted (round 16 overhaul — no
+  // starter mineral anymore).
   if (!state.starterDone) {
     state.starterDone = true;
-    grantStarterMineral(state);
   }
   if (state.current) {
     const archived = archiveCurrent(state);
@@ -1671,8 +1764,8 @@ function makeSeedPlanet(seed, takenNames, terrain, generation) {
 // NO tilt is applied: the seed's canonical form is the point — a
 // tilt would change the planet away from it. When there is no current
 // planet yet (first run), the seed hatch IS the first planet (starter
-// done + the one free starter mineral), so the first-run pick never
-// pops up afterwards.
+// done, still Gen 1, no mineral granted — round 16 overhaul), so the
+// first-run pick never pops up afterwards.
 function hatchFromSeed(state, seed, terrain) {
   // Round 14 — check both refusals BEFORE mutating anything: the
   // archive must have room (when a planet is being archived), and
@@ -1686,7 +1779,6 @@ function hatchFromSeed(state, seed, terrain) {
     state.generation += 1;
   } else if (!state.starterDone) {
     state.starterDone = true;
-    grantStarterMineral(state);
   } else {
     state.generation += 1;
   }
@@ -1754,66 +1846,155 @@ function shareCardMarkdown(planet, filename) {
 // ---------------------------------------------------------------------------
 
 function serializeState(state) {
-  return JSON.stringify(state);
+  // Stamps version 2 without mutating the live state object.
+  return JSON.stringify({ ...state, version: 2 });
 }
 
-// Parse stored JSON; anything invalid or from another version falls
-// back to a fresh state rather than crashing the extension.
-function deserializeState(json) {
-  try {
-    const s = JSON.parse(json);
-    if (!s || typeof s !== 'object' || s.version !== 1) return freshState();
-    if (s.current !== null && (typeof s.current !== 'object' || typeof s.current.seed !== 'number' || typeof s.current.xp !== 'number')) return freshState();
-    if (!Array.isArray(s.past)) s.past = [];
-    if (typeof s.generation !== 'number' || s.generation < 1) s.generation = 1;
-    if (typeof s.starterDone !== 'boolean') s.starterDone = !!s.current;
-    // Step 2 fields: old saves (from before minerals existed) get
-    // defaults, plus a one-time starter mineral gift for players who
-    // started before minerals existed.
-    if (!Array.isArray(s.minerals)) s.minerals = [];
-    if (typeof s.mineralSeq !== 'number' || s.mineralSeq < 0) s.mineralSeq = 0;
-    // Round 14: Stardust. Old saves start at 0.
-    if (typeof s.stardust !== 'number' || s.stardust < 0) s.stardust = 0;
-    if (typeof s.starterMineralGranted !== 'boolean') {
-      s.starterMineralGranted = true;
-      if (s.minerals.length === 0) s.minerals.push(makeMineral(s, CONFIG.STARTER_MINERAL));
+// Migrate a v1 save to v2 (round 16 overhaul). Pure: no I/O, same
+// input -> same output, and idempotent — a v2 state is returned
+// unchanged, so running it twice is running it once.
+//   * Mutation mineral (mutation set, any source) -> unchanged
+//     (kind normalized to 'mutation', family filled from the
+//     mutation's tags when missing).
+//   * Plain / family mineral (mutation null, any family, any
+//     source) -> Birth mineral (kind 'birth', family null).
+//     Count preserved 1:1; the hidden family is dropped.
+//   * Starter Crystal (kind 'crystal', source 'starter', unspent)
+//     -> one Birth mineral (same rule: mutation null -> Birth).
+//   * The starterMineralGranted flag is deleted — it means nothing
+//     anymore.
+// Keyed off mutation presence + source, NOT old kind strings, so
+// saves whose kind values predate the current code migrate too.
+// Stardust, planets, XP, journals, lineage, system, archive and
+// `discovered` are untouched.
+function migrateV1toV2(state) {
+  if (!state || typeof state !== 'object') return state;
+  if (state.version === 2) return state;
+  if (Array.isArray(state.minerals)) {
+    for (const m of state.minerals) {
+      if (m.mutation) {
+        m.kind = 'mutation';
+        if (!m.family) {
+          const def = Planet.mutationDef(m.mutation);
+          m.family = (def && def.tags && def.tags[0]) || 'weird';
+        }
+      } else {
+        m.kind = 'birth';
+        m.family = null;
+        m.mutation = null;
+      }
     }
-    // Round 10: the Mutation Index. Old saves get it rebuilt from
-    // everything still observable — mutations on the current planet,
-    // on archived planets, and on minerals in the inventory (a mineral
-    // of a mutation means that mutation was seen). A legacy fed
-    // mineral (feeding was cut in round 10) counts too, then the fed
-    // slot is deleted — there is no fed slot anymore.
-    if (!Array.isArray(s.discovered)) s.discovered = [];
-    const seen = new Set(s.discovered);
-    if (s.current) for (const id of (s.current.mutations || [])) seen.add(id);
-    for (const p of s.past) for (const id of (p.mutations || [])) seen.add(id);
-    for (const m of s.minerals) if (m.mutation) seen.add(m.mutation);
-    if (s.fedMineral && s.fedMineral.mutation) seen.add(s.fedMineral.mutation);
-    s.discovered = [...seen];
-    delete s.fedMineral;
-    // Step 4 fields: old saves get an empty 4-ring system.
-    if (!Array.isArray(s.system)) s.system = [null, null, null, null];
-    // Round 11: the Discovery Journal. Old saves get a seeded birth
-    // entry on every planet (timestamp = archivedAt for past records,
-    // now for the current one) — the story starts from the migration;
-    // earlier history is lost, but the planet keeps its birth. The
-    // entry lives on the snapshot when there is one (that is what
-    // the panels render); snapshot-less records keep it flat.
-    const seedJournalFor = (planet, when) => {
-      if (!planet || Array.isArray(planet.journal)) return;
-      planet.journal = [{ t: when, kind: 'born', text: bornJournalText(planet) }];
-    };
-    if (s.current) seedJournalFor(s.current, Date.now());
-    for (const p of s.past) {
-      if (p.planet) seedJournalFor(p.planet, p.archivedAt || Date.now());
-      else seedJournalFor(p, p.archivedAt || Date.now());
-    }
-    normalizeSystem(s);
-    return s;
-  } catch (e) {
-    return freshState();
   }
+  delete state.starterMineralGranted;
+  state.version = 2;
+  return state;
+}
+
+// Parse stored JSON. Returns a RESULT, not a bare state, so the
+// caller can tell the cases apart:
+//   { state, backupJson, notice, migrated }
+//   * state — the loaded (or fresh) state. Always a state object.
+//   * backupJson — the raw input JSON the caller must stash under
+//     the backup key BEFORE any save overwrites it, or null when no
+//     backup is needed.
+//   * notice — a one-time message for the player, or null.
+//   * migrated — true when a v1 save was migrated to v2.
+// Cases:
+//   * Empty input ('', null, undefined) — a brand-new install: fresh
+//     state, no backup, no notice. ("Fresh because empty/new".)
+//   * Valid v2 — the state, no backup, no notice.
+//   * Valid v1 — migrated to v2; backupJson is the raw v1 JSON
+//     (the caller writes it to `protoplanet.state.backup.v1`
+//     before saving the migrated state); no notice, migration is
+//     a normal upgrade.
+//   * Corrupt JSON, unknown version, or a malformed current planet
+//     — fresh state, backupJson is the raw input, notice tells the
+//     player once ("Your save couldn't be read — backed up,
+//     starting fresh."). NEVER silently replaces an incompatible
+//     save with a fresh game: the raw JSON is handed back for
+//     backup first, and the caller must write it before saving.
+// Discovery rebuild (round 16 overhaul — hole K): only mutations
+// seen ON A PLANET count, plus mutation minerals from SALVAGE
+// (salvaging a planet means that mutation was seen on it).
+// Shop-sourced mutation minerals NEVER discover. Already-baked
+// false discovery (a shop mineral credited on a past load) stays —
+// it is only an Index badge, and it is indistinguishable from a
+// legitimate entry now, so it is not un-marked.
+function deserializeState(json) {
+  const freshWithBackup = (backupJson, notice) => ({
+    state: freshState(),
+    backupJson: backupJson || null,
+    notice: notice || null,
+    migrated: false,
+  });
+  const unreadableNotice = 'Your save couldn\u2019t be read — backed up, starting fresh.';
+  if (json === '' || json === null || json === undefined) {
+    return { state: freshState(), backupJson: null, notice: null, migrated: false };
+  }
+  let s;
+  try {
+    s = JSON.parse(json);
+  } catch (e) {
+    return freshWithBackup(typeof json === 'string' ? json : null, unreadableNotice);
+  }
+  if (!s || typeof s !== 'object' || (s.version !== 1 && s.version !== 2)) {
+    return freshWithBackup(typeof json === 'string' ? json : null, unreadableNotice);
+  }
+  if (s.current !== null && (typeof s.current !== 'object' || typeof s.current.seed !== 'number' || typeof s.current.xp !== 'number')) {
+    return freshWithBackup(typeof json === 'string' ? json : null, unreadableNotice);
+  }
+  const migrated = s.version === 1;
+  if (migrated) migrateV1toV2(s);
+  if (!Array.isArray(s.past)) s.past = [];
+  if (typeof s.generation !== 'number' || s.generation < 1) s.generation = 1;
+  if (typeof s.starterDone !== 'boolean') s.starterDone = !!s.current;
+  // Step 2 fields: old saves (from before minerals existed) get
+  // defaults. No starter gift anymore (round 16 overhaul — the
+  // starter is gone; a pre-mineral save starts with zero minerals).
+  if (!Array.isArray(s.minerals)) s.minerals = [];
+  if (typeof s.mineralSeq !== 'number' || s.mineralSeq < 0) s.mineralSeq = 0;
+  // Round 14: Stardust. Old saves start at 0.
+  if (typeof s.stardust !== 'number' || s.stardust < 0) s.stardust = 0;
+  delete s.starterMineralGranted;
+  // Round 10: the Mutation Index. Old saves get it rebuilt from
+  // everything still observable — mutations on the current planet,
+  // on archived planets, and on SALVAGE-sourced mutation minerals
+  // in the inventory (a salvaged mineral means that mutation was
+  // seen on a planet). Shop-sourced minerals never discover. A
+  // legacy fed mineral (feeding was cut in round 10) counts too,
+  // then the fed slot is deleted — there is no fed slot anymore.
+  if (!Array.isArray(s.discovered)) s.discovered = [];
+  const seen = new Set(s.discovered);
+  if (s.current) for (const id of (s.current.mutations || [])) seen.add(id);
+  for (const p of s.past) for (const id of (p.mutations || [])) seen.add(id);
+  for (const m of s.minerals) if (m.mutation && m.source === 'salvage') seen.add(m.mutation);
+  if (s.fedMineral && s.fedMineral.mutation) seen.add(s.fedMineral.mutation);
+  s.discovered = [...seen];
+  delete s.fedMineral;
+  // Step 4 fields: old saves get an empty 4-ring system.
+  if (!Array.isArray(s.system)) s.system = [null, null, null, null];
+  // Round 11: the Discovery Journal. Old saves get a seeded birth
+  // entry on every planet (timestamp = archivedAt for past records,
+  // now for the current one) — the story starts from the migration;
+  // earlier history is lost, but the planet keeps its birth. The
+  // entry lives on the snapshot when there is one (that is what
+  // the panels render); snapshot-less records keep it flat.
+  const seedJournalFor = (planet, when) => {
+    if (!planet || Array.isArray(planet.journal)) return;
+    planet.journal = [{ t: when, kind: 'born', text: bornJournalText(planet) }];
+  };
+  if (s.current) seedJournalFor(s.current, Date.now());
+  for (const p of s.past) {
+    if (p.planet) seedJournalFor(p.planet, p.archivedAt || Date.now());
+    else seedJournalFor(p, p.archivedAt || Date.now());
+  }
+  normalizeSystem(s);
+  return {
+    state: s,
+    backupJson: migrated ? (typeof json === 'string' ? json : null) : null,
+    notice: null,
+    migrated,
+  };
 }
 
 module.exports = {
@@ -1825,19 +2006,21 @@ module.exports = {
   archiveCurrent, applyXp, newPlanet, makeCurrent, parseSeedInput, makeSeedPlanet, hatchFromSeed, shareSeedFor,
   finishedCount, systemRank, lockedRingLabel, resolveSlotPlanet,
   slotIndexForPlanet, normalizeSystem, placePlanet, removeFromSystem,
-  mineralName, mineralApplyText, makeMineral, grantStarterMineral,
+  mineralName, mineralApplyText, makeMineral,
   recordDiscovery, setDef, setsForPlanet, setMessage, attemptMutation,
   prestigeTilt, mineralSummary, yieldMineralsForPlanet, addMinerals,
+  salvagePreview,
   recycleCurrent, salvageArchived, destroyCurrent,
   prestigeEligible, eligiblePrestigeParents, inheritanceBoosts,
-  lineageRecord, prestige,
+  inheritanceOdds, lineageRecord, prestige,
+  birthMutationOdds, applyOdds, wheelOdds, familyPickOdds, formatOdds,
   planetXp, planetJournal, formatRate, earnRate, eventMultiplier,
   familyComboMultiplier, familyComboDetails, earnBreakdown, systemEarnBreakdown,
   systemPlanets, systemEarnRate,
-  archiveHasRoom, plainMineralIndex, payBirthCost, needPlainMineralMessage,
+  archiveHasRoom, birthMineralIndex, payBirthCost, needPlainMineralMessage,
   salvageLostMutations, salvageLostMessage,
-  buyPlainMineral, buyMutationWheel, buyFamilyPick,
+  buyBirthMineral, buyRandomMutationMineral, buyFamilyPick,
   mineralInventory,
   shareCardFilename, shareCardMarkdown, SHARE_REPO_URL,
-  serializeState, deserializeState,
+  serializeState, deserializeState, migrateV1toV2,
 };

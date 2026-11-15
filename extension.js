@@ -36,7 +36,20 @@ function getNonce() {
 class ProtoplanetApp {
   constructor(context) {
     this.context = context;
-    this.state = Logic.deserializeState(context.globalState.get(STATE_KEY, ''));
+    // Round 16 overhaul — deserializeState returns a result object:
+    // { state, backupJson, notice, migrated }. A migration or an
+    // unreadable save carries the ORIGINAL serialized JSON in
+    // backupJson — stash it under the backup key BEFORE any saveNow()
+    // can overwrite STATE_KEY (load runs in the constructor, before
+    // the first save, so doing it here is safe). The constructor
+    // can't await, so the write is fire-and-forget like saveNow().
+    // The notice fires once, only when a backup was needed.
+    const loaded = Logic.deserializeState(context.globalState.get(STATE_KEY, ''));
+    if (loaded.backupJson !== null) {
+      context.globalState.update('protoplanet.state.backup.v1', loaded.backupJson);
+    }
+    this.state = loaded.state;
+    if (loaded.notice) this.notify(loaded.notice);
     // Birth notifications (round 6): the key of the planet already
     // notified — seed:generation — so a reload never re-toasts an old
     // hatch. Set from the LOADED state before the first pushState();
@@ -169,7 +182,7 @@ class ProtoplanetApp {
     this.notify(`Archive is full (${(this.state.past || []).length}/${Logic.CONFIG.PAST_LIMIT}) — salvage an archived planet from the Index to make room.`);
   }
 
-  // Round 14 — a birth refused for lack of a plain mineral. One
+  // Round 14 — a birth refused for lack of a Birth mineral. One
   // shared message for every birth path that hits it (new planet,
   // seed hatch, maxed prompt, post-destroy prompt, prestige).
   notifyNeedPlainMineral() {
@@ -210,7 +223,14 @@ class ProtoplanetApp {
     const key = this.birthKey();
     if (key && key !== this.lastBirthKey) {
       this.lastBirthKey = key;
-      for (const msg of Logic.birthNotifications(this.state.current)) this.notify(msg);
+      // Round 16 overhaul — the mutation-at-birth toast gets a ✦
+      // prefix ("✦ <planet> was born with a mutation: Green Moon!").
+      // The plain birth toast is unchanged. Matched by identity
+      // against mutationMessage, not by substring.
+      const mutMsg = Logic.mutationMessage(this.state.current);
+      for (const msg of Logic.birthNotifications(this.state.current)) {
+        this.notify(mutMsg && msg === mutMsg ? `✦ ${msg}` : msg);
+      }
       const muts = (this.state.current && this.state.current.mutations) || [];
       if (muts.length > 0) this.mutationFlash = muts[0];
     } else if (!key) {
@@ -226,7 +246,7 @@ class ProtoplanetApp {
 
   async newPlanet() {
     const answer = await vscode.window.showWarningMessage(
-      'Start a fresh planet? Your current planet will be kept in your collection.',
+      'Start a fresh planet? Your current planet will be kept in your collection. Costs 1 Birth mineral (first planet free).',
       { modal: true },
       'Yes, new planet'
     );
@@ -266,7 +286,7 @@ class ProtoplanetApp {
     if (!parsed.ok) return; // validateInput already rejected it; defensive
     const shown = parsed.terrain ? `${parsed.seed}-${parsed.terrain}` : String(parsed.seed);
     const answer = await vscode.window.showWarningMessage(
-      `Hatch the planet from seed ${shown}? Your current planet will be kept in your collection. The hatched planet is the seed's base planet — it never carries mutations.`,
+      `Hatch the planet from seed ${shown}? Your current planet will be kept in your collection. The hatched planet is the seed's base planet — it never carries mutations. Costs 1 Birth mineral (first planet free).`,
       { modal: true },
       'Yes, hatch it'
     );
@@ -312,26 +332,28 @@ class ProtoplanetApp {
 
   // Spend a mineral to try to put its mutation on the planet you love
   // (round 10 — the mineral IS the mutation; feeding is gone). The
-  // pick list only shows minerals that CAN go on this planet — one
-  // already on it, or a family whose mutations it already owns, is
-  // not offered. The coin flip is the fun: it takes hold, or it
-  // fizzles and the mineral is gone.
+  // pick list only shows Mutation minerals that CAN go on this planet
+  // — one already on it is not offered, and a Birth mineral never is
+  // (round 16 overhaul — it pays for births, it can't be applied).
+  // The pick is NOT the commit anymore: a native confirm states the
+  // 50% odds before the flip, and cancelling consumes nothing.
   async applyMineral() {
     if (!this.state.current) {
       vscode.window.showInformationMessage('No planet is growing — hatch one first, then spend a mineral on it.');
       return;
     }
     const owned = new Set(this.state.current.mutations || []);
-    const usable = (this.state.minerals || []).filter((m) => {
-      if (m.mutation) return !owned.has(m.mutation);
-      const family = Planet.CONFIG.MUTATIONS.filter((x) => (x.tags || []).includes(m.family));
-      return family.some((x) => !owned.has(x.id));
-    });
+    const usable = (this.state.minerals || []).filter((m) => m.mutation && !owned.has(m.mutation));
     if (usable.length === 0) {
-      const has = (this.state.minerals || []).length > 0;
-      vscode.window.showInformationMessage(has
-        ? 'Every mineral you have is already on this planet — salvage a planet with a mutation you don\'t have yet.'
-        : 'No minerals yet — salvage a planet to get one.');
+      const minerals = this.state.minerals || [];
+      // One call site (the popup-count check pins the total): the
+      // message varies by what the player actually holds.
+      const msg = minerals.length === 0
+        ? 'No minerals yet — salvage a planet to get one, or buy one in the Protoplanet shop.'
+        : minerals.every((m) => m.kind === 'birth' || !m.mutation)
+          ? "Birth minerals can't be applied — they pay for births. Get a Mutation mineral from the shop or salvage."
+          : 'Every mineral you have is already on this planet — salvage a planet with a mutation you don\'t have yet.';
+      vscode.window.showInformationMessage(msg);
       return;
     }
     const items = usable.map((m) => ({
@@ -339,11 +361,24 @@ class ProtoplanetApp {
       description: Logic.mineralApplyText(m),
       id: m.id,
     }));
+    const odds = Logic.applyOdds();
     const pick = await vscode.window.showQuickPick(items, {
-      placeHolder: 'Protoplanet: spend a mineral — coin flip to put its mutation on your planet',
+      placeHolder: `Protoplanet: spend a mineral — ${Logic.formatOdds(odds.success)} chance to put its mutation on your planet`,
       ignoreFocusOut: true,
     });
     if (!pick) return;
+    // The confirm states the odds from the same helper the roll
+    // uses — never a restated 50%. Cancel consumes nothing: the
+    // flip only happens after "Apply".
+    const mutName = (Planet.mutationDef((this.state.minerals.find((m) => m.id === pick.id) || {}).mutation) || {}).name
+      || pick.label.replace(/ mineral$/, '');
+    const confirm = await vscode.window.showWarningMessage(
+      `Apply ${mutName}? ${Logic.formatOdds(odds.success)} success, ${Logic.formatOdds(odds.failure)} failure. Mineral is consumed either way.`,
+      { modal: true },
+      'Apply',
+      'Cancel'
+    );
+    if (confirm !== 'Apply') return;
     const res = Logic.attemptMutation(this.state, pick.id);
     if (!res.ok) {
       vscode.window.showInformationMessage('That mineral can\'t go on this planet anymore.');
@@ -367,9 +402,11 @@ class ProtoplanetApp {
   }
 
   // Round 14 — the mineral inventory: a QuickPick listing every
-  // mineral grouped by family/mutation with counts, plus the
-  // Stardust balance in the placeholder. View-only: picking one
-  // just says what it does (spend it from the Apply command).
+  // mineral grouped by KIND (round 16 overhaul) — Birth minerals
+  // together ("Pays for 1 birth — cannot apply"), then Mutation
+  // minerals by mutation — plus the Stardust balance in the
+  // placeholder. View-only: picking one just says what it does
+  // (spend it from the Apply command).
   async viewMinerals() {
     const inv = Logic.mineralInventory(this.state);
     if (inv.groups.length === 0) {
@@ -389,31 +426,38 @@ class ProtoplanetApp {
     this.notify(`${pick.label} — ${pick.group.applyText}. Spend one from 'Protoplanet: Apply a mineral to your planet'.`);
   }
 
-  // Round 14 — the shop: spend Stardust on a plain mineral or one
-  // of two mutation gambles. Every purchase adds a MINERAL, never
-  // a direct mutation — the player still applies it with the 50%
-  // coin flip. Insufficient funds = a plain message, no purchase.
-  // The Family Pick asks for the family in a second pick. The
-  // Mystery Mineral is gone (round 15 — Devon): at 5% it was a
-  // lottery ticket for a plain mineral you could just buy for half
-  // the price, so the shop is three items now.
+  // Round 14 — the shop: spend Stardust on minerals. Every purchase
+  // adds a MINERAL, never a direct mutation — the player still
+  // applies it with the 50% coin flip. Insufficient funds = a plain
+  // message, no purchase. The Family Mutation Mineral asks for the
+  // family in a second pick, naming the exact mutations and odds per family.
+  // Round 16 overhaul — exactly three items, labels + odds rendered
+  // from the shared probability helpers (§7), never hardcoded:
+  // Birth Mineral (500 ✦, creates one planet), Random Mutation
+  // Mineral (50,000 ✦, 1 of 13), Family Mutation Mineral (80,000 ✦,
+  // Moon/Rings/Glow/Sky only). The Mystery Mineral is gone
+  // (round 15 — Devon).
   async openShop() {
     const bal = () => Math.floor(this.state.stardust || 0).toLocaleString();
     const price = (n) => n.toLocaleString(); // 50,000 reads better than 50000
+    const wheel = Logic.wheelOdds();
+    const apply = Logic.applyOdds();
+    const mutationCount = Planet.CONFIG.MUTATIONS.length;
     const items = [
       {
-        label: `Plain mineral — ${price(Logic.CONFIG.SHOP_PLAIN_PRICE)} ✦`,
-        description: 'Birthing a planet costs 1 plain mineral',
-        kind: 'plain',
+        label: `Birth Mineral — ${price(Logic.CONFIG.SHOP_BIRTH_PRICE)} ✦`,
+        description: 'Creates one planet · 100% success',
+        kind: 'birth',
       },
       {
-        label: `Mutation Wheel — ${price(Logic.CONFIG.SHOP_WHEEL_PRICE)} ✦`,
-        description: 'Guaranteed a random mutation mineral — which one is random',
-        kind: 'wheel',
+        label: `Random Mutation Mineral — ${price(Logic.CONFIG.SHOP_RANDOM_MUTATION_PRICE)} ✦`,
+        description: `1 of ${mutationCount} mutations · ${Logic.formatOdds(apply.success)} application chance`,
+        detail: `1 of ${mutationCount}, each equally likely (${Logic.formatOdds(wheel.perMutation)} each)`,
+        kind: 'random',
       },
       {
-        label: `Family Pick — ${price(Logic.CONFIG.SHOP_FAMILY_PICK_PRICE)} ✦`,
-        description: 'Pick a family, get a random mutation mineral from it',
+        label: `Family Mutation Mineral — ${price(Logic.CONFIG.SHOP_FAMILY_PICK_PRICE)} ✦`,
+        description: 'Choose family · see exact odds before purchase',
         kind: 'family',
       },
     ];
@@ -423,40 +467,72 @@ class ProtoplanetApp {
     });
     if (!pick) return;
     if (pick.kind === 'family') {
-      const famItems = Logic.CONFIG.MINERAL_FAMILIES.map((f) => ({
-        label: f.charAt(0).toUpperCase() + f.slice(1),
-        description: `A random ${f} mutation mineral`,
-        id: f,
-      }));
+      const famItems = Logic.CONFIG.FAMILY_PICK_FAMILIES.map((f) => {
+        const odds = Logic.familyPickOdds(f);
+        const names = (odds.mutations || []).map((id) => (Planet.mutationDef(id) || {}).name || id);
+        return {
+          label: f.charAt(0).toUpperCase() + f.slice(1),
+          description: `${Logic.formatOdds(odds.perMutation, 'one-in')} each: ${names.join(', ')}`,
+          id: f,
+        };
+      });
       const famPick = await vscode.window.showQuickPick(famItems, {
         placeHolder: 'Protoplanet: pick a family for your mutation mineral',
         ignoreFocusOut: true,
       });
       if (!famPick) return;
       const res = Logic.buyFamilyPick(this.state, famPick.id);
-      if (!res.ok) { this.notify(`Not enough Stardust — a Family Pick costs ${price(Logic.CONFIG.SHOP_FAMILY_PICK_PRICE)} ✦.`); return; }
-      this.notify(`Family Pick: you got a ${Logic.mineralName(res.mineral)}! Spend it from 'Protoplanet: Apply a mineral to your planet'.`);
-    } else if (pick.kind === 'plain') {
-      const res = Logic.buyPlainMineral(this.state);
-      if (!res.ok) { this.notify(`Not enough Stardust — a plain mineral costs ${price(Logic.CONFIG.SHOP_PLAIN_PRICE)} ✦.`); return; }
+      if (!res.ok) { this.notify(`Not enough Stardust — a Family Mutation Mineral costs ${price(Logic.CONFIG.SHOP_FAMILY_PICK_PRICE)} ✦.`); return; }
+      this.notify(`Family Mutation Mineral: you got a ${Logic.mineralName(res.mineral)}! Spend it from 'Protoplanet: Apply a mineral to your planet'.`);
+    } else if (pick.kind === 'birth') {
+      const res = Logic.buyBirthMineral(this.state);
+      if (!res.ok) { this.notify(`Not enough Stardust — a Birth Mineral costs ${price(Logic.CONFIG.SHOP_BIRTH_PRICE)} ✦.`); return; }
       this.notify(`You bought a ${Logic.mineralName(res.mineral)}!`);
-    } else if (pick.kind === 'wheel') {
-      const res = Logic.buyMutationWheel(this.state);
-      if (!res.ok) { this.notify(`Not enough Stardust — the Mutation Wheel costs ${price(Logic.CONFIG.SHOP_WHEEL_PRICE)} ✦.`); return; }
-      this.notify(`Mutation Wheel: you got a ${Logic.mineralName(res.mineral)}! Spend it from 'Protoplanet: Apply a mineral to your planet'.`);
+    } else if (pick.kind === 'random') {
+      const res = Logic.buyRandomMutationMineral(this.state);
+      if (!res.ok) { this.notify(`Not enough Stardust — a Random Mutation Mineral costs ${price(Logic.CONFIG.SHOP_RANDOM_MUTATION_PRICE)} ✦.`); return; }
+      this.notify(`Random Mutation Mineral: you got a ${Logic.mineralName(res.mineral)}! Spend it from 'Protoplanet: Apply a mineral to your planet'.`);
     }
     this.saveNow();
     this.pushState();
   }
 
+  // Round 16 overhaul — the salvage warning, built from
+  // Logic.salvagePreview BEFORE anything is destroyed: the exact
+  // yield, the exact mutations that would be lost to the
+  // grow-it-first rule, and the way to keep them. `action` is the
+  // question sentence; the yield/loss lines follow it.
+  salvageConfirmMessage(planet, action) {
+    const preview = Logic.salvagePreview(planet);
+    const yields = preview.yields.map((m) => Logic.mineralName(m)).join(', ');
+    let msg = `${action} It would yield: ${yields}.`;
+    if (preview.lost.length > 0) {
+      const names = preview.lost.map((id) => (Planet.mutationDef(id) || {}).name || id);
+      msg += ` Its ${names.join(', ')} ${preview.lost.length === 1 ? 'mineral would' : 'minerals would'} be lost — grow it to stage 4 (Crust, 600 XP) first to keep its mutation minerals.`;
+    }
+    return msg;
+  }
+
+  // The pick-list detail for a salvageable planet: what it carries,
+  // plus the pre-confirm warning when a mutated planet is below
+  // stage 4 — its mutation minerals would be lost.
+  salvageDetail(planet) {
+    const preview = Logic.salvagePreview(planet);
+    if (preview.lost.length > 0) {
+      const names = preview.lost.map((id) => (Planet.mutationDef(id) || {}).name || id).join(', ');
+      return `Carries: ${names} — below stage 4, its ${names} would be lost`;
+    }
+    const mutLabel = Planet.mutationLabel(planet);
+    return mutLabel ? `Carries: ${mutLabel}` : 'No mutation — yields one Birth mineral';
+  }
+
   async salvagePlanet() {
     const items = [];
     if (this.state.current) {
-      const mutLabel = Planet.mutationLabel(this.state.current);
       items.push({
         label: `Recycle current planet — ${this.state.current.summary}`,
         description: 'Destroy it for minerals and hatch a fresh planet right away',
-        detail: mutLabel ? `Carries: ${mutLabel}` : 'No mutation — yields one plain mineral',
+        detail: this.salvageDetail(this.state.current),
         kind: 'current',
       });
       // Round 9 (Devon): a second choice — destroy it and grow
@@ -464,7 +540,7 @@ class ProtoplanetApp {
       items.push({
         label: `Destroy current planet — ${this.state.current.summary}`,
         description: 'Destroy it for minerals (no new planet) — you pick what grows next',
-        detail: mutLabel ? `Carries: ${mutLabel}` : 'No mutation — yields one plain mineral',
+        detail: this.salvageDetail(this.state.current),
         kind: 'destroyCurrent',
       });
     }
@@ -472,9 +548,7 @@ class ProtoplanetApp {
       items.push({
         label: `Salvage ${p.summary} · Gen ${p.generation}`,
         description: 'Destroy it for minerals (no new planet)',
-        detail: p.mutations && p.mutations.length > 0
-          ? `Carries: ${p.mutations.map((id) => (Planet.mutationDef(id) || {}).name || id).join(', ')}`
-          : 'No mutation — yields one plain mineral',
+        detail: this.salvageDetail(p),
         kind: 'past',
         index: i,
       });
@@ -486,23 +560,23 @@ class ProtoplanetApp {
     });
     if (!pick) return;
     if (pick.kind === 'current') {
+      const doomedRecycle = this.state.current;
       const answer = await vscode.window.showWarningMessage(
-        'Recycle your current planet? It will be destroyed for minerals and a fresh planet hatches right away.',
+        this.salvageConfirmMessage(doomedRecycle, 'Recycle your current planet? It will be destroyed for minerals and a fresh planet hatches right away.'),
         { modal: true },
         'Yes, recycle it'
       );
       if (answer !== 'Yes, recycle it') return;
-      const doomedRecycle = this.state.current;
       const recycleRes = Logic.recycleCurrent(this.state, Logic.randomSeed);
       this.notifySalvageLoss(doomedRecycle, recycleRes);
     } else if (pick.kind === 'destroyCurrent') {
+      const doomedDestroy = this.state.current;
       const answer = await vscode.window.showWarningMessage(
-        'Destroy your current planet? It will be destroyed for minerals and nothing grows until you pick what comes next.',
+        this.salvageConfirmMessage(doomedDestroy, 'Destroy your current planet? It will be destroyed for minerals and nothing grows until you pick what comes next.'),
         { modal: true },
         'Yes, destroy it'
       );
       if (answer !== 'Yes, destroy it') return;
-      const doomedDestroy = this.state.current;
       const destroyRes = Logic.destroyCurrent(this.state);
       this.notifySalvageLoss(doomedDestroy, destroyRes);
       this.saveNow();
@@ -510,13 +584,13 @@ class ProtoplanetApp {
       await this.promptAfterDestroy();
       return;
     } else {
+      const doomedSalvage = this.state.past[pick.index];
       const answer = await vscode.window.showWarningMessage(
-        'Salvage this planet from your collection? It will be destroyed for minerals.',
+        this.salvageConfirmMessage(doomedSalvage, 'Salvage this planet from your collection? It will be destroyed for minerals.'),
         { modal: true },
         'Yes, salvage it'
       );
       if (answer !== 'Yes, salvage it') return;
-      const doomedSalvage = this.state.past[pick.index];
       const salvageRes = Logic.salvageArchived(this.state, pick.index);
       this.notifySalvageLoss(doomedSalvage, salvageRes);
     }
@@ -548,10 +622,10 @@ class ProtoplanetApp {
       kind: 'birth',
     });
     items.push({
-      label: 'Birth a new planet with a starter mineral',
+      label: 'Birth a new planet — pick a terrain',
       description: 'Pick a terrain to tilt the birth',
       detail: 'Icy, Lava, Jungle, Rocky or Ocean — like your first planet',
-      kind: 'birthMineral',
+      kind: 'birthTerrain',
     });
     const pick = await vscode.window.showQuickPick(items, {
       placeHolder: 'Protoplanet: your planet is gone — what grows next?',
@@ -593,7 +667,7 @@ class ProtoplanetApp {
       }
       this.saveNow();
       this.pushState();
-    } else if (pick.kind === 'birthMineral') {
+    } else if (pick.kind === 'birthTerrain') {
       const terrainItems = Logic.CONFIG.STARTER_TERRAINS.map((id) => {
         const t = Planet.CONFIG.TERRAINS.find((t) => t.id === id);
         return { label: t ? t.label : id, description: t ? t.desc : '', id };
@@ -603,10 +677,10 @@ class ProtoplanetApp {
         ignoreFocusOut: true,
       });
       // Dismissing the pick is fine — the planet is fully random then.
-      const birthMineralRes = Logic.newPlanet(this.state, Logic.randomSeed, terrainPick ? terrainPick.id : undefined);
-      if (!birthMineralRes.ok) {
-        if (birthMineralRes.reason === 'archive full') this.notifyArchiveFull();
-        else if (birthMineralRes.reason === 'no plain mineral') this.notifyNeedPlainMineral();
+      const birthTerrainRes = Logic.newPlanet(this.state, Logic.randomSeed, terrainPick ? terrainPick.id : undefined);
+      if (!birthTerrainRes.ok) {
+        if (birthTerrainRes.reason === 'archive full') this.notifyArchiveFull();
+        else if (birthTerrainRes.reason === 'no plain mineral') this.notifyNeedPlainMineral();
         return;
       }
       this.saveNow();
@@ -644,8 +718,43 @@ class ProtoplanetApp {
     const second = await pickParent(first.parent);
     if (!second) return;
     const a = first.parent, b = second.parent;
+    // Round 16 overhaul — the confirm states the real numbers from
+    // the shared helper: each parent mutation's inheritance chance
+    // (50% one parent / 75% both), the 1-Birth-mineral cost, and the
+    // parents-stay fate. When the per-mutation list is too long for
+    // one confirm (>4), it goes in a second QuickPick step first —
+    // never a new screen.
+    const mutCounts = {};
+    for (const p of [a, b]) {
+      for (const id of (p.mutations || [])) mutCounts[id] = (mutCounts[id] || 0) + 1;
+    }
+    const inheritLines = Object.keys(mutCounts).map((id) => {
+      const name = (Planet.mutationDef(id) || {}).name || id;
+      const chance = Logic.inheritanceOdds(mutCounts[id]);
+      return `${name}: ${Logic.formatOdds(chance)} (${mutCounts[id] === 2 ? 'both parents' : 'one parent'})`;
+    });
+    if (inheritLines.length > 4) {
+      const inheritItems = Object.keys(mutCounts).map((id) => {
+        const name = (Planet.mutationDef(id) || {}).name || id;
+        const chance = Logic.inheritanceOdds(mutCounts[id]);
+        return {
+          label: name,
+          description: `${Logic.formatOdds(chance)} inheritance — ${mutCounts[id] === 2 ? 'both parents carry it' : 'one parent carries it'}`,
+        };
+      });
+      const inheritPick = await vscode.window.showQuickPick(inheritItems, {
+        placeHolder: 'Protoplanet: inheritance chances — pick any row to continue to the confirm',
+        ignoreFocusOut: true,
+      });
+      if (!inheritPick) return;
+    }
+    const inheritText = inheritLines.length === 0
+      ? 'Neither parent carries a mutation — the offspring rolls fresh at the usual rare odds.'
+      : (inheritLines.length > 4
+        ? 'Inheritance chances are listed in the previous step.'
+        : `Inheritance: ${inheritLines.join('; ')}.`);
     const answer = await vscode.window.showWarningMessage(
-      `Prestige ${a.label} + ${b.label}? Their offspring starts as dust with boosted odds of inheriting their mutations. The parents stay in your collection but can't be parents again.`,
+      `Prestige ${a.label} + ${b.label}? Costs 1 Birth mineral. Their offspring starts as dust. ${inheritText} The parents stay in your collection but can't be parents again.`,
       { modal: true },
       'Yes, prestige them'
     );
@@ -657,7 +766,7 @@ class ProtoplanetApp {
     if (!res.ok) {
       if (res.reason === 'archive full') this.notifyArchiveFull();
       else if (res.reason === 'no plain mineral') this.notifyNeedPlainMineral();
-      return; // state changed between picks (shouldn't happen), or the archive is full, or no plain mineral
+      return; // state changed between picks (shouldn't happen), or the archive is full, or no Birth mineral
     }
     this.recordPrestigeResult(res);
     this.saveNow();
@@ -826,6 +935,11 @@ class ProtoplanetApp {
       total: Planet.CONFIG.MUTATIONS.length,
       foundCount: Planet.CONFIG.MUTATIONS.filter((m) => discovered.has(m.id)).length,
       oddsText: `about 1 in ${Math.round(1 / Planet.CONFIG.MUTATION_CHANCE)} births`,
+      // Round 16 overhaul — the any-mutation line. The "About 1 in
+      // 10" is Devon's approved intro wording (the exact computed
+      // chance is 8.73%, "1 in 11" — never render it raw here); the
+      // per-mutation "1 in 143" comes from the shared helper.
+      anyOddsText: `About 1 in 10 planets is born with a mutation · each one about ${Logic.formatOdds(Logic.birthMutationOdds().perMutation, 'one-in')}`,
       entries: Planet.CONFIG.MUTATIONS.map((m) => ({
         id: m.id,
         name: m.name,
@@ -908,13 +1022,13 @@ class ProtoplanetApp {
       // a slot. Same confirm as the salvage command.
       const idx = this.state.past.findIndex((p) => p.seed === msg.seed && p.generation === msg.generation);
       if (idx < 0) return;
+      const doomedPanel = this.state.past[idx];
       const answer = await vscode.window.showWarningMessage(
-        'Salvage this planet from your collection? It will be destroyed for minerals.',
+        this.salvageConfirmMessage(doomedPanel, 'Salvage this planet from your collection? It will be destroyed for minerals.'),
         { modal: true },
         'Yes, salvage it'
       );
       if (answer !== 'Yes, salvage it') return;
-      const doomedPanel = this.state.past[idx];
       const salvagePanelRes = Logic.salvageArchived(this.state, idx);
       this.notifySalvageLoss(doomedPanel, salvagePanelRes);
       this.saveNow();
@@ -990,6 +1104,8 @@ class ProtoplanetApp {
       inheritBoth: Logic.CONFIG.PRESTIGE_INHERIT_CHANCE_BOTH,
       consumesParents: Logic.CONFIG.PRESTIGE_CONSUMES_PARENTS,
       mutationChance: Planet.CONFIG.MUTATION_CHANCE,
+      // Round 16 overhaul — a fusion costs 1 Birth mineral.
+      birthCost: 'Costs 1 Birth mineral',
       planets,
       result: this.prestigeResult,
     };
@@ -2859,7 +2975,7 @@ class ProtoplanetApp {
     if (!state || !state.mutationIndex) return;
     var mi = state.mutationIndex;
     document.getElementById('mutCount').textContent =
-      mi.foundCount + ' / ' + mi.total + ' mutations found — each ' + mi.oddsText + ' when a planet is born';
+      mi.foundCount + ' / ' + mi.total + ' mutations found — ' + (mi.anyOddsText || ('each ' + mi.oddsText + ' when a planet is born'));
     var setsHtml = '';
     for (var i = 0; i < mi.sets.length; i++) {
       var s = mi.sets[i];
@@ -3497,7 +3613,7 @@ class ProtoplanetApp {
     confirmBarEl.hidden = false;
     if (!confirmOpen) {
       confirmBarEl.innerHTML = '<button id="fuseBtn" class="big">Fuse ' + esc(pickA.name) + ' + ' + esc(pickB.name) + '</button>'
-        + '<span class="warn">The offspring starts as dust. The parents stay in your collection, but they can’t be parents again.</span>';
+        + '<span class="warn">The offspring starts as dust. ' + (state.birthCost ? esc(state.birthCost) + ' ' : '') + 'The parents stay in your collection, but they can’t be parents again.</span>';
       document.getElementById('fuseBtn').addEventListener('click', function () {
         confirmOpen = true;
         renderConfirm();

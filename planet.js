@@ -201,7 +201,7 @@ const CONFIG = {
   // is step 2, not this run). One independent seeded roll per
   // mutation, all at the SAME chance below — one tunable value, so
   // Devon can retune after playing. At 0.007 each, ~9% of planets
-  // are born with at least one mutation (1-(1-0.007)^14), ~0.4%
+  // are born with at least one mutation (1-(1-0.007)^13), ~0.4%
   // with two. Most planets have NO mutation — when one shows up,
   // it's special. `tags` are the mineral families that map to this
   // mutation (round 10: a mineral IS the mutation — spend it to try
