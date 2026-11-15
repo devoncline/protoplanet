@@ -1846,6 +1846,31 @@ function drawPlanet(grid, st, r, sec, planet, fade, stage0Style, muts, smokeScal
         const [lr, lg, lb] = ansi256ToRgb(shadeColor(landHue, b, CONFIG.BODY_TINT));
         col = rgbToAnsi256(lerp(or, lr, landAmt), lerp(og, lg, landAmt), lerp(ob, lb, landAmt));
       } else col = shadeColor(hue, b, CONFIG.BODY_TINT);
+      // Round 17 (black blocks are back): a dark space cell's color
+      // is one of a few near-black codes — the whole sub-threshold
+      // brightness range quantizes to them — so the smooth night-side
+      // field emits long runs of identical ' '+16 cells and gridToHtml
+      // paints each 10+ run as one solid #000000 rectangle. Round 4's
+      // threshold (10) only hid it while discs were small: at stages
+      // 3-6 the runs reach 11-20 cells (worst: seed 198975, rocky,
+      // stage 4, sec 4.7 — a 20-cell run, 5 spans in one frame). The
+      // cause is the brightness path, not the threshold: the night
+      // side is crushed to exactly zero over wide spans (0.15x night
+      // mapping, soft light, low-frequency pattern lobes adding
+      // nothing where pat <= 0, limb fade down to 0.05x, negative
+      // noise clamped at 0), and the per-cell noise round 4 relied on
+      // to break runs is too weak — the field sits ~0.02 below the
+      // glyph threshold, so ~2/3 of night cells stay spaces and all
+      // quantize to code 16. Break the runs at the source: alternate
+      // the two near-black codes by cell parity, so no two adjacent
+      // dark spaces ever share a color and no run can reach the paint
+      // rule. Nothing visible changes — the cells are spaces (no
+      // glyph), both codes are ~black, the glyph speckle is untouched,
+      // and the PNG path draws glyph text only.
+      if (ch === ' ') {
+        const [dr, dg, db] = ansi256ToRgb(col);
+        if ((dr + dg + db) / 3 < 96) col = ((x + y) & 1) === 0 ? 16 : 232;
+      }
       grid[y][x] = [ch, col];
     }
   }

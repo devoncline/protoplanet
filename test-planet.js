@@ -2345,6 +2345,75 @@ check('name: generatePlanet carries the seed name',
     s1spans === 0, `stage1 worst ${s1spans}`);
   check('pixel-blocks: stage-6 detail sheet paints at most one solid night-side run (41 frames)',
     s6spans <= 2, `stage6 worst ${s6spans}`);
+  // Round 17 (black blocks are back, Nov 15): round 4's threshold only
+  // hid the rectangles while discs were small. At stages 3-6 the
+  // night-side field is crushed to exactly zero over wide spans and
+  // quantizes to a single code (16), so same-color dark runs reach
+  // 10-14 cells and gridToHtml paints each as a solid #000000
+  // rectangle — worst measured: seed 72271, toxic, stage 4, sec 4.7,
+  // five painted bars (52-73px wide) in one frame. The fix alternates
+  // the two near-black codes by cell parity in drawPlanet, so no
+  // same-color dark run can form on the disc at any stage. This test
+  // FAILS on the pre-fix code (4 spans over 41 frames, 5 in the worst
+  // frame, runs to 14 cells) and passes on the fixed code.
+  function fullBgSpans(planet, stageIdx) {
+    let worst = 0;
+    for (let i = 0; i <= 40; i++) {
+      const sec = +(i * 0.15).toFixed(2);
+      const html = P.gridToHtml(P.render(planet, stageIdx, 10, sec, 1.0, undefined, 0.5, true), 5.2, 9.36);
+      worst = Math.max(worst, (html.match(/background:/g) || []).length);
+    }
+    return worst;
+  }
+  function maxInDiscDarkRun(planet, stageIdx, sec) {
+    const R = P.STAGES[stageIdx].radius * (planet.size || 1);
+    const { CX, CY } = P.CONFIG;
+    const g = P.render(planet, stageIdx, 10, sec, 1.0, undefined, 0.5, true);
+    let best = 0;
+    for (let y = 0; y < g.length; y++) {
+      let cur = null, n = 0;
+      for (let x = 0; x < g[y].length; x++) {
+        const [ch, col] = g[y][x];
+        const dark = ch === ' ' && col !== null && ((() => { const [r, gg, b] = P.ansi256ToRgb(col); return (r + gg + b) / 3 < 96; })());
+        if (dark && col === cur) n++;
+        else { cur = dark ? col : null; n = dark ? 1 : 0; }
+        if (dark && n > best) {
+          const dx = (x - CX) / R, dy = 2 * (y - CY) / R;
+          if (dx * dx + dy * dy <= 1.0) best = n;
+        }
+      }
+    }
+    return best;
+  }
+  const repro17 = P.generatePlanet(72271, 'toxic');
+  const repro17Spans = fullBgSpans(repro17, 4);
+  const repro17Run = maxInDiscDarkRun(repro17, 4, 4.7);
+  const repro17Frame = (P.gridToHtml(P.render(repro17, 4, 10, 4.7, 1.0, undefined, 0.5, true), 5.2, 9.36).match(/background:/g) || []).length;
+  check('r17 black-blocks: repro case (seed 72271, toxic, stage 4) paints zero bg spans (41 frames)',
+    repro17Spans === 0, `worst ${repro17Spans}`);
+  check('r17 black-blocks: repro case worst frame (sec 4.7) paints zero bg spans',
+    repro17Frame === 0, `spans ${repro17Frame}`);
+  check('r17 black-blocks: repro case has no in-disc same-color dark run longer than 1 (sec 4.7)',
+    repro17Run === 1, `max run ${repro17Run}`);
+  // Sweep: stages 3-6 (where the bug lived) across seeds x terrains —
+  // no frame may paint a bg span. 12 seeds x 10 terrains x 4 stages x
+  // 3 secs = 1440 full renders.
+  let sweepWorst = 0, sweepWorstLabel = '';
+  for (let i = 0; i < 12; i++) {
+    const seed = 1000 + i * 7919;
+    for (const terrain of P.CONFIG.TERRAINS.map((t) => t.id)) {
+      const pl = P.generatePlanet(seed, terrain);
+      for (let s = 3; s <= 6; s++) {
+        for (const sec of [0, 2.1, 4.7]) {
+          const html = P.gridToHtml(P.render(pl, s, 10, sec, 1.0, undefined, 0.5, true), 5.2, 9.36);
+          const n = (html.match(/background:/g) || []).length;
+          if (n > sweepWorst) { sweepWorst = n; sweepWorstLabel = `${seed}/${terrain}/stage${s}/sec${sec}`; }
+        }
+      }
+    }
+  }
+  check('r17 black-blocks: sweep (12 seeds x 10 terrains x stages 3-6 x 3 secs) paints zero bg spans',
+    sweepWorst === 0, `worst ${sweepWorst} at ${sweepWorstLabel}`);
   // FIX 2's resolution half: discDetail reaches the full 136 cols at
   // ~5.91x zoom (the 6x cap), so the zoomed disc can match the sheet.
   check('zoom: discDetail reaches the full 136 cols at ~5.91x (6x cap)',

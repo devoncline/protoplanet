@@ -358,12 +358,14 @@ check('ext: uses petLogic for XP', extSrc.includes('Logic.applyXp'));
 // call site — notify() — so the count stays small and no new popup
 // can sneak in unnoticed. The only other info messages are direct
 // answers to a command the player just ran (Share with no planet yet,
-// Apply with no planet / no usable mineral / a blocked mineral) —
-// never a typing interruption. The save confirmation lives in the
+// Apply with no planet / a blocked mineral) — never a typing
+// interruption. Round 17 fix L dropped Apply's no-usable-mineral
+// info message: the apply command shows the mineral list instead.
+// The save confirmation lives in the
 // panel itself (the Download button flashes "Saved!"), not a popup.
 const infoPopups = (extSrc.match(/showInformationMessage/g) || []).length;
 check('ext: typing pops up only stage-up toast + once-per-planet maxed prompt',
-  infoPopups === 6 // notify() choke point + maxed prompt + Share-with-no-planet guard + Apply's three direct answers
+  infoPopups === 5 // notify() choke point + maxed prompt + Share-with-no-planet guard + Apply's two direct answers
   && extSrc.includes('becameMax') && extSrc.includes('fully evolved')
   && extSrc.includes('No planet yet — pick a starter first, then share it.')
   && extSrc.includes('notifyStageUp')
@@ -1723,8 +1725,8 @@ eq('share: filename defaults the generation to 1',
 const shareMd = L.shareCardMarkdown(sharePlanet, 'protoplanet-k2-277c-gen5.png');
 check('share: markdown embeds the PNG file',
   shareMd.includes('![K2-277c — Protoplanet](protoplanet-k2-277c-gen5.png)'), shareMd);
-check('share: markdown names the planet, terrain, stage, generation and chars',
-  shareMd.includes('**K2-277c** · Toxic world · Civilization · Gen 5 · grown from 2,400 characters'), shareMd);
+check('share: markdown names the planet, terrain, stage and chars',
+  shareMd.includes('**K2-277c** · Toxic world · Civilization · grown from 2,400 characters'), shareMd);
 check('share: markdown carries the mutation label when the planet has one',
   shareMd.includes('MUTATION · Green Moon'), shareMd);
 check('share: markdown embeds the seed in backticks',
@@ -1975,7 +1977,7 @@ check('ext: share PNG caption uses the shared seed', extSrc.includes("(state.sha
   check('ext: index tiles use the cropped full render like the sidebar (not the 68x38 cozy downsample)',
     sysHtml.includes('function fillTileArt(')
     && sysHtml.includes('P.render(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx), undefined, 0.5, true)')
-    && sysHtml.includes('P.sidebarCrop(p.planet, p.stageIdx, 10)')
+    && sysHtml.includes('P.sidebarCrop(p.planet, p.stageIdx, 10, 1.15)')
     && sysHtml.includes('P.cropGrid(P.render(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx), undefined, 0.5, true), crop)')
     && !sysHtml.includes('P.renderCozy(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx), 68, 38'));
   check('ext: no card chrome in the system panel',
@@ -2149,12 +2151,16 @@ check('ext: share PNG caption uses the shared seed', extSrc.includes("(state.sha
     prestigeHtml.includes('function fillStars(frameEl, sec)')
     && sysHtml.includes('function fillStars(frameEl, sec)')
     && shareHtml.includes('function fillStars(frameEl, sec)'));
-  // Prestige: slots + picker tiles are frames with star-free art.
-  check('ext: prestige parent slots are starfield frames with star-free art',
+  // Prestige: the Parent A/B slots KEEP their starfield frame (Devon,
+  // Nov 15 correction — he meant the picker tiles, not the slots);
+  // the "Choose your parents" picker tiles below are star-free art
+  // without a frame.
+  check('ext: prestige parent slots keep their starfield frame',
     prestigeHtml.includes('class="slotArt pp-frame"')
     && prestigeHtml.includes('P.render(p.planet, p.stageIdx, 10, sec, 1.0, undefined, 1, true)'));
-  check('ext: prestige picker thumbs are starfield frames with star-free art',
-    prestigeHtml.includes('class="thumb pp-frame"')
+  check('ext: prestige picker thumbs are star-free art without a starfield frame',
+    prestigeHtml.includes('class="thumb"')
+    && !prestigeHtml.includes('class="thumb pp-frame"')
     && prestigeHtml.includes('P.renderCozy(p.planet, p.stageIdx, 10, 5, 1.0, 34, 19, undefined, 1, true)'));
   check('ext: prestige slot art refresh targets the planet layer, not the stars',
     prestigeHtml.includes("querySelector('.pp-planet .pp-grid')"));
@@ -2613,7 +2619,7 @@ check('ext: mutationChance view model carries the base chance for the panel',
 // event toasts once, and an archived planet can be salvaged from its
 // detail sheet to free a slot.
 check('ext: detail sheet renders the journal',
-  extSrc.includes('Journal</h3>') && extSrc.includes('journalHtml') && extSrc.includes('jentry'));
+  extSrc.includes('Latest</h3>') && extSrc.includes('journalHtml') && extSrc.includes('jentry'));
 check('ext: Index header shows the archive count',
   extSrc.includes('archiveCount') && extSrc.includes('Archive ') && extSrc.includes('archiveLimit'));
 check('ext: Index tiles show a one-line journal',
@@ -2891,6 +2897,62 @@ function ratePlanet(xp, mutations, eventTitles) {
   const pvPlanet = ratePlanet(100, ['green-moon'], []);
   L.salvagePreview(pvPlanet);
   eq('salvage preview: preview does not mutate the planet', pvPlanet.mutations.join(','), 'green-moon');
+  // Round 17 — Civilization salvage bonus: a planet salvaged at
+  // stage 6 (Civilization, 2200 XP) yields a second Birth mineral.
+  const civPlain = ratePlanet(2200, [], []);
+  const civY = L.yieldMineralsForPlanet(civPlain);
+  eq('civ salvage: plain Civilization yields two minerals', civY.length, 2);
+  eq('civ salvage: both are Birth minerals', civY.filter((y) => y.kind === 'birth').length, 2);
+  eq('civ salvage: both carry no mutation', civY.map((y) => y.mutation).join(','), ',');
+  eq('civ salvage: both are from salvage', civY.map((y) => y.source).join(','), 'salvage,salvage');
+  eq('civ salvage: 2199 XP is still one Birth mineral', L.yieldMineralsForPlanet(ratePlanet(2199, [], [])).length, 1);
+  eq('civ salvage: Eden (1500 XP) still yields one', L.yieldMineralsForPlanet(ratePlanet(1500, [], [])).length, 1);
+  const civMut = ratePlanet(2200, ['green-moon', 'blood-moon'], []);
+  const civM = L.yieldMineralsForPlanet(civMut);
+  eq('civ salvage: mutated Civilization yields four minerals', civM.length, 4);
+  eq('civ salvage: mutated Civilization keeps its mutation minerals in order',
+    civM.filter((y) => y.mutation).map((y) => y.mutation).join(','), 'green-moon,blood-moon');
+  eq('civ salvage: mutated Civilization yields two Birth minerals',
+    civM.filter((y) => y.kind === 'birth').length, 2);
+  eq('civ salvage: mutated Eden still yields mutation + one Birth',
+    L.yieldMineralsForPlanet(ratePlanet(1500, ['green-moon'], [])).length, 2);
+  const pvCiv = L.salvagePreview(ratePlanet(2200, [], []));
+  eq('civ salvage: preview shows two Birth minerals for plain Civ', pvCiv.yields.length, 2);
+  eq('civ salvage: preview loses nothing for plain Civ', JSON.stringify(pvCiv.lost), '[]');
+  const pvCivMut = L.salvagePreview(ratePlanet(2200, ['green-moon'], []));
+  eq('civ salvage: preview shows mutation + two Birth for mutated Civ', pvCivMut.yields.length, 3);
+  eq('civ salvage: preview loses nothing for mutated Civ', JSON.stringify(pvCivMut.lost), '[]');
+  // Through the real entry points: destroy + recycle at Civilization.
+  let plainSeed = null;
+  for (let s = 0; s < 4000 && plainSeed === null; s++) {
+    if (Planet.generatePlanet(s).mutations.length === 0) plainSeed = s;
+  }
+  st = freshWithPlanet(plainSeed);
+  L.applyXp(st, 2200, undefined, () => 1); // no events
+  const dcCiv = L.destroyCurrent(st);
+  eq('civ salvage: destroy of plain Civ yields two Birth minerals', dcCiv.minerals.length, 2);
+  check('civ salvage: destroy of plain Civ yields only Birth minerals',
+    dcCiv.minerals.every((m) => m.kind === 'birth'));
+  // Recycle nets: plain Civ nets 1 Birth (2 yielded minus 1 for the
+  // new birth); mutated Civ nets its mutation minerals + 1 Birth.
+  st = freshWithPlanet(plainSeed);
+  L.applyXp(st, 2200, undefined, () => 1); // no events
+  const rcCiv = L.recycleCurrent(st, seedSeq(35000));
+  eq('civ salvage: plain Civ recycle ok', rcCiv.ok, true);
+  eq('civ salvage: plain Civ recycle yields two Birth minerals', rcCiv.minerals.length, 2);
+  eq('civ salvage: plain Civ recycle nets one Birth mineral', st.minerals.length, 1);
+  eq('civ salvage: plain Civ recycle net is a Birth mineral', st.minerals[0].kind, 'birth');
+  eq('civ salvage: plain Civ recycle loses nothing', JSON.stringify(rcCiv.lostMutations), '[]');
+  st = freshWithPlanet(42); // Glowing Oceans
+  L.applyXp(st, 2200, undefined, () => 1); // no events
+  const rcCivMut = L.recycleCurrent(st, seedSeq(36000));
+  eq('civ salvage: mutated Civ recycle ok', rcCivMut.ok, true);
+  eq('civ salvage: mutated Civ recycle yields mutation + two Birth', rcCivMut.minerals.length, 3);
+  check('civ salvage: mutated Civ recycle nets mutation + one Birth',
+    st.minerals.length === 2
+    && st.minerals.some((m) => m.mutation === 'glowing-oceans')
+    && st.minerals.filter((m) => m.kind === 'birth').length === 1);
+  eq('civ salvage: mutated Civ recycle loses nothing', JSON.stringify(rcCivMut.lostMutations), '[]');
 }
 
 // 20e. Shop: Birth mineral + two gambles, all in Stardust, all
@@ -3087,11 +3149,32 @@ check('ext: load shows the unreadable-save notice once',
   extSrc.includes('loaded.notice') && extSrc.includes('if (loaded.notice) this.notify(loaded.notice)'));
 check('ext: load takes the state from the deserialize result object',
   extSrc.includes('this.state = loaded.state;'));
-check('ext: apply filters to mutation minerals the planet does not own',
-  extSrc.includes('m.mutation && !owned.has(m.mutation)') && !extSrc.includes('m.family))'));
+// Round 17 fix L — never auto-apply: the apply command opens the
+// SAME combined mineral list as the inventory (every mineral, Birth
+// included) through the shared picker — no filtered QuickPick that
+// can come up empty, no single-item shortcut, no bare info message
+// instead of a list.
+check('ext: apply command opens the shared combined mineral list',
+  extSrc.includes('await this.pickMineralGroup(') && extSrc.includes('Logic.mineralInventory(this.state)')
+  && !extSrc.includes('m.mutation && !owned.has(m.mutation)'));
+check('ext: apply picker always appears, even with one mineral (no shortcut)',
+  extSrc.includes('async pickMineralGroup(placeHolder)') && !extSrc.includes('usable.length === 0')
+  && !extSrc.includes('usable.length === 1'));
+check('ext: apply list shows Birth minerals as not-applyable',
+  extSrc.includes('Pays for 1 birth — cannot be applied'));
+check('ext: apply command never answers with a bare info message instead of a list',
+  !extSrc.includes("Every mineral you have is already on this planet"));
 check('ext: apply confirm states the 50% odds from the shared helper',
-  extSrc.includes('Apply ${mutName}?') && extSrc.includes('success, ${Logic.formatOdds(odds.failure)} failure. Mineral is consumed either way.')
+  extSrc.includes('Apply ${mutName} to ${planetName} — your growing planet?') && extSrc.includes('success, ${Logic.formatOdds(odds.failure)} failure. Mineral is consumed either way.')
   && extSrc.includes('Logic.applyOdds()'));
+check('ext: apply confirm names the growing planet, no picker',
+  extSrc.includes('const planetName = Logic.nameForPlanet(this.state.current);') && extSrc.includes('— your growing planet?'));
+check('ext: inventory tap goes straight to the apply confirm (no redirect toast)',
+  extSrc.includes('await this.confirmAndApplyMineral(mineral.id, mutName)') && !extSrc.includes("Spend one from 'Protoplanet: Apply a mineral to your planet'"));
+check('ext: inventory Birth tap shows the guidance copy, never an apply',
+  extSrc.includes('if (!group.mutation)') && extSrc.includes("Birth minerals can't be applied — they pay for births. Get a Mutation mineral from the shop or salvage."));
+check('ext: inventory tap on a mutation the planet already has says so and consumes nothing',
+  extSrc.includes("is already on ${Logic.nameForPlanet(this.state.current)} — pick a mineral it doesn't have yet."));
 check('ext: apply confirm offers Apply / Cancel and cancelling consumes nothing',
   extSrc.includes("'Apply',\n      'Cancel'") && extSrc.includes("if (confirm !== 'Apply') return;"));
 check('ext: apply empty state for no minerals points at shop/salvage',
@@ -3149,7 +3232,7 @@ check('ext: view model carries Stardust and the earn rate',
   extSrc.includes('stardust: this.state.stardust') && extSrc.includes('earnRate: Logic.earnRate(cur)'));
 check('ext: sidebar shows the earn rate', extSrc.includes('earnRateText') && extSrc.includes('earns '));
 check('ext: sidebar shows the Stardust balance', extSrc.includes("Math.floor(msg.stardust).toLocaleString()"));
-check('ext: detail sheet shows the earn rate', extSrc.includes('Earns</td>'));
+check('ext: detail sheet shows the earn rate', extSrc.includes('class="vitals"') && extSrc.includes('vlabel">Earns'));
 check('ext: Index header counts rings, not system membership',
   extSrc.includes("' on rings'") && !extSrc.includes("' in system'"));
 check('ext: system view model carries the system earn rate', extSrc.includes('systemEarnRate: Logic.systemEarnRate'));
@@ -3173,7 +3256,7 @@ check('ext: no standalone earnings renderer', !extSrc.includes('function renderE
 check('ext: each renderable planet carries its breakdown',
   extSrc.includes('earnBreakdown: Logic.earnBreakdown(record)'));
 check('ext: detail sheet renders the breakdown lines under Earns',
-  extSrc.includes('class="earnline"') && extSrc.includes('planet.earnBreakdown'));
+  extSrc.includes('class="ebline"') && extSrc.includes('planet.earnBreakdown'));
 check('ext: view model no longer carries the system breakdown',
   !extSrc.includes('earnBreakdown: Logic.systemEarnBreakdown'));
 check('ext: detail sheet still re-renders on state pushes',

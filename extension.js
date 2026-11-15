@@ -330,56 +330,25 @@ class ProtoplanetApp {
   // these never fire while typing. Results surface in the pet window
   // and status bar, never as a notification.
 
-  // Spend a mineral to try to put its mutation on the planet you love
-  // (round 10 — the mineral IS the mutation; feeding is gone). The
-  // pick list only shows Mutation minerals that CAN go on this planet
-  // — one already on it is not offered, and a Birth mineral never is
-  // (round 16 overhaul — it pays for births, it can't be applied).
-  // The pick is NOT the commit anymore: a native confirm states the
-  // 50% odds before the flip, and cancelling consumes nothing.
-  async applyMineral() {
-    if (!this.state.current) {
-      vscode.window.showInformationMessage('No planet is growing — hatch one first, then spend a mineral on it.');
-      return;
-    }
-    const owned = new Set(this.state.current.mutations || []);
-    const usable = (this.state.minerals || []).filter((m) => m.mutation && !owned.has(m.mutation));
-    if (usable.length === 0) {
-      const minerals = this.state.minerals || [];
-      // One call site (the popup-count check pins the total): the
-      // message varies by what the player actually holds.
-      const msg = minerals.length === 0
-        ? 'No minerals yet — salvage a planet to get one, or buy one in the Protoplanet shop.'
-        : minerals.every((m) => m.kind === 'birth' || !m.mutation)
-          ? "Birth minerals can't be applied — they pay for births. Get a Mutation mineral from the shop or salvage."
-          : 'Every mineral you have is already on this planet — salvage a planet with a mutation you don\'t have yet.';
-      vscode.window.showInformationMessage(msg);
-      return;
-    }
-    const items = usable.map((m) => ({
-      label: Logic.mineralName(m),
-      description: Logic.mineralApplyText(m),
-      id: m.id,
-    }));
+  // Round 17 fix A — the shared apply confirm, used by both the
+  // "Apply a mineral" command and the inventory tap. The confirm
+  // names the CURRENTLY GROWING planet (state.current — no picker:
+  // to apply to another planet, grow it first) and states the 50%
+  // odds from the same helper the roll uses — never a restated 50%.
+  // Cancel consumes nothing: the flip only happens after "Apply".
+  // Duplicate protection lives in Logic.attemptMutation (blocked,
+  // mineral NOT consumed); the callers filter duplicates first.
+  async confirmAndApplyMineral(mineralId, mutName) {
     const odds = Logic.applyOdds();
-    const pick = await vscode.window.showQuickPick(items, {
-      placeHolder: `Protoplanet: spend a mineral — ${Logic.formatOdds(odds.success)} chance to put its mutation on your planet`,
-      ignoreFocusOut: true,
-    });
-    if (!pick) return;
-    // The confirm states the odds from the same helper the roll
-    // uses — never a restated 50%. Cancel consumes nothing: the
-    // flip only happens after "Apply".
-    const mutName = (Planet.mutationDef((this.state.minerals.find((m) => m.id === pick.id) || {}).mutation) || {}).name
-      || pick.label.replace(/ mineral$/, '');
+    const planetName = Logic.nameForPlanet(this.state.current);
     const confirm = await vscode.window.showWarningMessage(
-      `Apply ${mutName}? ${Logic.formatOdds(odds.success)} success, ${Logic.formatOdds(odds.failure)} failure. Mineral is consumed either way.`,
+      `Apply ${mutName} to ${planetName} — your growing planet? ${Logic.formatOdds(odds.success)} success, ${Logic.formatOdds(odds.failure)} failure. Mineral is consumed either way.`,
       { modal: true },
       'Apply',
       'Cancel'
     );
     if (confirm !== 'Apply') return;
-    const res = Logic.attemptMutation(this.state, pick.id);
+    const res = Logic.attemptMutation(this.state, mineralId);
     if (!res.ok) {
       vscode.window.showInformationMessage('That mineral can\'t go on this planet anymore.');
       return;
@@ -401,17 +370,20 @@ class ProtoplanetApp {
     this.pushState();
   }
 
-  // Round 14 — the mineral inventory: a QuickPick listing every
-  // mineral grouped by KIND (round 16 overhaul) — Birth minerals
-  // together ("Pays for 1 birth — cannot apply"), then Mutation
-  // minerals by mutation — plus the Stardust balance in the
-  // placeholder. View-only: picking one just says what it does
-  // (spend it from the Apply command).
-  async viewMinerals() {
+  // Round 17 fix L — the NEVER-auto-apply rule, shared by the
+  // "Apply a mineral" command and the inventory tap: the mineral
+  // picker ALWAYS appears, even with exactly one mineral — no
+  // single-item shortcut, ever — and it ALWAYS lists every mineral,
+  // Birth included ("Pays for 1 birth — cannot be applied"), never
+  // a filtered list that can come up empty. Tapping a Birth mineral
+  // shows the guidance copy and consumes nothing; tapping a
+  // Mutation mineral goes to the named confirm — the pick itself
+  // never spends anything.
+  async pickMineralGroup(placeHolder) {
     const inv = Logic.mineralInventory(this.state);
     if (inv.groups.length === 0) {
       this.notify('No minerals yet — salvage a planet to get one, or buy one in the Protoplanet shop.');
-      return;
+      return null;
     }
     const items = inv.groups.map((g) => ({
       label: `${g.label}${g.count > 1 ? ` ×${g.count}` : ''}`,
@@ -419,11 +391,85 @@ class ProtoplanetApp {
       group: g,
     }));
     const pick = await vscode.window.showQuickPick(items, {
-      placeHolder: `Protoplanet: minerals — ✦ ${Math.floor(inv.stardust).toLocaleString()} Stardust`,
+      placeHolder,
       ignoreFocusOut: true,
     });
-    if (!pick) return;
-    this.notify(`${pick.label} — ${pick.group.applyText}. Spend one from 'Protoplanet: Apply a mineral to your planet'.`);
+    return pick ? pick.group : null;
+  }
+
+  // The shared tap handler for a picked mineral group (inventory tap
+  // and apply command alike): a Birth group shows the guidance copy
+  // and is never consumed; a Mutation group the planet already has
+  // says so up front; anything else goes to the named confirm — the
+  // pick itself never spends anything.
+  async handleMineralGroupPick(group) {
+    if (!group) return;
+    // Birth minerals pay for births — they can never be applied.
+    if (!group.mutation) {
+      this.notify("Birth minerals can't be applied — they pay for births. Get a Mutation mineral from the shop or salvage.");
+      return;
+    }
+    if (!this.state.current) {
+      this.notify('No planet is growing — hatch one first, then spend a mineral on it.');
+      return;
+    }
+    const mutName = (Planet.mutationDef(group.mutation) || {}).name || group.label.replace(/ mineral$/, '');
+    // Already on the growing planet: say so up front instead of
+    // showing a confirm that could never succeed (attemptMutation
+    // would block it too — the mineral is never consumed).
+    if ((this.state.current.mutations || []).includes(group.mutation)) {
+      this.notify(`${mutName} is already on ${Logic.nameForPlanet(this.state.current)} — pick a mineral it doesn't have yet.`);
+      return;
+    }
+    // One mineral of this mutation (a group may hold several —
+    // they're identical, so the first one is spent).
+    const mineral = (this.state.minerals || []).find((m) => m.mutation === group.mutation);
+    if (!mineral) {
+      this.notify('That mineral can\'t go on this planet anymore.');
+      return;
+    }
+    await this.confirmAndApplyMineral(mineral.id, mutName);
+  }
+
+  // Spend a mineral to try to put its mutation on the planet you love
+  // (round 10 — the mineral IS the mutation; feeding is gone). The
+  // command opens the SAME combined mineral list as the inventory —
+  // every mineral, Birth included — through the shared picker, and
+  // the picker always appears, even with one mineral (round 17 fix
+  // L: no single-item shortcut, no bare info message instead of a
+  // list). The pick is NOT the commit anymore: a native confirm
+  // states the 50% odds before the flip, and cancelling consumes
+  // nothing.
+  async applyMineral() {
+    if (!this.state.current) {
+      vscode.window.showInformationMessage('No planet is growing — hatch one first, then spend a mineral on it.');
+      return;
+    }
+    const odds = Logic.applyOdds();
+    const group = await this.pickMineralGroup(
+      `Protoplanet: spend a mineral — ${Logic.formatOdds(odds.success)} chance to put its mutation on your planet`
+    );
+    await this.handleMineralGroupPick(group);
+  }
+
+  // Round 14 — the mineral inventory: a QuickPick listing every
+  // mineral grouped by KIND (round 16 overhaul) — Birth minerals
+  // together ("Pays for 1 birth — cannot apply"), then Mutation
+  // minerals by mutation — plus the Stardust balance in the
+  // placeholder. Round 17 fix A — tapping a Mutation mineral goes
+  // STRAIGHT to the apply confirm for the currently growing planet
+  // (no picker, no redirect toast); tapping a Birth mineral shows
+  // the guidance copy instead — it pays for births, it can't apply.
+  // Round 17 fix L — the list and the tap handling are shared with
+  // the apply command (pickMineralGroup / handleMineralGroupPick):
+  // the picker always appears, even with one mineral, and Birth
+  // minerals are always listed, never hidden.
+  async viewMinerals() {
+    const inv = Logic.mineralInventory(this.state);
+    const group = await this.pickMineralGroup(
+      `Protoplanet: minerals — ✦ ${Math.floor(inv.stardust).toLocaleString()} Stardust`
+    );
+    await this.handleMineralGroupPick(group);
   }
 
   // Round 14 — the shop: spend Stardust on minerals. Every purchase
@@ -523,7 +569,13 @@ class ProtoplanetApp {
       return `Carries: ${names} — below stage 4, its ${names} would be lost`;
     }
     const mutLabel = Planet.mutationLabel(planet);
-    return mutLabel ? `Carries: ${mutLabel}` : 'No mutation — yields one Birth mineral';
+    if (mutLabel) return `Carries: ${mutLabel}`;
+    // Round 17 — a plain Civilization planet yields two Birth
+    // minerals, not one: count them from the preview, never hardcode.
+    const birthCount = preview.yields.filter((m) => m.kind === 'birth').length;
+    return birthCount === 1
+      ? 'No mutation — yields one Birth mineral'
+      : `No mutation — yields ${birthCount} Birth minerals`;
   }
 
   async salvagePlanet() {
@@ -546,7 +598,7 @@ class ProtoplanetApp {
     }
     this.state.past.forEach((p, i) => {
       items.push({
-        label: `Salvage ${p.summary} · Gen ${p.generation}`,
+        label: `Salvage ${p.summary}`,
         description: 'Destroy it for minerals (no new planet)',
         detail: this.salvageDetail(p),
         kind: 'past',
@@ -634,7 +686,7 @@ class ProtoplanetApp {
     if (!pick) return;
     if (pick.kind === 'grow') {
       const planetItems = revivable.map(({ p, i }) => ({
-        label: `${p.summary} · Gen ${p.generation}`,
+        label: `${p.summary}`,
         description: Logic.stageInfo(p.chars || 0).name,
         detail: p.mutations && p.mutations.length > 0
           ? `Carries: ${p.mutations.map((id) => (Planet.mutationDef(id) || {}).name || id).join(', ')}`
@@ -1380,7 +1432,19 @@ class ProtoplanetApp {
      (#2b2b2b) — Devon explicitly asked for the rounded card here;
      that overrides the Instrument no-radius rule, which applies to
      the full-screen panels, not this card. No glow. */
-  #wrap { background: #2b2b2b; border: 1px solid #3d3d3d; border-radius: 10px; padding: 8px; overflow: hidden; }
+  #wrap { background: #2b2b2b; border: 1px solid #3d3d3d; border-radius: 10px; padding: 8px; overflow: hidden; position: relative; }
+  /* Round 17 (D) — floating Stardust chip: absolutely positioned in
+     the top-right corner of the card, so it takes no layout space —
+     the XP bar and its label keep their exact positions. Same amber
+     pill as the orrery topbar chip, dark-backed so it reads over the
+     planet art. pointer-events none so it never intercepts a drag;
+     unselectable like the art. Updated per keystroke with the state
+     push (see the 'state' message handler). */
+  #sdChip { position: absolute; top: 6px; right: 6px; z-index: 2;
+    padding: 2px 8px; border: 1px solid #e8b64c; border-radius: 999px;
+    color: #e8b64c; font-size: 11px; white-space: nowrap;
+    background: rgba(0, 0, 0, 0.45); pointer-events: none;
+    user-select: none; -webkit-user-select: none; }
   /* Compact (collapsed sidebar): tighter margins so the XP bar stays
      visible in a short view. Round 3: the stage line hides entirely
      at minimum sizes (Devon: the stage doesn't need saying at this
@@ -1402,6 +1466,7 @@ class ProtoplanetApp {
     font-family: ${FONT_STACK};
     font-size: var(--pp-fs, 10px); line-height: var(--pp-ch, 18px);
     letter-spacing: 0; white-space: pre;
+    user-select: none; -webkit-user-select: none;
     -webkit-text-size-adjust: none; text-size-adjust: none; }
   .pp-run { display: inline-block; height: var(--pp-ch, 18px);
     line-height: var(--pp-ch, 18px); vertical-align: top; overflow: hidden;
@@ -1450,6 +1515,16 @@ class ProtoplanetApp {
   const P = window.Protoplanet;
   const gridEl = document.getElementById('grid');
   const wrapEl = document.getElementById('wrap');
+  // Round 17 (D) — floating Stardust chip: created here as the card's
+  // first child (not in the static HTML) so the card's static markup
+  // — the round-3 Pokechi card asserted by test-pet — stays exactly
+  // as-is. Absolutely positioned (see #sdChip), so it takes no layout
+  // space; the XP bar and label keep their exact positions. The
+  // 'state' handler below keeps #sdBal live per keystroke.
+  const sdChipEl = document.createElement('div');
+  sdChipEl.id = 'sdChip';
+  sdChipEl.innerHTML = '✦ <span id="sdBal">0</span>';
+  wrapEl.insertBefore(sdChipEl, wrapEl.firstChild);
   const root = document.documentElement;
   const FONT_STACK = ${JSON.stringify(FONT_STACK)};
   let cellW = 3, cellH = 5.4, state = null, sec = 0, stageStartSec = 0, lastCrop = null, lastDims = null, lastLayoutAt = -1e9, layoutPending = false;
@@ -1604,8 +1679,7 @@ class ProtoplanetApp {
     stageStartSec = sec - 10; // settled — no birth morph
     state = msg;
     document.getElementById('stageName').textContent =
-      'Stage ' + (msg.stageIdx + 1) + '/7 \\u00b7 ' + msg.stageName +
-      (msg.generation > 1 ? ' \\u00b7 Gen ' + msg.generation : '');
+      'Stage ' + (msg.stageIdx + 1) + '/7 \\u00b7 ' + msg.stageName;
     const mutEl = document.getElementById('mutationLabel');
     if (msg.mutationLabel) { mutEl.textContent = msg.mutationLabel; mutEl.style.display = 'inline-block'; }
     else { mutEl.style.display = 'none'; }
@@ -1649,6 +1723,10 @@ class ProtoplanetApp {
     // planet's earn rate AND the Stardust balance: one short line,
     // no new panel.
     document.getElementById('meta').textContent = 'Grown from ' + msg.chars + ' characters · earns ' + msg.earnRateText + ' ✦/char · ✦' + Math.floor(msg.stardust).toLocaleString();
+    // Round 17 (D) — the floating chip shows the same balance as the
+    // meta line. Every keystroke pushes a fresh 'state' message, so
+    // this stays live per character, like the status bar.
+    document.getElementById('sdBal').textContent = Math.floor(msg.stardust || 0).toLocaleString();
     layout(); // text heights changed — re-fit the grid to the view height
   });
 
@@ -1656,6 +1734,12 @@ class ProtoplanetApp {
   setInterval(() => {
     sec += 0.15;
     if (!state) return;
+    // Round 17, E — hidden guard (mirrors the system panel tick):
+    // the sidebar rendered the full grid 7x/sec even while collapsed,
+    // burning the shared webview thread for a panel nobody sees.
+    // Note: sec still advances above so the animation resumes in
+    // phase instead of jumping when the sidebar comes back.
+    if (document.hidden) return;
     const t = Math.max(0, sec - stageStartSec);
     // Crop to the planet's own extent and render it star-free, so the
     // pet floats big on the VS Code gray instead of sitting small in
@@ -1732,10 +1816,16 @@ class ProtoplanetApp {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
     overflow: hidden; }
   /* Fixed-size cells — same rule as the sidebar (see getWebviewHtml). */
+  /* Round 17 (F) — planet art is never selectable: dragging over the
+     orrery discs, the sun, the detail art or an Index tile must not
+     highlight characters. user-select is inherited, so this one rule
+     covers every .pp-grid in this panel; the containers below get it
+     too, so a drag starting on padding can't select either. */
   .pp-grid { margin: 0;
     font-family: ${FONT_STACK};
     font-size: var(--pp-fs, 10px); line-height: var(--pp-ch, 18px);
     letter-spacing: 0; white-space: pre;
+    user-select: none; -webkit-user-select: none;
     -webkit-text-size-adjust: none; text-size-adjust: none; }
   .pp-run { display: inline-block; height: var(--pp-ch, 18px);
     line-height: var(--pp-ch, 18px); vertical-align: top; overflow: hidden;
@@ -1782,7 +1872,8 @@ class ProtoplanetApp {
      its own mode, reached from the tabs above. */
   #orreryWrap { position: relative; height: calc(100vh - 37px);
     overflow: hidden; background: #050505; }
-  #orrery { position: absolute; inset: 0; overflow: hidden; cursor: grab; }
+  #orrery { position: absolute; inset: 0; overflow: hidden; cursor: grab;
+    user-select: none; -webkit-user-select: none; }
   #orrery.panning { cursor: grabbing; }
   #world { position: absolute; width: 1400px; height: 900px; left: 50%; top: 50%;
     margin-left: -700px; margin-top: -450px; transform-origin: 50% 50%; }
@@ -1829,27 +1920,43 @@ class ProtoplanetApp {
     transition: opacity 200ms ease; }
   #detail h2 { font-size: 16px; margin: 0 0 2px; }
   #detail .sub { font-size: 12px; opacity: .75; margin: 0 0 10px; line-height: 1.5; }
-  #detailArt { background: #050505; border: 1px solid #222; padding: 4px; overflow-x: auto; margin-bottom: 10px; }
+  #detailArt { background: #050505; border: 1px solid #222; padding: 4px; overflow-x: auto; margin-bottom: 10px;
+    user-select: none; -webkit-user-select: none; }
   #detail .mut { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .12em;
     text-transform: uppercase; color: #ffd75f; background: transparent;
     border: 1px solid rgba(255, 215, 95, 0.55); padding: 2px 7px; margin: 0 0 8px; }
-  /* Round 10 — legendary: every mutation is its own title card
-     (gold, name + one-line flavor), and a completed set gets its own
-     title card too. The flat .mut tag above stays for other panels. */
-  #detail .mutCard { background: linear-gradient(135deg, #2b2b2b, #3a2f14); border: 1px solid #e8b64c;
-    border-radius: 6px; padding: 8px 10px; margin: 0 0 8px; }
-  #detail .mutCard .mutName { font-size: 12px; font-weight: 700; color: #ffd75f; }
-  #detail .mutCard .mutDesc { font-size: 11px; opacity: .8; margin-top: 2px; line-height: 1.4; }
-  #detail .setCard { background: #2b2b2b; border: 1px solid #e8b64c; border-radius: 6px;
-    padding: 8px 10px; margin: 0 0 8px; font-size: 12px; font-weight: 700; color: #ffd75f; line-height: 1.5; }
-  #detail table { font-size: 12px; border-collapse: collapse; margin: 0 0 12px; }
-  #detail td { padding: 2px 10px 2px 0; vertical-align: top; }
-  #detail td.k { opacity: .6; white-space: nowrap; }
-  /* Round 15 revision — the earnings breakdown lines sit directly
-     under the Earns row in the same table, indented so they read as
-     the factors that multiply to the total. */
-  #detail tr.earnline td.k { padding-left: 14px; }
-  #detail tr.earnline td:last-child { color: #ffd75f; }
+  /* Round 17 (fix C) — detail sheet cleanup (Devon, Nov 15): way less
+     text, organized. Name + inline chips, one meta line, name-only
+     mutation chips, a 3-number vitals row, the earnings breakdown as
+     a gold-bordered block, latest 3 journal entries. The old table,
+     mutation title cards and set cards are gone. No Gen label
+     anywhere in this sheet (Devon, Nov 15 — display-only). */
+  #detail .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 6px; }
+  #detail .chip { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .12em;
+    text-transform: uppercase; color: #ffd75f; background: transparent;
+    border: 1px solid rgba(255, 215, 95, 0.55); padding: 2px 7px; }
+  #detail .mutchips { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 10px; }
+  #detail .mutchip { display: inline-block; font-size: 11px; font-weight: 700; color: #ffd75f;
+    background: transparent; border: 1px solid rgba(255, 215, 95, 0.55); padding: 2px 7px; cursor: default; }
+  /* Vitals row: three numbers, no table. */
+  #detail .vitals { display: flex; border-top: 1px solid #222; border-bottom: 1px solid #222; margin: 0 0 10px; }
+  #detail .vital { flex: 1; padding: 8px 6px; text-align: center; }
+  #detail .vital + .vital { border-left: 1px solid #222; }
+  #detail .vlabel { font-size: 10px; letter-spacing: .14em; text-transform: uppercase; opacity: .55; margin-bottom: 2px; }
+  #detail .vnum { font-size: 15px; font-weight: 700; }
+  #detail .vnum.gold { color: #ffd75f; }
+  #detail .vsub { font-size: 11px; opacity: .6; margin-top: 2px; }
+  /* Earnings breakdown: the earnBreakdown lines, exact as computed —
+     stage base / mutations / journal events / family combos — as a
+     gold-left-border block, no header. Only lines that apply show. */
+  #detail .earnblock { border-left: 2px solid #e8b64c; padding: 2px 0 2px 10px; margin: 0 0 10px; font-size: 12px; }
+  #detail .ebline { display: flex; justify-content: space-between; gap: 10px; padding: 1px 0; }
+  #detail .ebline .ebval { color: #ffd75f; white-space: nowrap; }
+  #detail .benched { font-size: 12px; color: #e8b64c; margin: 0 0 10px; }
+  #detail .prestigeline { font-size: 12px; color: #ffd75f; margin: 0 0 10px; }
+  #detail .showall { background: none; border: none; color: #ffd75f; font-size: 11px;
+    padding: 4px 0 0; cursor: pointer; text-align: left; }
+  #detail button.primary { border: 1px solid #e8b64c; background: rgba(232, 182, 76, 0.14); color: #ffd75f; }
   #detail .actions { display: flex; gap: 6px; flex-wrap: wrap; }
   #detail .note { font-size: 11px; opacity: .65; margin: 8px 0 0; line-height: 1.5; }
   /* Round 11 — the Discovery Journal: the planet's own history on
@@ -1915,7 +2022,8 @@ class ProtoplanetApp {
      Plain tiles stay plain. */
   .tile.mutated { outline: 1px solid rgba(232, 182, 76, .65); outline-offset: -1px; }
   .tile .corner { position: absolute; top: 8px; right: 10px; color: #ffd75f; font-size: 16px; font-weight: 700; z-index: 2; }
-  .tile .art { display: flex; justify-content: center; background: #050505; margin-bottom: 10px; overflow: hidden; }
+  .tile .art { display: flex; justify-content: center; background: #050505; margin-bottom: 10px; overflow: hidden;
+    user-select: none; -webkit-user-select: none; }
   .tile .tname { font-size: 13px; font-weight: 600; }
   .tile .tmeta { font-size: 11px; opacity: .7; line-height: 1.5; margin-top: 2px; }
   /* Round 11 — the tile's one-line journal: the planet's latest story beat. */
@@ -1923,7 +2031,12 @@ class ProtoplanetApp {
   .badge { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .08em;
     text-transform: uppercase; padding: 1px 6px; margin: 4px 4px 0 0; }
   .badge.sys, .badge.cur { color: #ffd75f; border: 1px solid rgba(255, 215, 95, 0.5); }
-  .badge.mut { color: #ffd75f; border: 1px solid rgba(255, 215, 95, 0.55); }
+  /* Round 17 (fix C) — mutation pills (Devon, Nov 15): violet, not
+     gold, so a mutation reads at a glance against the gold status
+     pills (In system / Growing now). Filled tint, where the status
+     pills are outline-only, for one more glanceable difference.
+     Gold stays the legendary/set color — violet is mutation-only. */
+  .badge.mut { color: #c9a6ff; border: 1px solid rgba(183, 140, 255, 0.6); background: rgba(183, 140, 255, 0.12); }
   .empty { font-size: 13px; opacity: .65; padding: 18px 0; }
   /* Hide-UI (H): only the orrery stays. */
   body.hide-ui #topbar, body.hide-ui #bottomStrip { display: none !important; }
@@ -1968,6 +2081,7 @@ class ProtoplanetApp {
       <option value="oldest">Oldest first</option>
       <option value="most">Most characters</option>
       <option value="mutated">Most mutated</option>
+      <option value="earners">Highest earners</option>
       <option value="name">Name A&ndash;Z</option>
       <option value="terrain">Terrain</option>
     </select>
@@ -2011,6 +2125,7 @@ class ProtoplanetApp {
   var anglePlanet = {}; // ring index -> 'seed:generation' the angle belongs to
   var hoverPlanet = false, detailOpen = false, pickerRing = null;
   var selected = null; // { seed, generation } of the planet in the detail sheet
+  var detailJournalAll = false; // detail sheet: journal expanded to all entries (round 17)
   var searchText = '', sortMode = 'newest';
   var lastSig = '', discs = []; // [{ el, planet, ring }]
   var mode = 'orrery'; // 'orrery' | 'index' — two full screens, not one crowded one (Devon, Nov 12)
@@ -2427,6 +2542,12 @@ class ProtoplanetApp {
   // --- orrery ------------------------------------------------------------
   function renderOrrery() {
     if (!state) return;
+    // Round 17, E — stuck-frozen fix: this rebuild destroys every disc
+    // node (worldEl.innerHTML = '' below), so a pointer hovering a disc
+    // never gets a mouseout and hoverPlanet stays true forever — the
+    // drift stays paused until he re-hovers. Reset it here; the next
+    // mousemove/mouseover corrects it if he is still hovering.
+    hoverPlanet = false;
     worldEl.innerHTML = '';
     discs = [];
     var total = state.slots.length;
@@ -2631,6 +2752,7 @@ class ProtoplanetApp {
   // move, so the sheet just appears.
   function openDetail(planet) {
     selected = { seed: planet.seed, generation: planet.generation };
+    detailJournalAll = false; // a new planet starts at latest-3
     detailOpen = true;
     renderDetail();
     renderOrrerySel();
@@ -2639,6 +2761,7 @@ class ProtoplanetApp {
   function closeDetail() {
     if (zoomed) unzoom();
     selected = null;
+    detailJournalAll = false;
     detailOpen = false;
     detailEl.hidden = true;
     renderOrrerySel();
@@ -2701,75 +2824,116 @@ class ProtoplanetApp {
     var emptyRing = firstEmptyRing();
     // The art is filled by fillDetailArt() below (cropped render,
     // cells sized to the sheet) — the grid element starts empty.
-    // Round 10 — legendary: every mutation is its own title card
-    // (gold, name + one-line flavor), and a completed set gets its
-    // own title card. The flat tag is gone from this sheet.
-    var mutCards = '';
+    // Round 17 (fix C) — detail sheet cleanup (Devon, Nov 15): name +
+    // inline chips, one meta line, name-only mutation chips, a
+    // 3-number vitals row, the earnings breakdown as a gold-bordered
+    // block, latest 3 journal entries. No Gen label anywhere in this
+    // sheet (Devon, Nov 15 — display-only; the generation counter
+    // itself is untouched).
+    var inSystem = planet.kind === 'current' || ring >= 0;
+    // Header chips: stage + one per completed set. The set's flavor
+    // sentence is dropped — the set is visible from the mutation
+    // chips below it.
+    var chips = '<span class="chip">' + esc(planet.stageName) + '</span>';
+    (planet.sets || []).forEach(function (s) {
+      chips += '<span class="chip">✦ ' + esc(s.name) + '</span>';
+    });
+    // Mutation chips: name only — the flavor moves to the title
+    // tooltip. (esc() skips quotes, so the tooltip quotes are
+    // escaped here.)
+    var mutChips = '';
     (planet.mutations || []).forEach(function (id) {
       var def = P.mutationDef(id);
-      mutCards += '<div class="mutCard"><div class="mutName">✦ ' + esc(def ? def.name : id) + '</div>'
-        + '<div class="mutDesc">' + esc(def ? def.desc : '') + '</div></div>';
+      mutChips += '<span class="mutchip"' + (def && def.desc ? ' title="' + esc(def.desc).replace(/"/g, '&quot;') + '"' : '') + '>✦ ' + esc(def ? def.name : id) + '</span>';
     });
-    var setCards = '';
-    (planet.sets || []).forEach(function (s) {
-      setCards += '<div class="setCard">✦ ' + esc(s.name) + ' — a whole mutation family on one planet</div>';
-    });
-    // Round 11 — the Discovery Journal: the planet's own history,
-    // oldest first. Events show their title (✦ Meteor Impact);
-    // everything else is one line of story.
+    // Round 11 — the Discovery Journal: the planet's own history.
+    // Latest 3 entries, newest first; "Show all N" expands in place.
+    // Events show their title (✦ Meteor Impact); everything else is
+    // one line of story.
     var journalHtml = '';
     var journal = planet.journal || [];
     if (journal.length > 0) {
-      journalHtml = '<h3>Journal</h3><div class="journal">';
-      for (var ji = 0; ji < journal.length; ji++) {
-        var je = journal[ji];
+      var shown = detailJournalAll ? journal.slice().reverse() : journal.slice(-3).reverse();
+      journalHtml = '<h3>Latest</h3><div class="journal">';
+      for (var ji = 0; ji < shown.length; ji++) {
+        var je = shown[ji];
         var d = je.t ? new Date(je.t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
         journalHtml += '<div class="jentry"><span class="jdate">' + esc(d) + '</span> '
           + (je.kind === 'event' && je.title ? '<span class="jtitle">✦ ' + esc(je.title) + '</span> — ' : '')
           + esc(je.text) + '</div>';
       }
       journalHtml += '</div>';
+      if (journal.length > 3) {
+        journalHtml += '<button class="showall" data-action="showJournal">' + (detailJournalAll ? 'Show less' : 'Show all ' + journal.length + ' entries') + ' &rsaquo;</button>';
+      }
     }
     // Round 15 revision (Devon, Nov 14 — the separate Stardust tab
-    // is gone): the full earnings breakdown lives HERE, under the
-    // Earns row — one indented line per factor that applies (stage
-    // base, mutations, journal events, family combos). The lines
-    // multiply to the total, exact to 3 decimals. A plain planet
-    // shows just its stage base; nothing shows an empty line.
-    var earnLines = '';
+    // is gone): the full earnings breakdown lives HERE, as a
+    // gold-bordered block under the vitals — one line per factor that
+    // applies (stage base, mutations, journal events, family combos),
+    // straight from earnBreakdown in petLogic.js. The lines multiply
+    // to the total, exact to 3 decimals. A plain planet shows just
+    // its stage base; nothing shows an empty line.
+    var earnBlock = '';
     var bd = planet.earnBreakdown;
-    if (bd && bd.lines) {
+    if (bd && bd.lines && bd.lines.length > 0) {
+      earnBlock = '<div class="earnblock">';
       for (var ei = 0; ei < bd.lines.length; ei++) {
-        earnLines += '<tr class="earnline"><td class="k">' + esc(bd.lines[ei].label) + '</td><td>' + esc(bd.lines[ei].value) + '</td></tr>';
+        earnBlock += '<div class="ebline"><span>' + esc(bd.lines[ei].label) + '</span><span class="ebval">' + esc(bd.lines[ei].value) + '</span></div>';
+      }
+      earnBlock += '</div>';
+    }
+    // Vitals math (display only): Civilization is 2200 XP — mirrors
+    // Logic.CONFIG.PRESTIGE_MIN_CHARS / XP_THRESHOLDS[6]; the next
+    // stage's XP mirrors XP_THRESHOLDS. The webview has no Logic
+    // handle, so the ladder is repeated here for the subline only —
+    // earn math never uses it.
+    var CIV_XP = 2200;
+    var XP_NEXT = [100, 300, 600, 1000, 1500, 2200];
+    var maxed = planet.stageIdx >= 6;
+    var stageSub = maxed ? 'MAX · ' + planet.chars.toLocaleString() + ' XP'
+      : 'NEXT · ' + (XP_NEXT[planet.stageIdx] || 0).toLocaleString() + ' XP';
+    if (planet.kind === 'current') stageSub += ' · Growing now';
+    // Benched fix (round 17): a benched planet must never read as
+    // earning — the amber line below wins, and the Earns subline
+    // says "Benched", never "in your system".
+    var benchedHtml = inSystem ? '' : '<p class="benched">Benched — place it in the system to earn.</p>';
+    // Prestige shows ONLY when actionable: this planet reached
+    // Civilization and hasn't been a parent, AND another
+    // Civilization planet exists to pair with. Otherwise nothing.
+    var prestigeLine = '';
+    if ((planet.chars || 0) >= CIV_XP && !planet.usedAsParent && state && state.index) {
+      for (var pi = 0; pi < state.index.length; pi++) {
+        var op = state.index[pi];
+        if ((op.seed !== planet.seed || op.generation !== planet.generation)
+          && (op.chars || 0) >= CIV_XP && !op.usedAsParent) {
+          prestigeLine = '<p class="prestigeline">Ready to prestige — pair with another Civilization planet</p>';
+          break;
+        }
       }
     }
     var html = '<button id="detailClose" class="ghost" data-action="close" title="Close">&times;</button>'
       + '<h2>' + esc(planet.name) + '</h2>'
-      + '<p class="sub">' + esc(planet.summary) + ' &middot; Seed ' + planet.seed + '</p>'
-      + mutCards + setCards
+      + '<div class="chips">' + chips + '</div>'
+      + '<p class="sub">' + esc(planet.terrainLabel || 'Protoplanet') + ' &middot; Seed ' + planet.seed + '</p>'
       + '<div id="detailArt" class="pp-frame" data-cw="4" data-ch="7.2" data-atmo="' + planet.planet.atmosphere + '"><div class="pp-stars"></div><div class="pp-planet"><div class="pp-grid"></div></div></div>'
-      + '<table>'
-      + '<tr><td class="k">Terrain</td><td>' + esc(planet.terrainLabel) + '</td></tr>'
-      + '<tr><td class="k">Stage</td><td>' + esc(planet.stageName) + (planet.kind === 'current' ? ' &middot; growing now' : '') + '</td></tr>'
-      + '<tr><td class="k">Earns</td><td>' + planet.earnRateText + ' ✦ per character' + (planet.kind === 'current' || ring >= 0 ? ' · in your system' : ' · benched — place it in the system to earn') + '</td></tr>'
-      + earnLines
-      + '<tr><td class="k">Grown from</td><td>' + planet.chars + ' characters</td></tr>'
-      + '<tr><td class="k">Generation</td><td>Gen ' + planet.generation + '</td></tr>'
-      + (planet.parents ? '<tr><td class="k">Parents</td><td>' + esc(planet.parents.map(function (p) { return p.name || ('Seed ' + p.seed); }).join(' + ')) + '</td></tr>' : '')
-      + (planet.usedAsParent ? '<tr><td class="k">Prestige</td><td>Already a parent</td></tr>' : '')
-      + '</table>'
+      + (mutChips ? '<div class="mutchips">' + mutChips + '</div>' : '')
+      + '<div class="vitals">'
+      + '<div class="vital"><div class="vlabel">Earns</div><div class="vnum gold">' + planet.earnRateText + ' ✦/char</div><div class="vsub">' + (inSystem ? 'in your system' : 'Benched') + '</div></div>'
+      + '<div class="vital"><div class="vlabel">Stage</div><div class="vnum">' + esc(planet.stageName) + '</div><div class="vsub">' + stageSub + '</div></div>'
+      + '<div class="vital"><div class="vlabel">Grown</div><div class="vnum">' + planet.chars.toLocaleString() + '</div><div class="vsub">characters</div></div>'
+      + '</div>'
+      + earnBlock
+      + benchedHtml
+      + prestigeLine
       + journalHtml
       + '<div class="actions">';
     // Grow this planet again (round 7 — Devon): an archived planet
     // in the Index can become the living one — typing grows it
     // again, and the planet that was growing is kept in the
-    // collection. The living planet already shows "growing now" in
-    // its Stage row, so it gets no button.
+    // collection. The living planet gets no button.
     if (planet.kind !== 'current') {
-      html += '<button data-action="makeCurrent">Grow this planet</button>';
-      // Round 11 — salvaging an archived planet destroys it for
-      // minerals, and it is also how a full archive frees a slot.
-      html += '<button class="ghost" data-action="salvage">Salvage this planet</button>';
+      html += '<button class="primary" data-action="makeCurrent">Grow this planet</button>';
     }
     if (ring >= 0) {
       html += '<button data-action="remove" data-ring="' + ring + '">Remove from system</button>'
@@ -2779,13 +2943,18 @@ class ProtoplanetApp {
     } else {
       html += '<button disabled>No empty rings</button>';
     }
+    if (planet.kind !== 'current') {
+      // Round 11 — salvaging an archived planet destroys it for
+      // minerals, and it is also how a full archive frees a slot.
+      html += '<button class="ghost" data-action="salvage">Salvage this planet</button>';
+    }
     html += '</div>';
     if (ring < 0 && emptyRing < 0 && state.nextAt !== null) {
       html += '<p class="note">No empty rings — grow ' + state.toNext + ' more planet' + (state.toNext === 1 ? '' : 's') + ' to unlock Ring ' + (state.totalSlots + 1) + '.</p>';
     }
-    if (ring >= 0) {
-      html += '<p class="note">Removing a planet from the system never deletes it — it stays in the Index.</p>';
-    }
+    // The "Removing never deletes it" note is dropped from this
+    // sheet (round 17) — and there is no Remove confirm dialog to
+    // move it to (remove is immediate), so it is gone, not moved.
     detailEl.innerHTML = html;
     fillDetailArt();
   }
@@ -2872,6 +3041,13 @@ class ProtoplanetApp {
       if (sortMode === 'oldest') return (a.archivedAt || 0) - (b.archivedAt || 0);
       if (sortMode === 'most') return b.chars - a.chars;
       if (sortMode === 'mutated') return (b.mutations || []).length - (a.mutations || []).length || b.chars - a.chars;
+      // Round 17 (fix M) — Highest earners: Stardust per character,
+      // highest first, from the same earnRate the tiles and detail
+      // sheet display (petLogic earnRate — never a separate copy of
+      // the math). Applied at render time from the current rates on
+      // every state push, so a stage-up, a new mutation, a journal
+      // event or a placement change re-sorts the Index live.
+      if (sortMode === 'earners') return (b.earnRate || 0) - (a.earnRate || 0) || b.chars - a.chars;
       if (sortMode === 'name') return a.name.localeCompare(b.name);
       if (sortMode === 'terrain') return (a.terrainLabel + a.name).localeCompare(b.terrainLabel + b.name);
       return 0;
@@ -2922,15 +3098,20 @@ class ProtoplanetApp {
         + (mutCount > 0 ? '<div class="corner">✦' + (mutCount > 1 ? '×' + mutCount : '') + '</div>' : '')
         + '<div class="art"><div class="pp-grid"></div></div>'
         + '<div class="tname">' + esc(p.name) + '</div>'
-        + '<div class="tmeta">' + esc(p.terrainLabel) + ' &middot; ' + esc(p.stageName) + ' &middot; ' + p.chars + ' chars &middot; Gen ' + p.generation + ' &middot; ✦' + p.earnRateText + '/char</div>'
+        + '<div class="tmeta">' + esc(p.terrainLabel) + ' &middot; ' + esc(p.stageName) + ' &middot; ' + p.chars + ' chars &middot; ✦' + p.earnRateText + '/char</div>'
         + (jline ? '<div class="jline">' + esc(jline) + '</div>' : '')
         + (inSys ? '<span class="badge sys">In system</span>' : '')
         + (p.kind === 'current' ? '<span class="badge cur">Growing now</span>' : '')
-        // The mutation badge keeps its full label ("MUTATION · Glitch")
-        // — the bare name alone read like a life indicator
-        // (Devon, Nov 11). The stage in the meta line above is what
-        // says whether it has life / cities.
-        + (p.mutationLabel ? '<span class="badge mut">' + esc(p.mutationLabel) + '</span>' : '')
+        // Round 17 (fix C) — mutation pills (Devon, Nov 15): one
+        // violet pill per mutation, name only — no "MUTATION" word.
+        // The color (not the text) is what marks a mutation at a
+        // glance; the status pills (In system / Growing now) stay
+        // gold. Reverses the Nov 11 call that kept the full
+        // "MUTATION · Glitch" label on the tile.
+        + (p.mutations || []).map(function (id) {
+          var def = P.mutationDef(id);
+          return '<span class="badge mut">' + esc(def ? def.name : id) + '</span>';
+        }).join('')
         + '</div>';
     }
     tilesEl.innerHTML = html;
@@ -2948,6 +3129,11 @@ class ProtoplanetApp {
   // stageScale, so a newborn reads smaller than a mature planet
   // inside its tile — but both are ~2x bigger and brighter than
   // before, with real characters instead of averaged blocks.
+  // Round 17 (fix C) — tighter crop margin 1.15 (was the 1.7
+  // default): the disc fills the tile instead of sitting small in
+  // a wide field. Same fix as the open "Index shattered-burst
+  // planet unreadable" call (stage 0 was the worst: disc ~42% of
+  // tile width).
   function fillTileArt(list) {
     var artW = tileArtWidth();
     var arts = tilesEl.querySelectorAll('.tile .art');
@@ -2957,7 +3143,7 @@ class ProtoplanetApp {
       if (!artEl) continue;
       var gridEl = artEl.querySelector('.pp-grid');
       if (!gridEl) continue;
-      var crop = P.sidebarCrop(p.planet, p.stageIdx, 10);
+      var crop = P.sidebarCrop(p.planet, p.stageIdx, 10, 1.15);
       var cellW = artW / crop.cols;
       var cellH = cellW * 1.8;
       gridEl.style.setProperty('--pp-fs', cellFont(cellW, cellH) + 'px');
@@ -3079,9 +3265,54 @@ class ProtoplanetApp {
     applyTransform();
     scheduleZoomRefresh();
   }
-  var panning = null, dragged = false, suppressClick = false;
+  // --- shared hit tests (round 17, B) --------------------------------------
+  // Hover and click MUST agree: the gold outline is the hit area, so
+  // both paths call these functions with the same pointer position
+  // instead of trusting whichever element happens to be on top.
+  // DISC_PAD_PX: a few px of invisible padding around the disc box,
+  // so a click on the 2px outline band — or a near-miss on the
+  // highlighted planet — still counts as clicking the planet.
+  var DISC_PAD_PX = 4;
+  function discAtPoint(clientX, clientY) {
+    for (var k = 0; k < discs.length; k++) {
+      var r = discs[k].el.getBoundingClientRect();
+      if (clientX >= r.left - DISC_PAD_PX && clientX <= r.right + DISC_PAD_PX
+        && clientY >= r.top - DISC_PAD_PX && clientY <= r.bottom + DISC_PAD_PX) return discs[k];
+    }
+    return null;
+  }
+  // RING_BAND_PX: a ring only counts when the pointer is within this
+  // many screen px of its line. The old .ringHit divs were filled
+  // ellipses — ~100k px^2 of clickable empty black space each — so
+  // any click inside an outer ring opened the picker. The band is
+  // measured along the ellipse's major axis; near the top/bottom of
+  // the ring (where it runs nearly horizontal) the same band reads
+  // as ~4px vertically, which is the right feel for a thin line.
+  // Only unlocked EMPTY rings are clickable, and the nearest line
+  // wins when bands overlap at low zoom.
+  var RING_BAND_PX = 12;
+  function ringAtPoint(clientX, clientY) {
+    if (!state) return -1;
+    var rect = orreryEl.getBoundingClientRect();
+    var wx = CX + (clientX - rect.left - rect.width / 2 - panX) / zoom;
+    var wy = CY + (clientY - rect.top - rect.height / 2 - panY) / zoom;
+    var total = state.slots.length;
+    var best = -1, bestD = Infinity;
+    for (var i = 0; i < total; i++) {
+      var slot = state.slots[i];
+      if (!slot.unlocked || slot.planet) continue;
+      var R = ringRadius(i, total);
+      var dx = (wx - CX) / R, dy = (wy - CY) / (R * TILT);
+      var rho = Math.sqrt(dx * dx + dy * dy);
+      var d = Math.abs(rho - 1);
+      if (d * R * zoom <= RING_BAND_PX && d < bestD) { best = i; bestD = d; }
+    }
+    return best;
+  }
+  var panning = null, dragged = false, suppressClick = false, downPos = null;
   orreryEl.addEventListener('pointerdown', function (e) {
     panning = { x: e.clientX, y: e.clientY, panX: panX, panY: panY };
+    downPos = { x: e.clientX, y: e.clientY };
     dragged = false;
     orreryEl.classList.add('panning');
   });
@@ -3092,7 +3323,11 @@ class ProtoplanetApp {
   window.addEventListener('pointermove', function (e) {
     if (!panning) return;
     var dx = e.clientX - panning.x, dy = e.clientY - panning.y;
-    if (Math.abs(dx) + Math.abs(dy) > 4) dragged = true;
+    // Round 17, B: 4px Manhattan was tiny — normal click jitter or
+    // trackpad movement exceeded it, so the click was silently
+    // swallowed. 8px still catches every real pan (and the click
+    // handler below re-checks the end position against downPos).
+    if (Math.abs(dx) + Math.abs(dy) > 8) dragged = true;
     if (dragged) {
       panX = panning.panX + dx;
       panY = panning.panY + dy;
@@ -3125,17 +3360,40 @@ class ProtoplanetApp {
 
   // --- clicks (delegated; suppressed right after a drag-pan) ----------------
   worldEl.addEventListener('click', function (e) {
-    if (suppressClick) return;
-    var disc = e.target.closest ? e.target.closest('.disc') : null;
-    if (disc) {
-      var planet = findPlanet(+disc.getAttribute('data-seed'), +disc.getAttribute('data-gen'));
+    // Round 17, B — a press that ends where it started is a click,
+    // even if the pointer wobbled past the drag threshold mid-press
+    // and set suppressClick. Only a press that actually moved away
+    // from its start is a pan. (No downPos recorded means the press
+    // began outside the orrery — trust suppressClick then.)
+    var moved = downPos ? (Math.abs(e.clientX - downPos.x) + Math.abs(e.clientY - downPos.y)) : 0;
+    var isPan = suppressClick && (!downPos || moved > 8);
+    // Same hit test as hover (discAtPoint): anywhere inside the gold
+    // outline — plus the padding — zooms to the planet.
+    var disc = discAtPoint(e.clientX, e.clientY);
+    if (disc && !isPan) {
+      // Clicking the planet you are already zoomed into zooms back
+      // out to the orrery — it never jumps to the Index.
+      if (zoomed && selected && selected.seed === disc.planet.seed && selected.generation === disc.planet.generation) {
+        closeDetail();
+        return;
+      }
+      var planet = findPlanet(disc.planet.seed, disc.planet.generation);
       if (planet) openDetail(planet);
       return;
     }
-    var hit = e.target.closest ? e.target.closest('.ringHit') : null;
-    if (hit) {
+    if (isPan) return;
+    // While zoomed into a planet the ring picker is out of reach:
+    // at 5x zoom the ring ellipses cover the whole viewport, so a
+    // click that missed the disc used to open the picker and jump to
+    // the Index. Ring clicks are ignored until you zoom back out.
+    if (zoomed) return;
+    // Same hit test as hover (ringAtPoint): only a click within the
+    // band around an empty ring's line opens the picker — clicks on
+    // the empty black space inside a ring do nothing now.
+    var ring = ringAtPoint(e.clientX, e.clientY);
+    if (ring >= 0) {
       // Clicks on the star itself do not place a planet — the star
-      // sits inside the innermost ring's hit area, so guard it: the
+      // sits inside the innermost ring's band, so guard it: the
       // star's visible sphere is the middle half of its element box.
       var starEl = worldEl.querySelector('.star');
       if (starEl) {
@@ -3145,7 +3403,7 @@ class ProtoplanetApp {
         var dx = (e.clientX - scx) / srx, dy = (e.clientY - scy) / sry;
         if (dx * dx + dy * dy < 1) return;
       }
-      startPicker(+hit.getAttribute('data-ring'));
+      startPicker(ring);
     }
   });
   // Ring hover highlight (Devon, Nov 12): hovering an empty ring
@@ -3156,21 +3414,40 @@ class ProtoplanetApp {
     var r = worldEl.querySelector('.ring[data-ring="' + idx + '"]');
     if (r) r.classList.toggle('hot', !!on);
   }
+  // Round 17, B — one hot ring at a time, driven by the SAME band
+  // test as the click handler (ringAtPoint): hovering the empty
+  // black space inside a ring no longer lights it up, and the ring
+  // that lights up is always the ring a click would open.
+  var hotRing = -1;
+  function setHotRing(idx) {
+    if (idx === hotRing) return;
+    if (hotRing >= 0) setRingHot(hotRing, false);
+    hotRing = idx;
+    if (hotRing >= 0) setRingHot(hotRing, true);
+  }
   worldEl.addEventListener('mouseover', function (e) {
     if (e.target.closest && e.target.closest('.disc')) hoverPlanet = true;
-    var hit = e.target.closest ? e.target.closest('.ringHit') : null;
-    if (hit) setRingHot(+hit.getAttribute('data-ring'), true);
+    setHotRing(ringAtPoint(e.clientX, e.clientY));
   });
   worldEl.addEventListener('mouseout', function (e) {
     if (e.target.closest && e.target.closest('.disc')) hoverPlanet = false;
-    var hit = e.target.closest ? e.target.closest('.ringHit') : null;
-    if (hit && !(e.relatedTarget && hit.contains(e.relatedTarget))) setRingHot(+hit.getAttribute('data-ring'), false);
+    setHotRing(ringAtPoint(e.clientX, e.clientY));
+  });
+  // mousemove keeps the hot ring fresh while the pointer travels
+  // inside one hit area — mouseover only fires on element entry, so
+  // moving toward a ring line from inside its own ellipse would
+  // otherwise never light it up (and a lit ring would stick after
+  // the pointer drifted off its line). One rect read + a <=12-ring
+  // loop per move is trivial.
+  worldEl.addEventListener('mousemove', function (e) {
+    setHotRing(ringAtPoint(e.clientX, e.clientY));
   });
   detailEl.addEventListener('click', function (e) {
     var t = e.target.closest ? e.target.closest('[data-action]') : null;
     if (!t || !selected) return;
     var action = t.getAttribute('data-action');
     if (action === 'close') { closeDetail(); return; }
+    if (action === 'showJournal') { detailJournalAll = !detailJournalAll; renderDetail(); return; }
     if (action === 'makeCurrent') {
       vscodeApi.postMessage({ type: 'makeCurrent', seed: selected.seed, generation: selected.generation });
       closeDetail();
@@ -3335,10 +3612,13 @@ class ProtoplanetApp {
   html, body { -webkit-text-size-adjust: none; text-size-adjust: none; }
   body { margin: 0; background: #050505; color: var(--vscode-editor-foreground);
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; }
+  /* Round 17 (F) — planet art is never selectable (see the system
+     panel .pp-grid note). */
   .pp-grid { margin: 0;
     font-family: ${FONT_STACK};
     font-size: var(--pp-fs, 10px); line-height: var(--pp-ch, 18px);
     letter-spacing: 0; white-space: pre;
+    user-select: none; -webkit-user-select: none;
     -webkit-text-size-adjust: none; text-size-adjust: none; }
   .pp-run { display: inline-block; height: var(--pp-ch, 18px);
     line-height: var(--pp-ch, 18px); vertical-align: top; overflow: hidden;
@@ -3382,7 +3662,8 @@ class ProtoplanetApp {
     font-size: 13px; text-align: center; line-height: 1.6; }
   .parentSlot h3 { font-size: 13px; font-weight: 600; margin: 0 0 2px; }
   .parentSlot .sub { font-size: 12px; opacity: .75; margin: 0 0 8px; line-height: 1.5; }
-  .slotArt { background: #050505; border: 1px solid #1e1e1e; padding: 4px; overflow-x: auto; margin-bottom: 8px; }
+  .slotArt { background: #050505; border: 1px solid #1e1e1e; padding: 4px; overflow-x: auto; margin-bottom: 8px;
+    user-select: none; -webkit-user-select: none; }
   .slotTag { font-size: 11px; color: #e8b64c; margin-bottom: 4px; }
   .mut { display: inline-block; font-size: 11px; font-weight: 700;
     color: #ffd75f; background: transparent;
@@ -3395,7 +3676,8 @@ class ProtoplanetApp {
   #collisionWrap { background: #050505; border: 1px solid #1e1e1e;
     padding: 14px; text-align: center; }
   #collisionCaption { font-size: 14px; font-weight: 600; color: #ffd75f; margin: 0 0 10px; }
-  #collisionArt { background: #050505; overflow-x: auto; display: inline-block; }
+  #collisionArt { background: #050505; overflow-x: auto; display: inline-block;
+    user-select: none; -webkit-user-select: none; }
   #collisionWrap .skipRow { margin-top: 10px; }
   /* Inheritance preview + confirm. */
   #inheritBar { margin: 14px 0 0; font-size: 12px; line-height: 1.7; }
@@ -3410,6 +3692,7 @@ class ProtoplanetApp {
   #result h2 { font-size: 16px; margin: 0 0 2px; }
   #result .sub { font-size: 12px; opacity: .75; margin: 0 0 10px; line-height: 1.5; }
   #resultArt { background: #050505; border: 1px solid #1e1e1e; padding: 4px; overflow-x: auto;
+    user-select: none; -webkit-user-select: none;
     margin-bottom: 12px; display: inline-block; }
   #result .lineage { font-size: 13px; margin: 0 0 8px; line-height: 1.6; }
   #result .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
@@ -3423,7 +3706,8 @@ class ProtoplanetApp {
   .card.dim { opacity: .55; cursor: default; }
   .card.dim:hover { background: #050505; }
   .card.pickedA, .card.pickedB { outline: 1px solid #e8b64c; outline-offset: -1px; }
-  .card .thumb { background: #050505; border: 1px solid #1e1e1e; margin-bottom: 8px; overflow: hidden; }
+  .card .thumb { background: #050505; border: 1px solid #1e1e1e; margin-bottom: 8px; overflow: hidden;
+    user-select: none; -webkit-user-select: none; }
   .card .cname { font-size: 13px; font-weight: 600; }
   .card .cmeta { font-size: 11px; opacity: .7; line-height: 1.5; margin-top: 2px; }
   .badge { display: inline-block; font-size: 10px; font-weight: 700;
@@ -3536,15 +3820,24 @@ class ProtoplanetApp {
   }
   function slotHtml(p, tag) {
     var art = P.gridToHtml(P.render(p.planet, p.stageIdx, 10, sec, 1.0, undefined, 1, true), 2.2, 3.96);
+    // Round 17 (I) CORRECTED Nov 15 — Devon meant the picker tiles,
+    // not the slots: the stars STAY in the Parent A/B windows (the
+    // slot keeps its pp-frame), and come OUT of the "Choose your
+    // parents" picker tiles below. The slot is a starfield frame
+    // with star-free art, like the detail sheet.
     return '<div class="slotTag">' + esc(tag) + '</div>'
       + '<h3>' + esc(p.name) + '</h3>'
       + '<p class="sub">' + esc(p.summary) + ' &middot; Seed ' + p.seed + '</p>'
       + (p.mutationLabel ? '<div class="mut">' + esc(p.mutationLabel) + '</div>' : '')
       + '<div class="slotArt pp-frame" data-cw="2.2" data-ch="3.96" data-atmo="' + p.planet.atmosphere + '"><div class="pp-stars"></div><div class="pp-planet"><div class="pp-grid" style="--pp-fs:3.96px;--pp-ch:3.96px">' + art + '</div></div></div>'
       + '<div class="sub">' + esc(p.terrainLabel) + ' &middot; ' + esc(p.stageName)
-      + ' &middot; ' + p.chars + ' characters &middot; Gen ' + p.generation + '</div>';
+      + ' &middot; ' + p.chars + ' characters</div>';
   }
-  function renderSlots() {
+  // Round 17 (H): each slot renders on its own, so a pick change
+  // re-renders only the slot whose planet actually changed — never
+  // the whole picker. renderSlots() still renders both (first paint
+  // / full refresh); renderPickChange() calls just the changed one.
+  function renderSlotA() {
     if (pickA) {
       slotAEl.className = 'parentSlot picked';
       slotAEl.innerHTML = slotHtml(pickA, 'Parent A');
@@ -3552,6 +3845,8 @@ class ProtoplanetApp {
       slotAEl.className = 'parentSlot empty';
       slotAEl.innerHTML = '<div><b>Parent A</b><br>Pick a planet below.</div>';
     }
+  }
+  function renderSlotB() {
     if (pickB) {
       slotBEl.className = 'parentSlot picked';
       slotBEl.innerHTML = slotHtml(pickB, 'Parent B');
@@ -3559,13 +3854,22 @@ class ProtoplanetApp {
       slotBEl.className = 'parentSlot empty';
       slotBEl.innerHTML = '<div><b>Parent B</b><br>Pick a planet below.</div>';
     }
+  }
+  function updateFusionHint() {
     document.getElementById('fusionHint').innerHTML =
       (pickA && pickB) ? 'Two worlds, ready.<br>Both stay — retired, never parents again.'
       : 'Pick two parents below —<br>then fuse them.';
   }
+  function renderSlots() {
+    renderSlotA();
+    renderSlotB();
+    updateFusionHint();
+  }
   function refreshSlotArt() {
-    // The slot now holds TWO .pp-grid layers (the starfield + the
-    // planet) — target the planet layer, never the stars.
+    // Round 17 (I): the slot holds only the planet layer now (no
+    // starfield), so this targets the planet grid directly. It runs
+    // only on a pick change — NOT on the tick (round 17 H): the slot
+    // planet is static, so re-rendering it every 450ms was pure cost.
     var gridA = slotAEl.querySelector('.pp-planet .pp-grid');
     if (pickA && gridA) gridA.innerHTML = P.gridToHtml(
       P.render(pickA.planet, pickA.stageIdx, 10, sec, 1.0, undefined, 1, true), 2.2, 3.96);
@@ -3677,7 +3981,7 @@ class ProtoplanetApp {
     var parentNames = r.parents.map(function (p) { return esc(p.name || ('Seed ' + p.seed)); }).join(' + ');
     var mutName = function (id) { var d = P.mutationDef(id); return d ? d.name : id; };
     var html = '<h2>' + esc(off.name) + ' hatches</h2>'
-      + '<p class="sub">' + esc(off.summary) + ' &middot; Seed ' + off.seed + ' &middot; Gen ' + off.generation + '</p>'
+      + '<p class="sub">' + esc(off.summary) + ' &middot; Seed ' + off.seed + '</p>'
       + (off.mutationLabel ? '<div class="mut">' + esc(off.mutationLabel) + '</div>' : '')
       + '<div id="resultArt"><div class="pp-grid" style="--pp-fs:4.23px;--pp-ch:4.23px">' + art + '</div></div>'
       + '<p class="lineage">Born from <b>' + parentNames + '</b>.</p>';
@@ -3723,11 +4027,15 @@ class ProtoplanetApp {
       var picked = isPicked(p);
       var tag = picked ? (pickA && pickKey(pickA) === pickKey(p) ? 'Parent A' : 'Parent B') : null;
       var thumb = P.gridToHtml(P.renderCozy(p.planet, p.stageIdx, 10, 5, 1.0, 34, 19, undefined, 1, true), 3.4, 6.12);
+      // Round 17 (I) CORRECTED Nov 15 — the picker tiles are
+      // star-free (no pp-frame, no pp-stars): the animated stars
+      // looked bad behind the static planet on these little tiles.
+      // The Parent A/B slots above keep their starfield frame.
       html += '<div class="card' + (!p.eligible ? ' dim' : '') + (picked ? (tag === 'Parent A' ? ' pickedA' : ' pickedB') : '') + '"'
         + ' data-seed="' + p.seed + '" data-gen="' + p.generation + '">'
-        + '<div class="thumb pp-frame" data-cw="3.4" data-ch="6.12" data-atmo="' + p.planet.atmosphere + '"><div class="pp-stars"></div><div class="pp-planet"><div class="pp-grid" style="--pp-fs:6.12px;--pp-ch:6.12px">' + thumb + '</div></div></div>'
+        + '<div class="thumb"><div class="pp-planet"><div class="pp-grid" style="--pp-fs:6.12px;--pp-ch:6.12px">' + thumb + '</div></div></div>'
         + '<div class="cname">' + esc(p.name) + '</div>'
-        + '<div class="cmeta">' + esc(p.terrainLabel) + ' &middot; ' + esc(p.stageName) + ' &middot; ' + p.chars + ' chars &middot; Gen ' + p.generation + '</div>'
+        + '<div class="cmeta">' + esc(p.terrainLabel) + ' &middot; ' + esc(p.stageName) + ' &middot; ' + p.chars + ' chars</div>'
         + (p.kind === 'current' ? '<span class="badge ok">Growing now</span>' : '')
         + (tag ? '<span class="badge pick">' + esc(tag) + '</span>' : '')
         + (!p.eligible && p.eligibilityReason === 'already-parent' ? '<span class="badge off">Already a parent</span>' : '')
@@ -3775,8 +4083,106 @@ class ProtoplanetApp {
     renderCards();
     refreshStarfields();
   }
+  // --- Round 17 (H): cheap pick + cheap state updates -------------------
+  // What a click used to cost: togglePick() called renderAll(), which
+  // re-rendered EVERY picker card (a full P.renderCozy + gridToHtml
+  // per planet), BOTH slots (full P.render each), and then
+  // refreshStarfields() regenerated a star grid for every frame —
+  // and the same renderAll() ran on EVERY state message, i.e. on
+  // every keystroke while the panel was open (pushState posts the
+  // prestige view model per keystroke). Same class of problem as the
+  // sidebar lag in scratch/lag-click-investigation.md: a full
+  // re-render + full re-layout on every interaction. The fix, same
+  // shape: update only what changed.
+  function findCardEl(p) {
+    if (!p) return null;
+    return cardsEl.querySelector('.card[data-seed="' + p.seed + '"][data-gen="' + p.generation + '"]');
+  }
+  function updateCardPick(cardEl, tag) {
+    if (!cardEl) return;
+    cardEl.classList.remove('pickedA', 'pickedB');
+    var old = cardEl.querySelector('.badge.pick');
+    if (old) old.remove();
+    if (!tag) return;
+    cardEl.classList.add(tag === 'Parent A' ? 'pickedA' : 'pickedB');
+    var badge = document.createElement('span');
+    badge.className = 'badge pick';
+    badge.textContent = tag;
+    var anchor = cardEl.querySelector('.badge.mut') || cardEl.querySelector('.badge.off');
+    if (anchor) cardEl.insertBefore(badge, anchor);
+    else cardEl.appendChild(badge);
+  }
+  // A pick change touches at most 3 cards (old A/B + new pick) and
+  // the slot(s) whose planet changed — no card art is re-rendered,
+  // no starfield is regenerated (twinkle stays on the tick).
+  function renderPickChange(oldA, oldB) {
+    var touched = {};
+    [oldA, oldB, pickA, pickB].forEach(function (p) {
+      if (!p) return;
+      var k = pickKey(p);
+      if (touched[k]) return;
+      touched[k] = true;
+      var tag = null;
+      if (pickA && pickKey(pickA) === k) tag = 'Parent A';
+      else if (pickB && pickKey(pickB) === k) tag = 'Parent B';
+      updateCardPick(findCardEl(p), tag);
+    });
+    if ((oldA ? pickKey(oldA) : null) !== (pickA ? pickKey(pickA) : null)) renderSlotA();
+    if ((oldB ? pickKey(oldB) : null) !== (pickB ? pickKey(pickB) : null)) renderSlotB();
+    updateFusionHint();
+    renderInherit();
+    renderConfirm();
+    if (lastError) {
+      errorNoteEl.hidden = false;
+      errorNoteEl.textContent = lastError;
+    } else {
+      errorNoteEl.hidden = true;
+    }
+  }
+  // Signature of everything a full renderAll() can change, EXCLUDING
+  // the per-keystroke character counts: if only the counts moved,
+  // the art, eligibility and badges are all still right, so the
+  // state message gets a text-only update instead of a full rebuild.
+  var lastPrestigeSig = null;
+  function prestigeSig(s) {
+    if (!s) return '';
+    var parts = [s.eligibleCount, s.canFuse, s.minChars, s.result ? 'result' : ''];
+    for (var i = 0; i < s.planets.length; i++) {
+      var p = s.planets[i];
+      parts.push(p.kind + ':' + p.seed + ':' + p.generation + ':' + p.stageIdx + ':'
+        + (p.eligible ? 'e' : 'x') + ':' + (p.eligibilityReason || '') + ':'
+        + (p.mutationLabel || '') + ':' + p.name);
+    }
+    return parts.join('|');
+  }
+  function updatePrestigeTextOnly() {
+    if (!state) return;
+    renderBanner();
+    parentsCountEl.textContent = state.planets.length + ' planet' + (state.planets.length === 1 ? '' : 's')
+      + ' in your collection — ' + state.eligibleCount + ' eligible to be parents';
+    // Rebind the picks to the fresh state objects (same planets, new
+    // char counts) so the slot lines below read current numbers.
+    if (pickA) pickA = findPlanet(pickA.seed, pickA.generation) || pickA;
+    if (pickB) pickB = findPlanet(pickB.seed, pickB.generation) || pickB;
+    for (var i = 0; i < state.planets.length; i++) {
+      var p = state.planets[i];
+      var cardEl = findCardEl(p);
+      if (!cardEl) continue;
+      var metas = cardEl.querySelectorAll('.cmeta');
+      if (metas[0]) metas[0].textContent = p.terrainLabel + ' · ' + p.stageName + ' · ' + p.chars + ' chars';
+      if (metas[1]) metas[1].textContent = p.chars + ' / ' + state.minChars + ' characters to Civilization';
+    }
+    [[slotAEl, pickA], [slotBEl, pickB]].forEach(function (pair) {
+      var slotEl = pair[0], pick = pair[1];
+      if (!slotEl || !pick) return;
+      var subs = slotEl.querySelectorAll('.sub');
+      var line = subs[subs.length - 1];
+      if (line) line.textContent = pick.terrainLabel + ' · ' + pick.stageName + ' · ' + pick.chars + ' characters';
+    });
+  }
   function togglePick(p) {
     if (!p.eligible) return;
+    var oldA = pickA, oldB = pickB;
     var k = pickKey(p);
     if (pickA && pickKey(pickA) === k) pickA = null;
     else if (pickB && pickKey(pickB) === k) pickB = null;
@@ -3785,7 +4191,7 @@ class ProtoplanetApp {
     else pickB = p; // both full: replace B
     confirmOpen = false;
     lastError = '';
-    renderAll();
+    renderPickChange(oldA, oldB);
   }
 
   cardsEl.addEventListener('click', function (e) {
@@ -3813,7 +4219,12 @@ class ProtoplanetApp {
     if (document.hidden) return;
     if (fusing) { renderCollision(); return; }
     if (tick % 3 === 0) {
-      refreshSlotArt();
+      // Round 17 (H): no refreshSlotArt() here — the slot planets
+      // are static (Devon: the planet isn't animated in the tiny
+      // picker windows), so re-rendering both slots every 450ms was
+      // pure cost on top of the card starfields. Slots re-render
+      // only when the pick changes (renderPickChange). The result
+      // art still animates, and the picker tiles keep twinkling.
       refreshResultArt();
       refreshStarfields();
     }
@@ -3823,6 +4234,19 @@ class ProtoplanetApp {
   window.addEventListener('message', function (e) {
     var msg = e.data;
     if (!msg || msg.type !== 'prestige') return;
+    // Round 17 (H): the host posts this view model on every
+    // keystroke, and the old handler ran a full renderAll() on each
+    // one. If nothing a full render can change moved (same planets,
+    // stages, eligibility, mutations, no result change), update only
+    // the character-count text — no card art, no slot art, no
+    // starfields. Same signature-guard shape as the system panel.
+    var sig = prestigeSig(msg);
+    if (sig === lastPrestigeSig && !msg.result && !fusing) {
+      state = msg;
+      updatePrestigeTextOnly();
+      return;
+    }
+    lastPrestigeSig = sig;
     var hadResult = !!(state && state.result);
     state = msg;
     if (state.result && !hadResult) {
@@ -3877,10 +4301,12 @@ class ProtoplanetApp {
   #card { max-width: 760px; margin: 0 auto; }
   #wrap { background: #050505; border: 1px solid var(--vscode-widget-border, #222);
     padding: 6px; overflow-x: auto; }
+  /* Round 17 (F) — the share-card art is never selectable. */
   .pp-grid { margin: 0;
     font-family: ${FONT_STACK};
     font-size: var(--pp-fs, 10px); line-height: var(--pp-ch, 18px);
     letter-spacing: 0; white-space: pre;
+    user-select: none; -webkit-user-select: none;
     -webkit-text-size-adjust: none; text-size-adjust: none; }
   .pp-run { display: inline-block; height: var(--pp-ch, 18px);
     line-height: var(--pp-ch, 18px); vertical-align: top; overflow: hidden;
@@ -4006,7 +4432,7 @@ class ProtoplanetApp {
     if (state.mutationLabel) { mutEl.textContent = state.mutationLabel; mutEl.style.display = 'inline-block'; }
     else { mutEl.style.display = 'none'; }
     document.getElementById('meta').textContent =
-      state.stageName + ' \\u00b7 Gen ' + state.generation + ' \\u00b7 grown from ' + state.chars + ' characters';
+      state.stageName + ' \\u00b7 grown from ' + state.chars + ' characters';
     document.getElementById('seedText').textContent = state.shareSeed || state.seed;
     document.getElementById('markdownBlock').textContent = state.markdown;
   }

@@ -1099,9 +1099,12 @@ function mineralInventory(state) {
 // (each carrying that mutation — the mineral remembers where it came
 // from), PLUS one extra Birth mineral when it was mutated at all
 // (round 10 perk: a mutated planet is worth more than a plain one);
-// a plain planet yields one Birth mineral. Counts are identical to
-// before the overhaul — only the bonus mineral's kind changed: it is
-// a Birth mineral now, never a random-family mineral.
+// a plain planet yields one Birth mineral. Round 17 — Civilization
+// bonus: a planet salvaged at stage 6 (Civilization, 2200 XP) yields
+// a SECOND Birth mineral on top, so plain Civ yields 2 Birth and a
+// mutated Civ yields its mutation minerals + 2 Birth. Counts are
+// identical to before the overhaul — only the bonus mineral's kind
+// changed: it is a Birth mineral now, never a random-family mineral.
 function yieldMineralsForPlanet(planet) {
   const yields = [];
   const muts = planet.mutations || [];
@@ -1110,7 +1113,8 @@ function yieldMineralsForPlanet(planet) {
   // mutation minerals if it was grown to Crust (stage 3, 600 XP).
   // Salvaged younger, only a Birth mineral comes back — the
   // mutation minerals are lost (see salvageLostMutations). A plain
-  // planet is unaffected: one Birth mineral at any stage.
+  // planet is unaffected below Civilization: one Birth mineral at
+  // any stage; at Civilization it yields two (round 17).
   if (muts.length > 0 && stageForXp(planetXp(planet)) < CONFIG.BIRTH_MIN_STAGE_FOR_MUTATION_MINERALS) {
     return [birthSpec()];
   }
@@ -1119,6 +1123,9 @@ function yieldMineralsForPlanet(planet) {
     yields.push({ kind: 'mutation', family: (def && def.tags && def.tags[0]) || 'weird', mutation: id, source: 'salvage' });
   }
   yields.push(birthSpec());
+  // Round 17 — Civilization bonus: a second Birth mineral for a
+  // planet salvaged at stage 6 (Civilization, 2200 XP).
+  if (stageForXp(planetXp(planet)) >= 6) yields.push(birthSpec());
   return yields;
 }
 
@@ -1177,7 +1184,10 @@ function recycleCurrent(state, nextSeed) {
   // yield + inventory. It always succeeds here: the yield has at
   // least 1 Birth mineral, so a recycle is self-funding — a plain
   // planet breaks even (net zero), a grown mutated planet keeps its
-  // mutation minerals.
+  // mutation minerals. Round 17 — a Civilization planet yields a
+  // second Birth mineral, so recycling one nets +1 Birth on top:
+  // plain Civ nets 1 Birth, mutated Civ nets its mutation minerals
+  // + 1 Birth.
   const cost = payBirthCost(state);
   if (!cost.ok) return { ok: false, reason: cost.reason };
   state.generation += 1;
@@ -1248,7 +1258,7 @@ function eligiblePrestigeParents(state) {
     if (prestigeEligible(p)) {
       list.push({
         kind: 'past', index: i,
-        label: `${p.summary} · Gen ${p.generation}`,
+        label: `${p.summary}`,
         seed: p.seed, generation: p.generation,
         chars: p.chars, mutations: (p.mutations || []).slice(),
       });
@@ -1835,7 +1845,7 @@ function shareCardMarkdown(planet, filename) {
   const lines = [];
   lines.push(`![${planet.name} — Protoplanet](${filename})`);
   lines.push('');
-  lines.push(`**${planet.name}** · ${planet.terrainLabel || 'Protoplanet'} · ${planet.stageName} · Gen ${planet.generation} · grown from ${Number(planet.chars || 0).toLocaleString()} characters`);
+  lines.push(`**${planet.name}** · ${planet.terrainLabel || 'Protoplanet'} · ${planet.stageName} · grown from ${Number(planet.chars || 0).toLocaleString()} characters`);
   if (planet.mutationLabel) lines.push(planet.mutationLabel);
   lines.push(`Seed \`${shareSeedFor(planet)}\` — hatch the same base planet in [Protoplanet](${SHARE_REPO_URL}).`);
   return lines.join('\n');
