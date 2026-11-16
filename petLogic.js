@@ -110,7 +110,7 @@ const CONFIG = {
   // passes to the offspring at a REAL chance — 50% if one parent
   // has it, 75% if both. Inheritance is genetics, not a lottery
   // ticket: the old x2/x3 multipliers on the 0.7% base only gave
-  // 1.4%/2.1%, barely better than random, which made fusing for a
+  // 1.4%/2.1%, barely better than random, which made prestiging for a
   // mutation feel pointless. Everything neither parent has still
   // rolls at the base chance.
   PRESTIGE_INHERIT_CHANCE_ONE: 0.5,
@@ -180,19 +180,21 @@ const CONFIG = {
   BIRTH_MIN_STAGE_FOR_MUTATION_MINERALS: 3,
   // Shop prices (Stardust, flat — Devon, Nov 14: no diminishing
   // returns, too confusing; keep it simple, just higher prices).
+  // Round 20 (Devon, Nov 15): prices raised — the power items went
+  // x5, Birth only x2, because Stardust got too easy to farm.
   // The gamble gives a MINERAL, never a direct mutation — the
   // player still applies it with the 50% coin flip. The Birth
-  // mineral STAYS 500 (cheap fuel): a new player must be able to
-  // afford their first planet — never gate core gameplay behind
-  // currency. The power items are expensive instead: a Moon Lord
-  // at 81/char needs ~617 chars for a Random Mutation Mineral
-  // (not 62), a plain Civ at 12/char needs ~4,167. The Mystery
+  // mineral stays cheap at 1,000 (cheap fuel): a new player must be
+  // able to afford their first planet — never gate core gameplay
+  // behind currency. The power items are expensive instead: a Moon
+  // Lord at 81/char needs ~3,086 chars for a Random Mutation
+  // Mineral, a plain Civ at 12/char needs ~20,833. The Mystery
   // Mineral is gone (round 15): at 5% it was a lottery ticket for
   // a Birth mineral you could just buy for half the price — Devon
   // removed it.
-  SHOP_BIRTH_PRICE: 500,
-  SHOP_RANDOM_MUTATION_PRICE: 50000,
-  SHOP_FAMILY_PICK_PRICE: 80000,
+  SHOP_BIRTH_PRICE: 1000,
+  SHOP_RANDOM_MUTATION_PRICE: 250000,
+  SHOP_FAMILY_PICK_PRICE: 400000,
 };
 
 // ---------------------------------------------------------------------------
@@ -985,7 +987,7 @@ function payBirthCost(state) {
 
 // Plain words for a blocked birth (the host shows it).
 function needPlainMineralMessage() {
-  return 'Birthing a planet costs 1 Birth mineral — buy one in the shop (500 ✦) or salvage a planet.';
+  return 'Birthing a planet costs 1 Birth mineral — buy one in the shop (1,000 ✦) or salvage a planet.';
 }
 
 // ---------------------------------------------------------------------------
@@ -996,9 +998,9 @@ function needPlainMineralMessage() {
 // "found" in the Mutation Index — discovery means seeing it on a
 // planet (birth or a landed apply), not owning the bottle.
 // Round 16 overhaul: the shop sells exactly three items — a Birth
-// mineral (500 ✦, no family, no surprise), a Random Mutation
-// Mineral (50,000 ✦, uniform 1 of 13), a Family Mutation Mineral
-// (80,000 ✦, Moon/Rings/Glow/Sky only). There is no random-family
+// mineral (1,000 ✦, no family, no surprise), a Random Mutation
+// Mineral (250,000 ✦, uniform 1 of 13), a Family Mutation Mineral
+// (400,000 ✦, Moon/Rings/Glow/Sky only). There is no random-family
 // draw anywhere anymore.
 // ---------------------------------------------------------------------------
 
@@ -1013,7 +1015,7 @@ function randomMutationMineralSpec(rng) {
   return { family: (def && def.tags && def.tags[0]) || 'weird', mutation: id, source: 'shop' };
 }
 
-// Buy a Birth mineral (500 ✦): exactly one birth, no family, no
+// Buy a Birth mineral (1,000 ✦): exactly one birth, no family, no
 // surprise — it can never apply a mutation. No rng needed: there is
 // nothing random about it.
 function buyBirthMineral(state) {
@@ -1024,7 +1026,7 @@ function buyBirthMineral(state) {
   return { ok: true, mineral: m };
 }
 
-// Random Mutation Mineral (50,000 ✦): guaranteed a random mutation
+// Random Mutation Mineral (250,000 ✦): guaranteed a random mutation
 // mineral — which of the 13 is uniform (see wheelOdds()).
 function buyRandomMutationMineral(state, rng) {
   const roll = typeof rng === 'function' ? rng : Math.random;
@@ -1035,7 +1037,7 @@ function buyRandomMutationMineral(state, rng) {
   return { ok: true, mineral: m };
 }
 
-// Family Mutation Mineral (80,000 ✦): pick a family, get a random
+// Family Mutation Mineral (400,000 ✦): pick a family, get a random
 // mutation mineral from inside it — the way to hunt a specific set
 // (Moon Lord, Ring King) on purpose instead of hoping. Moon/Rings/
 // Glow/Sky only; Storm/Weird are not offered (the draw would be a
@@ -1335,17 +1337,17 @@ function prestige(state, parentA, parentB, nextSeed) {
   const genB = parentB.kind === 'current' ? currentGeneration(state) : b.generation;
   const parents = [lineageRecord(a, genA), lineageRecord(b, genB)];
   const currentIsParent = parentA.kind === 'current' || parentB.kind === 'current';
-  // Round 11: the archive check comes FIRST — a refused fusion must
+  // Round 11: the archive check comes FIRST — a refused prestige must
   // not mutate anything. The old current planet is archived below
   // (unless destroyed as a parent); when the archive is full the
-  // fusion refuses before any parent is marked or journaled.
+  // prestige refuses before any parent is marked or journaled.
   const willArchive = state.current && !(CONFIG.PRESTIGE_CONSUMES_PARENTS && currentIsParent);
   if (willArchive && (state.past || []).length >= CONFIG.PAST_LIMIT) {
     return { ok: false, reason: 'archive full' };
   }
   // Round 14 — the offspring is a birth: it costs 1 Birth mineral.
   // Checked here, after the archive check and before any parent is
-  // marked or journaled, so a refused fusion mutates nothing.
+  // marked or journaled, so a refused prestige mutates nothing.
   const cost = payBirthCost(state);
   if (!cost.ok) return { ok: false, reason: cost.reason };
   if (CONFIG.PRESTIGE_CONSUMES_PARENTS) {
@@ -1362,7 +1364,7 @@ function prestige(state, parentA, parentB, nextSeed) {
     a.usedAsParent = true;
     b.usedAsParent = true;
   }
-  // The parents' journals record the fusion — added BEFORE the
+  // The parents' journals record the prestige — added BEFORE the
   // archive below, so a current parent's entry travels in its
   // snapshot. A past parent's entry goes on its SNAPSHOT (that is
   // what survives a later revive); snapshot-less records take it

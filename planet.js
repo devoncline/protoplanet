@@ -2824,8 +2824,8 @@ function drawCollisionOffspring(grid, disc, R) {
   }
 }
 
-// One frame of the fusion collision. Pure function of (planets, t) —
-// the panel calls it every tick with the seconds since the fusion
+// One frame of the prestige collision. Pure function of (planets, t) —
+// the panel calls it every tick with the seconds since the prestige
 // started. `sec` only drives the starfield twinkle.
 function collisionFrame(planetA, planetB, offspring, t, sec) {
   if (sec === undefined) sec = 0;

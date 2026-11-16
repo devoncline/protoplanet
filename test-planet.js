@@ -1604,7 +1604,7 @@ check('name: generatePlanet carries the seed name',
     P.parseCatalogName('Kelmor') === null && P.parseCatalogName('Kepler-999999b') === null);
 }
 
-// --- 16. Collision / fusion animation (prestige, Nov 11) --------------------
+// --- 16. Collision / prestige animation (prestige, Nov 11) --------------------
 // A violent, realistic ASCII collision — not a gentle fade. Two planets
 // spiral in (orbital inspiral — wide loops that tighten into the blow),
 // smash (squash + white-hot flash + shockwave) and SHATTER into

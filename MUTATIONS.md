@@ -220,9 +220,9 @@ mineral, stated before you confirm. The offspring becomes the
 new current planet; the old current planet is archived. Command Palette: "Prestige two
 planets" (two-step pick, then confirm).
 
-**The % before you commit (round 10 — the Brainrot fuse screen):**
+**The % before you commit (round 10 — the Brainrot prestige screen):**
 the prestige panel shows the REAL chance per parent mutation
-before fusing — "◆ Glowing Oceans — one parent carries it ·
+before prestiging — "◆ Glowing Oceans — one parent carries it ·
 50% (base 0.7%)" — plus "Anything else can still appear at its
 usual rare odds — 0.7% each." No fed mineral stacks on top anymore
 (feeding is gone; inheritance is the only tilt).

@@ -406,7 +406,7 @@ function carrierSeed(id) {
 function prestigeReadyState() {
   const s = freshWithPlanet(42);
   L.applyXp(s, 2300, seedSeq(5000));
-  // Round 16 — the new-planet birth AND the fusion each cost 1
+  // Round 16 — the new-planet birth AND the prestige each cost 1
   // Birth mineral; fund both from the test's own pocket.
   L.addMinerals(s, [{ kind: 'birth', family: null, mutation: null, source: 'salvage' }]);
   L.newPlanet(s, seedSeq(6000));
@@ -1553,7 +1553,7 @@ check('ext: no differential (Kepler) drift left', !extSrc.includes('Kepler'));
 check('ext: panel has no collision-avoidance or hiding logic',
   !extSrc.includes('hideOverlapping') && !extSrc.includes('collisionAvoidance'));
 // (Nov 11, prestige panel: the word "collision" itself is allowed now —
-// it names the fusion animation, planet.js collisionFrame. This check
+// it names the prestige animation, planet.js collisionFrame. This check
 // is about the orrery hiding overlapping discs, not the word.)
 
 // 13k. Geometry, numerically: the slot scheme puts ring i at a
@@ -1622,18 +1622,18 @@ check('ext: panel has no collision-avoidance or hiding logic',
   }
 }
 
-// --- 14. Prestige panel (step 4b): the fusion screen ----------------------
-// The panel is a dumb view of petLogic: eligibility, the fusion, the
+// --- 14. Prestige panel (step 4b): the prestige screen ----------------------
+// The panel is a dumb view of petLogic: eligibility, the prestige, the
 // lineage all live here. The panel itself (extension.js) only builds
-// the view model and applies its messages — and the fusion plays as a
+// the view model and applies its messages — and the prestige plays as a
 // violent ASCII collision (planet.js collisionFrame), not a fade.
 
-// 14a. Logic the panel leans on: eligibility after a fusion, lineage
+// 14a. Logic the panel leans on: eligibility after a prestige, lineage
 // that survives a save, and the retire-not-destroy parent fate.
 st = prestigeReadyState();
 const pr2 = L.prestige(st, { kind: 'current' }, { kind: 'past', index: 0 }, seedSeq(9600));
-eq('panel-logic: fusion ok', pr2.ok, true);
-eq('panel-logic: after a fusion, no parent is eligible anymore',
+eq('panel-logic: prestige ok', pr2.ok, true);
+eq('panel-logic: after a prestige, no parent is eligible anymore',
   L.eligiblePrestigeParents(st).length, 0);
 eq('panel-logic: the old current planet was archived (retired, not destroyed)',
   st.past.some((p) => p.seed === 42), true);
@@ -1666,7 +1666,7 @@ check('ext: registers openPrestige', extSrc.includes("'protoplanet.openPrestige'
 check('ext: prestige panel HTML exists', extSrc.includes('getPrestigeHtml'));
 check('ext: builds a prestige view model', extSrc.includes('prestigeViewModel'));
 check('ext: handles prestige messages', extSrc.includes('onPrestigeMessage'));
-check('ext: panel fuses through petLogic', extSrc.includes('Logic.prestige('));
+check('ext: panel prestiges through petLogic', extSrc.includes('Logic.prestige('));
 check('ext: panel reuses the shared renderable helper', extSrc.includes('renderablePlanet'));
 // Round 3 (Devon, Nov 12 — red/orange Accretion in the panel): the
 // fallback re-roll in renderablePlanet must pass the stored starter
@@ -1688,11 +1688,11 @@ check('panel: re-roll WITH the stored terrain reproduces the planet exactly',
     && JSON.stringify(gjFixed.moons) === JSON.stringify(gjLive.moons)
     && gjFixed.ringType === gjLive.ringType && gjFixed.size === gjLive.size,
   `fixed=${gjFixed.terrain}`);
-check('ext: panel posts the fusion result for the result view', extSrc.includes('recordPrestigeResult'));
+check('ext: panel posts the prestige result for the result view', extSrc.includes('recordPrestigeResult'));
 check('ext: panel has a dedicated webview panel (not a QuickPick)', extSrc.includes("'protoplanet.prestige'"));
 check('ext: panel keeps context when hidden', extSrc.includes('retainContextWhenHidden'));
 check('ext: panel uses the fixed-cell renderer', extSrc.includes('gridToHtml'));
-// 14c. The fusion itself: a violent ASCII collision, not a gentle
+// 14c. The prestige itself: a violent ASCII collision, not a gentle
 // fade. The panel drives planet.js collisionFrame per tick, captions
 // the phases, and only shows the offspring once the mess coalesces.
 check('ext: panel plays the collision (collisionFrame per tick)', extSrc.includes('P.collisionFrame('));
@@ -1700,7 +1700,7 @@ check('ext: panel captions the collision phases', extSrc.includes('collisionPhas
 check('ext: panel ends the collision at COLLISION_END', extSrc.includes('P.COLLISION_END'));
 check('ext: panel has a collision stage', extSrc.includes('collisionWrap'));
 check('ext: panel lets you skip the collision', extSrc.includes('Skip the collision'));
-check('ext: panel asks for confirmation before fusing', extSrc.includes('confirmFuseBtn'));
+check('ext: panel asks for confirmation before prestiging', extSrc.includes('confirmPrestigeBtn'));
 check('ext: panel shows the offspring’s lineage', extSrc.includes('Born from'));
 check('ext: panel shows what the offspring inherited', extSrc.includes('Inherited:'));
 check('ext: the fed-mineral line is gone from the prestige panel (round 10)',
@@ -2088,7 +2088,7 @@ check('ext: share PNG caption uses the shared seed', extSrc.includes("(state.sha
     sysHtml.includes("'Rank ' + state.rank") && !sysHtml.includes('finished planet'));
 })();
 
-// 20. Prestige Instrument restyle (Devon, Nov 12): the fusion panel gets
+// 20. Prestige Instrument restyle (Devon, Nov 12): the prestige panel gets
 // the same Instrument chrome as the solar system panel — near-black,
 // hairline rules, mono type, one amber accent, flat areas instead of
 // rounded cards, hairline-outline buttons, no eyebrow microcopy. The
@@ -2131,7 +2131,7 @@ check('ext: share PNG caption uses the shared seed', extSrc.includes("(state.sha
     prestigeHtml.includes('state.inheritBoth') && prestigeHtml.includes('state.inheritOne')
     && prestigeHtml.includes('both parents carry it')
     && prestigeHtml.includes('Anything else can still appear at its usual rare odds'));
-  check('ext: prestige still asks for confirmation before fusing', prestigeHtml.includes('confirmFuseBtn'));
+  check('ext: prestige still asks for confirmation before prestiging', prestigeHtml.includes('confirmPrestigeBtn'));
   check('ext: prestige still shows the offspring lineage', prestigeHtml.includes('Born from'));
 })();
 
@@ -2139,7 +2139,7 @@ check('ext: share PNG caption uses the shared seed', extSrc.includes("(state.sha
 // FRAME, not part of the planet — a .pp-frame fills its own box with
 // sky (P.starfieldHtml) and the planet render inside it is star-free
 // (noStars), transparent where there is no planet. The copy line in
-// the fusion middle agrees with retire now.
+// the prestige middle agrees with retire now.
 (function () {
   const prestigeHtml = extSrc.slice(extSrc.indexOf('  getPrestigeHtml(webview) {'), extSrc.indexOf('  getShareHtml(webview) {'));
   const sysHtml = extSrc.slice(extSrc.indexOf('  getSystemHtml(webview) {'), extSrc.indexOf('  getPrestigeHtml(webview) {'));
@@ -2199,7 +2199,7 @@ check('ext: share PNG caption uses the shared seed', extSrc.includes("(state.sha
   // Collision + result frames are inline-block shrink-wrapped to the
   // grid, so their stars already fill them — no layer added there.
   check('ext: collision and result art keep their starred renders',
-    prestigeHtml.includes('P.collisionFrame(fuseA.planet, fuseB.planet, state.result.offspring.planet, t, sec)')
+    prestigeHtml.includes('P.collisionFrame(prestigeA.planet, prestigeB.planet, state.result.offspring.planet, t, sec)')
     && prestigeHtml.includes('P.render(off.planet, off.stageIdx, 10, sec, 1.2)'));
 })();
 
@@ -2496,8 +2496,8 @@ check('ext: mutated Index tiles get the gold outline and the ✦ corner',
   && extSrc.includes("'<div class=\"corner\">✦'") && extSrc.includes('.tile.mutated'));
 check('ext: detail sheet shows mutation pills and set chips',
   extSrc.includes("'<span class=\"badge mut\">'") && extSrc.includes("'<span class=\"chip\">✦ '"));
-check('ext: Mutations tab is a Fusion hub + inventory + Sets, no bingo card (round 19)',
-  extSrc.includes('fusionHub') && extSrc.includes('openFusionBtn')
+check('ext: Mutations tab is a Prestige hub + inventory + Sets, no bingo card (round 19)',
+  extSrc.includes('prestigeHub') && extSrc.includes('openPrestigeBtn')
   && extSrc.includes("type: 'openPrestige'") && extSrc.includes("type: 'applyMineral'")
   && extSrc.includes('BIRTH COST') && extSrc.includes('sdots')
   && !extSrc.includes('mutCard') && !extSrc.includes('mutCards') && !extSrc.includes('mcarriers')
@@ -2511,7 +2511,7 @@ check('ext: mineral counts live in their own right-aligned column, not in the na
 check('ext: Stardust chips show the system per-character rate (round 19)',
   extSrc.includes("id=\"stardustRate\"") && extSrc.includes("id=\"sdRate\"")
   && extSrc.includes("'/char'") && extSrc.includes('systemEarnRateText'));
-check('ext: prestige shows the real % per parent mutation before fusing',
+check('ext: prestige shows the real % per parent mutation before prestiging',
   extSrc.includes('mutationChance') && extSrc.includes('both parents carry it')
   && extSrc.includes('Anything else can still appear at its usual rare odds'));
 check('ext: mutationChance view model carries the base chance for the panel',
@@ -2637,7 +2637,7 @@ check('ext: mutationChance view model carries the base chance for the panel',
 
 // Host wiring (round 11): the journal renders on the detail sheet,
 // the Index shows N/200 and a one-line journal per tile, the
-// archive-full toast fires on every refused birth/switch/fuse, an
+// archive-full toast fires on every refused birth/switch/prestige, an
 // event toasts once, and an archived planet can be salvaged from its
 // detail sheet to free a slot.
 check('ext: detail sheet renders the journal',
@@ -2797,7 +2797,7 @@ function ratePlanet(xp, mutations, eventTitles) {
   check('birth cost: the Birth mineral was spent, nothing left',
     st.minerals.length === 0 && paid.spentMineral !== null && paid.spentMineral.kind === 'birth');
   eq('birth cost: needPlainMineralMessage names the Birth mineral + price',
-    L.needPlainMineralMessage(), 'Birthing a planet costs 1 Birth mineral — buy one in the shop (500 ✦) or salvage a planet.');
+    L.needPlainMineralMessage(), 'Birthing a planet costs 1 Birth mineral — buy one in the shop (1,000 ✦) or salvage a planet.');
   // birthMineralIndex finds kind === 'birth' only.
   st = freshWithPlanet(42);
   L.addMinerals(st, [
@@ -2982,12 +2982,13 @@ function ratePlanet(xp, mutations, eventTitles) {
 // mutation — and buying one does not mark it "found". Round 15:
 // the Mystery Mineral is GONE (Devon — it was a 5% lottery ticket
 // for a Birth mineral you could just buy), and the power items
-// cost 10x more (Random Mutation 50,000, Family Pick 80,000) while
-// the Birth mineral stays 500 (cheap fuel for a first planet).
+// cost much more (Random Mutation 250,000, Family Pick 400,000) while
+// the Birth mineral is 1,000 (round 20 — Devon, Nov 15: power items
+// x5, Birth x2, because Stardust got too easy to farm).
 // Round 16 overhaul: the plain mineral is a Birth mineral now
 // (kind 'birth', no family), the Wheel is buyRandomMutationMineral.
 {
-  eq('shop: Birth price stays 500', L.CONFIG.SHOP_BIRTH_PRICE, 500);
+  eq('shop: Birth price is 1000 (round 20)', L.CONFIG.SHOP_BIRTH_PRICE, 1000);
   eq('shop: old plain price const is gone', L.CONFIG.SHOP_PLAIN_PRICE, undefined);
   eq('shop: mystery price is gone', L.CONFIG.SHOP_MYSTERY_PRICE, undefined);
   eq('shop: mystery chance is gone', L.CONFIG.SHOP_MYSTERY_MUTATION_CHANCE, undefined);
@@ -2995,43 +2996,43 @@ function ratePlanet(xp, mutations, eventTitles) {
   eq('shop: old plain buy function is gone', typeof L.buyPlainMineral, 'undefined');
   eq('shop: old wheel buy function is gone', typeof L.buyMutationWheel, 'undefined');
   eq('shop: old wheel price const is gone', L.CONFIG.SHOP_WHEEL_PRICE, undefined);
-  eq('shop: Random Mutation price is 50000', L.CONFIG.SHOP_RANDOM_MUTATION_PRICE, 50000);
-  eq('shop: family pick price is 80000', L.CONFIG.SHOP_FAMILY_PICK_PRICE, 80000);
+  eq('shop: Random Mutation price is 250000', L.CONFIG.SHOP_RANDOM_MUTATION_PRICE, 250000);
+  eq('shop: family pick price is 400000', L.CONFIG.SHOP_FAMILY_PICK_PRICE, 400000);
   eq('shop: Family Pick families are moon/rings/glow/sky',
     L.CONFIG.FAMILY_PICK_FAMILIES.join(','), 'moon,rings,glow,sky');
   st = freshWithPlanet(42);
-  st.stardust = 500;
+  st.stardust = 1000;
   const bought = L.buyBirthMineral(st);
-  eq('shop: Birth mineral deducts 500', st.stardust, 0);
+  eq('shop: Birth mineral deducts 1000', st.stardust, 0);
   eq('shop: Birth mineral added', bought.ok, true);
   eq('shop: bought mineral is a Birth mineral', bought.mineral.kind, 'birth');
   eq('shop: bought mineral carries no mutation', bought.mineral.mutation, null);
   eq('shop: bought mineral carries no family', bought.mineral.family, null);
   eq('shop: bought mineral is from the shop', bought.mineral.source, 'shop');
   eq('shop: bought mineral is named Birth mineral', L.mineralName(bought.mineral), 'Birth mineral');
-  st.stardust = 499;
+  st.stardust = 999;
   const broke = L.buyBirthMineral(st);
-  eq('shop: 499 Stardust cannot buy a Birth mineral', broke.ok, false);
+  eq('shop: 999 Stardust cannot buy a Birth mineral', broke.ok, false);
   eq('shop: refusal reason', broke.reason, 'not enough stardust');
-  eq('shop: refused purchase spends nothing', st.stardust, 499);
+  eq('shop: refused purchase spends nothing', st.stardust, 999);
   eq('shop: refused purchase adds nothing', st.minerals.length, 1);
   // Random Mutation Mineral: always a mutation mineral.
-  st.stardust = 50000;
+  st.stardust = 250000;
   const wheelLow = L.buyRandomMutationMineral(st, () => 0.0);
   eq('shop: random mutation ok', wheelLow.ok, true);
   eq('shop: random mutation gives a mutation mineral', wheelLow.mineral.mutation, 'big-moon');
   eq('shop: random mutation mineral kind', wheelLow.mineral.kind, 'mutation');
-  eq('shop: random mutation deducts 50000', st.stardust, 0);
-  st.stardust = 50000;
+  eq('shop: random mutation deducts 250000', st.stardust, 0);
+  st.stardust = 250000;
   const wheelHigh = L.buyRandomMutationMineral(st, () => 0.99);
   eq('shop: random mutation at the top of the range gives another mutation', wheelHigh.mineral.mutation, 'glitch');
-  st.stardust = 49999;
-  eq('shop: 49999 cannot buy a Random Mutation mineral', L.buyRandomMutationMineral(st, () => 0.0).ok, false);
-  eq('shop: refused random mutation spends nothing', st.stardust, 49999);
+  st.stardust = 249999;
+  eq('shop: 249999 cannot buy a Random Mutation mineral', L.buyRandomMutationMineral(st, () => 0.0).ok, false);
+  eq('shop: refused random mutation spends nothing', st.stardust, 249999);
   // Uniform 1-of-13: a sweep across the rng range hits every
   // mutation exactly once (the draw is uniform over MUTATIONS).
   st = freshWithPlanet(42);
-  st.stardust = 50000 * 13;
+  st.stardust = 250000 * 13;
   const seenWheel = new Set();
   for (let i = 0; i < 13; i++) {
     const r = L.buyRandomMutationMineral(st, () => (i + 0.5) / 13);
@@ -3041,47 +3042,47 @@ function ratePlanet(xp, mutations, eventTitles) {
   eq('shop: wheel sweep hits exactly the mutation list',
     [...seenWheel].sort().join(','), Planet.CONFIG.MUTATIONS.map((m) => m.id).sort().join(','));
   // Family Pick: the mutation comes from the chosen family.
-  st.stardust = 80000;
+  st.stardust = 400000;
   const pickMoon = L.buyFamilyPick(st, 'moon', () => 0.0);
   eq('shop: moon pick gives a moon mutation', pickMoon.mineral.mutation, 'big-moon');
   eq('shop: moon pick family matches', pickMoon.mineral.family, 'moon');
   eq('shop: moon pick kind is mutation', pickMoon.mineral.kind, 'mutation');
-  eq('shop: moon pick deducts 80000', st.stardust, 0);
-  st.stardust = 80000;
+  eq('shop: moon pick deducts 400000', st.stardust, 0);
+  st.stardust = 400000;
   const pickMoonHigh = L.buyFamilyPick(st, 'moon', () => 0.99);
   eq('shop: moon pick at the top gives blood-moon', pickMoonHigh.mineral.mutation, 'blood-moon');
-  st.stardust = 80000;
+  st.stardust = 400000;
   const pickRings = L.buyFamilyPick(st, 'rings', () => 0.5);
   eq('shop: rings pick gives a rings mutation', pickRings.mineral.mutation, 'colored-rings');
-  st.stardust = 80000;
+  st.stardust = 400000;
   const pickGlow = L.buyFamilyPick(st, 'glow', () => 0.99);
   eq('shop: glow pick at the top gives crystal-crust', pickGlow.mineral.mutation, 'crystal-crust');
-  st.stardust = 80000;
+  st.stardust = 400000;
   const pickSky = L.buyFamilyPick(st, 'sky', () => 0.0);
   eq('shop: sky pick gives a sky mutation', pickSky.mineral.mutation, 'meteor-shower');
   eq('shop: sky pick is 1 in 2 (two mutations)', L.familyPickOdds('sky').mutations.length, 2);
   // Storm / Weird are NOT offered — a pick there would be a
   // guaranteed Giant Storm / Glitch. Rejected before any spend.
-  st.stardust = 80000;
+  st.stardust = 400000;
   const beforeStorm = st.minerals.length;
   const stormPick = L.buyFamilyPick(st, 'storm', () => 0.0);
   eq('shop: storm pick rejected', stormPick.ok, false);
   eq('shop: storm rejection reason', stormPick.reason, 'not offered');
-  eq('shop: rejected storm pick spends nothing', st.stardust, 80000);
+  eq('shop: rejected storm pick spends nothing', st.stardust, 400000);
   eq('shop: rejected storm pick adds nothing', st.minerals.length, beforeStorm);
   const weirdPick = L.buyFamilyPick(st, 'weird', () => 0.0);
   eq('shop: weird pick rejected', weirdPick.ok, false);
   eq('shop: weird rejection reason', weirdPick.reason, 'not offered');
-  eq('shop: rejected weird pick spends nothing', st.stardust, 80000);
+  eq('shop: rejected weird pick spends nothing', st.stardust, 400000);
   eq('shop: rejected weird pick adds nothing', st.minerals.length, beforeStorm);
   eq('shop: unknown family rejected', L.buyFamilyPick(st, 'bogus', () => 0.0).ok, false);
-  st.stardust = 79999;
-  eq('shop: 79999 cannot family-pick', L.buyFamilyPick(st, 'moon', () => 0.0).ok, false);
-  eq('shop: refused family pick spends nothing', st.stardust, 79999);
+  st.stardust = 399999;
+  eq('shop: 399999 cannot family-pick', L.buyFamilyPick(st, 'moon', () => 0.0).ok, false);
+  eq('shop: refused family pick spends nothing', st.stardust, 399999);
   // Buying a mutation mineral does not mark it "found" — discovery
   // means seeing it on a planet, not owning the bottle.
   st = freshWithPlanet(42);
-  st.stardust = 50000;
+  st.stardust = 250000;
   L.buyRandomMutationMineral(st, () => 0.0); // big-moon mineral
   check('shop: a bought mineral is not discovered', !st.discovered.includes('big-moon'));
 }
@@ -3304,27 +3305,27 @@ check('ext: Stardust chip hides with the UI', extSrc.includes("body.hide-ui #top
   // spends nothing, and a failed purchase never adds a mineral.
   st = freshWithPlanet(42);
   const minerals0 = st.minerals.length;
-  st.stardust = 500;
+  st.stardust = 1000;
   eq('spend: exact-balance Birth mineral succeeds', L.buyBirthMineral(st).ok, true);
   eq('spend: exact-balance Birth mineral leaves 0', st.stardust, 0);
   eq('spend: exact-balance Birth mineral adds one mineral', st.minerals.length, minerals0 + 1);
-  st.stardust = 50000;
+  st.stardust = 250000;
   eq('spend: exact-balance Random Mutation succeeds', L.buyRandomMutationMineral(st, () => 0.0).ok, true);
   eq('spend: exact-balance Random Mutation leaves 0', st.stardust, 0);
   eq('spend: exact-balance Random Mutation adds one mineral', st.minerals.length, minerals0 + 2);
-  st.stardust = 80000;
+  st.stardust = 400000;
   eq('spend: exact-balance family pick succeeds', L.buyFamilyPick(st, 'moon', () => 0.0).ok, true);
   eq('spend: exact-balance family pick leaves 0', st.stardust, 0);
-  st.stardust = 79999;
+  st.stardust = 399999;
   const beforeFail = st.minerals.length;
-  eq('spend: 79999 cannot family-pick', L.buyFamilyPick(st, 'moon', () => 0.0).ok, false);
-  eq('spend: failed family pick spends nothing', st.stardust, 79999);
+  eq('spend: 399999 cannot family-pick', L.buyFamilyPick(st, 'moon', () => 0.0).ok, false);
+  eq('spend: failed family pick spends nothing', st.stardust, 399999);
   eq('spend: failed family pick adds nothing', st.minerals.length, beforeFail);
   // A Birth-mineral balance cannot buy power items.
-  st.stardust = 500;
-  eq('spend: 500 cannot buy a Random Mutation mineral', L.buyRandomMutationMineral(st, () => 0.0).ok, false);
-  eq('spend: 500 cannot family-pick', L.buyFamilyPick(st, 'moon', () => 0.0).ok, false);
-  eq('spend: the 500 is untouched', st.stardust, 500);
+  st.stardust = 1000;
+  eq('spend: 1000 cannot buy a Random Mutation mineral', L.buyRandomMutationMineral(st, () => 0.0).ok, false);
+  eq('spend: 1000 cannot family-pick', L.buyFamilyPick(st, 'moon', () => 0.0).ok, false);
+  eq('spend: the 1000 is untouched', st.stardust, 1000);
   // Zero balance buys nothing.
   st.stardust = 0;
   eq('spend: 0 cannot buy a Birth mineral', L.buyBirthMineral(st).ok, false);
@@ -3332,13 +3333,13 @@ check('ext: Stardust chip hides with the UI', extSrc.includes("body.hide-ui #top
   eq('spend: 0 cannot family-pick', L.buyFamilyPick(st, 'moon', () => 0.0).ok, false);
   // No double-spend: buying twice deducts twice; the second buy
   // with an empty balance fails instead of going negative.
-  st.stardust = 50000;
+  st.stardust = 250000;
   L.buyRandomMutationMineral(st, () => 0.0);
   eq('spend: second Random Mutation with 0 balance fails', L.buyRandomMutationMineral(st, () => 0.0).ok, false);
   eq('spend: balance never goes negative', st.stardust, 0);
   // Fractional balances (rates like 1.5/char accumulate fractions)
-  // spend fine: 500.5 buys a Birth mineral and leaves 0.5.
-  st.stardust = 500.5;
+  // spend fine: 1000.5 buys a Birth mineral and leaves 0.5.
+  st.stardust = 1000.5;
   eq('spend: fractional balance buys a Birth mineral', L.buyBirthMineral(st).ok, true);
   eq('spend: fractional remainder kept', st.stardust, 0.5);
   // Typing nothing earns nothing; a planet-less state earns nothing.

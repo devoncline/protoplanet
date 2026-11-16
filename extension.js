@@ -61,8 +61,8 @@ class ProtoplanetApp {
     this.statusBar.show();
     this.viewProvider = new PetViewProvider(this);
     this.systemPanel = null; // the Solar System panel (step 4), or null
-    this.prestigePanel = null; // the Prestige / fusion panel (step 4b), or null
-    this.prestigeResult = null; // the last fusion result, shown until dismissed
+    this.prestigePanel = null; // the Prestige panel (step 4b), or null
+    this.prestigeResult = null; // the last prestige result, shown until dismissed
     this.mutationFlash = null; // round 10: the mutation id to flash gold in the sidebar on the next push (birth or apply), then cleared
     this.sharePanel = null; // the Share card panel (P0, Nov 12), or null
     this.saveTimer = null;
@@ -177,7 +177,7 @@ class ProtoplanetApp {
 
   // Round 11 — the archive is full (200/200): archiving refuses
   // instead of silently deleting the oldest planet. One shared
-  // message for every birth / switch / fuse path that hits it.
+  // message for every birth / switch / prestige path that hits it.
   notifyArchiveFull() {
     this.notify(`Archive is full (${(this.state.past || []).length}/${Logic.CONFIG.PAST_LIMIT}) — salvage an archived planet from the Index to make room.`);
   }
@@ -479,13 +479,13 @@ class ProtoplanetApp {
   // family in a second pick, naming the exact mutations and odds per family.
   // Round 16 overhaul — exactly three items, labels + odds rendered
   // from the shared probability helpers (§7), never hardcoded:
-  // Birth Mineral (500 ✦, creates one planet), Random Mutation
-  // Mineral (50,000 ✦, 1 of 13), Family Mutation Mineral (80,000 ✦,
+  // Birth Mineral (1,000 ✦, creates one planet), Random Mutation
+  // Mineral (250,000 ✦, 1 of 13), Family Mutation Mineral (400,000 ✦,
   // Moon/Rings/Glow/Sky only). The Mystery Mineral is gone
   // (round 15 — Devon).
   async openShop() {
     const bal = () => Math.floor(this.state.stardust || 0).toLocaleString();
-    const price = (n) => n.toLocaleString(); // 50,000 reads better than 50000
+    const price = (n) => n.toLocaleString(); // 250,000 reads better than 250000
     const wheel = Logic.wheelOdds();
     const apply = Logic.applyOdds();
     const mutationCount = Planet.CONFIG.MUTATIONS.length;
@@ -983,7 +983,7 @@ class ProtoplanetApp {
     // discovered (state.discovered) — a mutation stays found even
     // after its planet is destroyed.
     const discovered = new Set(this.state.discovered || []);
-    // Round 19 — the Mutations tab is a Fusion hub + mineral inventory
+    // Round 19 — the Mutations tab is a Prestige hub + mineral inventory
     // + Sets now (Devon, Nov 15): the bingo card (one card per mutation
     // with per-mutation carrier lists) is gone — a mutation lives on many
     // planets, so listing carriers reads like it can only be on one.
@@ -1017,7 +1017,7 @@ class ProtoplanetApp {
         };
       }),
     };
-    // Round 19 — Fusion hub summary: the two parent slots (best ready
+    // Round 19 — Prestige hub summary: the two parent slots (best ready
     // parents first, then the planets closest to Civilization), the
     // ready count, and the Birth-mineral balance for the cost line.
     // No Gen anywhere — the label was removed in round 17.
@@ -1032,8 +1032,13 @@ class ProtoplanetApp {
       ...(this.state.current ? [{ record: this.state.current, kind: 'current' }] : []),
       ...(this.state.past || []).map((p) => ({ record: p, kind: 'past' })),
     ];
+    // Round 20 — already-parent planets are DONE as parents, not
+    // "next": a used Civilization planet (2200 chars) would sort to
+    // the top of this list and fill a hub slot with a 2200/2200 bar
+    // and "0 to Civilization" even though it can never be a parent
+    // again. Only growable planets fill the second slot.
     const nextClosest = allRecords
-      .filter((x) => !Logic.prestigeEligible(x.record))
+      .filter((x) => !Logic.prestigeEligible(x.record) && !x.record.usedAsParent)
       .sort((a, b) => (b.record.chars || 0) - (a.record.chars || 0));
     const slotFor = (x) => {
       if (!x) return null;
@@ -1044,18 +1049,18 @@ class ProtoplanetApp {
         toCiv: Math.max(0, Logic.CONFIG.PRESTIGE_MIN_CHARS - (x.record.chars || 0)),
       };
     };
-    const fusionSlots = [];
+    const prestigeSlots = [];
     if (readyParents.length >= 2) {
-      fusionSlots.push(slotFor(readyParents[0]), slotFor(readyParents[1]));
+      prestigeSlots.push(slotFor(readyParents[0]), slotFor(readyParents[1]));
     } else if (readyParents.length === 1) {
-      fusionSlots.push(slotFor(readyParents[0]), slotFor(nextClosest[0]));
+      prestigeSlots.push(slotFor(readyParents[0]), slotFor(nextClosest[0]));
     } else {
-      fusionSlots.push(slotFor(nextClosest[0]), slotFor(nextClosest[1]));
+      prestigeSlots.push(slotFor(nextClosest[0]), slotFor(nextClosest[1]));
     }
-    const fusion = {
+    const prestige = {
       readyCount: eligible.length,
       minChars: Logic.CONFIG.PRESTIGE_MIN_CHARS,
-      slots: fusionSlots,
+      slots: prestigeSlots,
       birthCount: Logic.mineralSummary(this.state).birth,
       birthCost: 1,
     };
@@ -1088,9 +1093,9 @@ class ProtoplanetApp {
       slots,
       index,
       mutationIndex,
-      // Round 19 — Fusion hub summary + mineral inventory for the
+      // Round 19 — Prestige hub summary + mineral inventory for the
       // redesigned Mutations tab.
-      fusion,
+      prestige,
       minerals,
       // Round 14: the Stardust balance and what the whole system earns.
       stardust: this.state.stardust || 0,
@@ -1151,7 +1156,7 @@ class ProtoplanetApp {
       this.saveNow();
       this.pushState();
     } else if (msg.type === 'openPrestige') {
-      // Round 19 — the Mutations tab's Fusion hub opens the fusion
+      // Round 19 — the Mutations tab's Prestige hub opens the prestige
       // panel without the command palette.
       this.openPrestige();
     } else if (msg.type === 'applyMineral' && typeof msg.mutation === 'string') {
@@ -1168,12 +1173,12 @@ class ProtoplanetApp {
     }
   }
 
-  // -- step 4b: the Prestige / fusion panel --------------------------------
+  // -- step 4b: the Prestige / prestige panel --------------------------------
   // A dedicated full-screen webview (like the Solar System panel): pick
   // two eligible parents, see what the offspring stands to inherit,
-  // fuse them — a violent ASCII collision, not a gentle fade (Devon,
+  // prestige them — a violent ASCII collision, not a gentle fade (Devon,
   // Nov 11) — and watch the offspring hatch with its lineage. The
-  // panel is a dumb view — every decision (eligibility, the fusion
+  // panel is a dumb view — every decision (eligibility, the prestige
   // itself) lives in petLogic.js; this class only builds the view
   // model and applies the webview's messages.
   //
@@ -1204,8 +1209,8 @@ class ProtoplanetApp {
 
   // Everything the panel needs: every planet in the collection with
   // its eligibility, the inheritance multipliers, the base mutation
-  // chance (so the panel can show the real % before fusing), and the
-  // last fusion result (if any).
+  // chance (so the panel can show the real % before prestiging), and the
+  // last prestige result (if any).
   prestigeViewModel() {
     const eligible = Logic.eligiblePrestigeParents(this.state);
     const planets = [];
@@ -1230,13 +1235,13 @@ class ProtoplanetApp {
     return {
       type: 'prestige',
       eligibleCount: eligible.length,
-      canFuse: eligible.length >= 2,
+      canPrestige: eligible.length >= 2,
       minChars: Logic.CONFIG.PRESTIGE_MIN_CHARS,
       inheritOne: Logic.CONFIG.PRESTIGE_INHERIT_CHANCE_ONE,
       inheritBoth: Logic.CONFIG.PRESTIGE_INHERIT_CHANCE_BOTH,
       consumesParents: Logic.CONFIG.PRESTIGE_CONSUMES_PARENTS,
       mutationChance: Planet.CONFIG.MUTATION_CHANCE,
-      // Round 16 overhaul — a fusion costs 1 Birth mineral.
+      // Round 16 overhaul — a prestige costs 1 Birth mineral.
       birthCost: 'Costs 1 Birth mineral',
       planets,
       result: this.prestigeResult,
@@ -1247,7 +1252,7 @@ class ProtoplanetApp {
     if (this.prestigePanel) this.prestigePanel.webview.postMessage(this.prestigeViewModel());
   }
 
-  // The shape the panel shows after a fusion: the offspring (renderable),
+  // The shape the panel shows after a prestige: the offspring (renderable),
   // its parents' lineage records, and which of its mutations it actually
   // inherited vs rolled fresh. Shared by the panel and the QuickPick
   // command — both paths land in the same place.
@@ -1262,7 +1267,7 @@ class ProtoplanetApp {
     };
   }
 
-  // Messages from the panel: fuse two parents, dismiss the result, or
+  // Messages from the panel: prestige two parents, dismiss the result, or
   // jump to the Solar System. The panel never mutates state itself.
   onPrestigeMessage(msg) {
     if (!msg || typeof msg !== 'object') return;
@@ -1477,7 +1482,7 @@ class ProtoplanetApp {
     // show the new planet in the Index right away.
     this.postSystemState();
     // Same for the Prestige panel — typing can make the current
-    // planet eligible, and a fusion from the palette must show up
+    // planet eligible, and a prestige from the palette must show up
     // there too.
     this.postPrestigeState();
     // Same for the Share card — typing while it is open must keep
@@ -2075,7 +2080,7 @@ class ProtoplanetApp {
     padding: 14px 28px 48px; background: #050505; }
   body.mode-index #index { display: block; }
   body.mode-index #orreryWrap { display: none; }
-  /* The Mutations tab (round 19): Fusion hub + mineral inventory +
+  /* The Mutations tab (round 19): Prestige hub + mineral inventory +
      Sets. The bingo card is gone (Devon, Nov 15) — a mutation lives
      on many planets, so listing carriers read like it can only be
      on one. */
@@ -2085,27 +2090,27 @@ class ProtoplanetApp {
   body.mode-mutations #orreryWrap { display: none; }
   body.mode-mutations #index { display: none; }
   #mutCount { font-size: 11px; opacity: .55; margin: 0 0 10px; }
-  .fusionHub { border: 1px solid rgba(232, 182, 76, .65); padding: 12px 14px; margin-bottom: 18px; }
-  .fhubTitle { font-size: 13px; font-weight: 700; color: #ffd75f; }
-  .fhubRules { font-size: 12px; opacity: .8; line-height: 1.6; margin-top: 4px; }
-  .fhubRules b { color: #ffd75f; font-weight: 700; }
-  .fusionSlots { display: flex; gap: 1px; background: #1e1e1e; margin-top: 10px; }
-  .fusionSlot { flex: 1 1 0; background: #050505; padding: 10px 12px; display: flex; gap: 12px; align-items: center; min-width: 0; }
-  .fusionSlot.empty { align-items: flex-start; }
-  .fslotArt { width: 120px; flex: none; }
-  .fslotBody { min-width: 0; }
-  .fslotName { font-size: 13px; font-weight: 700; }
-  .fslotMeta { font-size: 11px; opacity: .7; margin-top: 3px; line-height: 1.5; }
-  .fslotReady { font-size: 11px; color: #ffd75f; margin-top: 6px; }
-  .fslotProg { margin-top: 6px; }
-  .fslotBar { height: 4px; background: #1e1e1e; }
-  .fslotBar > div { height: 100%; background: #e8b64c; }
-  .fslotProgText { font-size: 11px; opacity: .7; margin-top: 4px; }
-  .fhubFoot { display: flex; align-items: center; gap: 14px; margin-top: 12px; flex-wrap: wrap; }
+  .prestigeHub { border: 1px solid rgba(232, 182, 76, .65); padding: 12px 14px; margin-bottom: 18px; }
+  .phubTitle { font-size: 13px; font-weight: 700; color: #ffd75f; }
+  .phubRules { font-size: 12px; opacity: .8; line-height: 1.6; margin-top: 4px; }
+  .phubRules b { color: #ffd75f; font-weight: 700; }
+  .prestigeSlots { display: flex; gap: 1px; background: #1e1e1e; margin-top: 10px; }
+  .prestigeSlot { flex: 1 1 0; background: #050505; padding: 10px 12px; display: flex; gap: 12px; align-items: center; min-width: 0; }
+  .prestigeSlot.empty { align-items: flex-start; }
+  .pslotArt { width: 120px; flex: none; }
+  .pslotBody { min-width: 0; }
+  .pslotName { font-size: 13px; font-weight: 700; }
+  .pslotMeta { font-size: 11px; opacity: .7; margin-top: 3px; line-height: 1.5; }
+  .pslotReady { font-size: 11px; color: #ffd75f; margin-top: 6px; }
+  .pslotProg { margin-top: 6px; }
+  .pslotBar { height: 4px; background: #1e1e1e; }
+  .pslotBar > div { height: 100%; background: #e8b64c; }
+  .pslotProgText { font-size: 11px; opacity: .7; margin-top: 4px; }
+  .phubFoot { display: flex; align-items: center; gap: 14px; margin-top: 12px; flex-wrap: wrap; }
   #mutations button.primary { border: 1px solid #e8b64c; background: rgba(232, 182, 76, 0.14); color: #ffd75f; padding: 6px 12px; font-size: 12px; cursor: pointer; font-family: inherit; }
-  .fhubCost { font-size: 12px; }
-  .fhubCost b { color: #ffd75f; }
-  .fhubState { font-size: 11px; opacity: .65; }
+  .phubCost { font-size: 12px; }
+  .phubCost b { color: #ffd75f; }
+  .phubState { font-size: 11px; opacity: .65; }
   .mutSectionHead { font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: #ffd75f; margin: 0 0 8px; }
   .mutSectionHead .mutSectionRight { float: right; letter-spacing: 0; text-transform: none; font-weight: 400; opacity: .75; color: #d4d4d4; }
   .minRow { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid #1e1e1e; }
@@ -2225,7 +2230,7 @@ class ProtoplanetApp {
 </section>
 <section id="mutations">
   <p id="mutCount"></p>
-  <div id="fusionHub"></div>
+  <div id="prestigeHub"></div>
   <div id="mutMinerals"></div>
   <div class="mutSectionHead">Sets</div>
   <div id="mutSets"></div>
@@ -3295,7 +3300,7 @@ class ProtoplanetApp {
   }
 
   // --- mutations tab (round 19) -------------------------------------------
-  // The tab is a Fusion hub + mineral inventory + Sets now (Devon, Nov 15):
+  // The tab is a Prestige hub + mineral inventory + Sets now (Devon, Nov 15):
   // the bingo card is gone — a mutation lives on many planets, so listing
   // carriers read like it can only be on one. No Gen lines anywhere.
   function renderMutations() {
@@ -3303,12 +3308,12 @@ class ProtoplanetApp {
     var mi = state.mutationIndex;
     document.getElementById('mutCount').textContent =
       mi.foundCount + ' / ' + mi.total + ' mutations found — ' + (mi.anyOddsText || ('each ' + mi.oddsText + ' when a planet is born'));
-    // 1. Fusion hub — the two parent slots, the rules, the cost, and
-    // the button. The button stays primary in both states (the fusion
+    // 1. Prestige hub — the two parent slots, the rules, the cost, and
+    // the button. The button stays primary in both states (the prestige
     // panel itself is where parents are picked); the state line names
     // the blocker when fewer than 2 parents are ready.
     var hubHtml = '';
-    var f = state.fusion;
+    var f = state.prestige;
     if (f) {
       var nextName = null;
       for (var n = 0; n < f.slots.length; n++) {
@@ -3318,37 +3323,37 @@ class ProtoplanetApp {
       for (var i = 0; i < 2; i++) {
         var s = f.slots[i];
         if (!s) {
-          slotsHtml += '<div class="fusionSlot empty"><div class="fslotBody"><div class="fslotName">No planet yet</div>'
-            + '<div class="fslotMeta">Grow a planet to fuse.</div></div></div>';
+          slotsHtml += '<div class="prestigeSlot empty"><div class="pslotBody"><div class="pslotName">No planet yet</div>'
+            + '<div class="pslotMeta">Grow a planet for prestige.</div></div></div>';
           continue;
         }
         var p = s.planet;
         var setNames = (p.sets || []).map(function (x) { return x.name; }).join(' · ');
         var meta = esc(p.stageName) + ' · ' + p.mutations.length + ' mutation' + (p.mutations.length === 1 ? '' : 's')
           + (setNames ? ' · ' + esc(setNames) : '');
-        slotsHtml += '<div class="fusionSlot"><div class="fslotArt"><div class="pp-grid"></div></div>'
-          + '<div class="fslotBody"><div class="fslotName">' + esc(p.name) + '</div>'
-          + '<div class="fslotMeta">' + meta + '</div>'
+        slotsHtml += '<div class="prestigeSlot"><div class="pslotArt"><div class="pp-grid"></div></div>'
+          + '<div class="pslotBody"><div class="pslotName">' + esc(p.name) + '</div>'
+          + '<div class="pslotMeta">' + meta + '</div>'
           + (s.ready
-            ? '<div class="fslotReady">✓ Ready to fuse</div>'
-            : '<div class="fslotProg"><div class="fslotBar"><div style="width:' + Math.round(100 * s.chars / f.minChars) + '%"></div></div>'
-            + '<div class="fslotProgText">' + s.chars.toLocaleString() + ' / ' + f.minChars.toLocaleString() + ' chars — ' + s.toCiv.toLocaleString() + ' to Civilization</div></div>')
+            ? '<div class="pslotReady">✓ Ready for prestige</div>'
+            : '<div class="pslotProg"><div class="pslotBar"><div style="width:' + Math.round(100 * s.chars / f.minChars) + '%"></div></div>'
+            + '<div class="pslotProgText">' + s.chars.toLocaleString() + ' / ' + f.minChars.toLocaleString() + ' chars — ' + s.toCiv.toLocaleString() + ' to Civilization</div></div>')
           + '</div></div>';
       }
       var stateLine = f.readyCount >= 2
         ? '2 of 2 parents ready'
-        : (f.readyCount + ' of 2 parents ready' + (nextName ? ' — grow ' + nextName + ' to Civilization to fuse.' : '.'));
-      hubHtml = '<div class="fusionHub"><div class="fhubTitle">✦ Fusion</div>'
-        + '<div class="fhubRules">Fuse two Civilization planets into a child. The child inherits each parent\u2019s mutations — <b>50% from one parent, 75% if both carry it</b>. Parents stay in your collection — each pair fuses once.</div>'
-        + '<div class="fusionSlots">' + slotsHtml + '</div>'
-        + '<div class="fhubFoot"><button class="primary" id="openFusionBtn">Open fusion</button>'
-        + '<span class="fhubCost">Costs <b>1 Birth mineral</b> — you have <b>' + f.birthCount + '</b></span>'
-        + '<span class="fhubState">' + esc(stateLine) + '</span></div></div>';
+        : (f.readyCount + ' of 2 parents ready' + (nextName ? ' — grow ' + nextName + ' to Civilization for prestige.' : '.'));
+      hubHtml = '<div class="prestigeHub"><div class="phubTitle">✦ Prestige</div>'
+        + '<div class="phubRules">Prestige two Civilization planets into a child. The child inherits each parent\u2019s mutations — <b>50% from one parent, 75% if both carry it</b>. Parents stay in your collection — each planet can only be a parent once.</div>'
+        + '<div class="prestigeSlots">' + slotsHtml + '</div>'
+        + '<div class="phubFoot"><button class="primary" id="openPrestigeBtn">Open prestige</button>'
+        + '<span class="phubCost">Costs <b>1 Birth mineral</b> — you have <b>' + f.birthCount + '</b></span>'
+        + '<span class="phubState">' + esc(stateLine) + '</span></div></div>';
     }
-    document.getElementById('fusionHub').innerHTML = hubHtml;
-    var openBtn = document.getElementById('openFusionBtn');
+    document.getElementById('prestigeHub').innerHTML = hubHtml;
+    var openBtn = document.getElementById('openPrestigeBtn');
     if (openBtn) openBtn.addEventListener('click', function () { vscodeApi.postMessage({ type: 'openPrestige' }); });
-    fillFusionArt();
+    fillPrestigeArt();
     // 2. Your minerals — the inventory, grouped exactly the way
     // mineralInventory() groups it: Mutation minerals first
     // (alphabetical), then Birth. Apply runs the existing apply flow
@@ -3409,13 +3414,13 @@ class ProtoplanetApp {
     document.getElementById('mutSets').innerHTML = setsHtml;
   }
 
-  // Static planet art for the fusion slots — same render path as the
+  // Static planet art for the prestige slots — same render path as the
   // Index tiles (sidebarCrop + gridToHtml), one still frame per slot.
-  function fillFusionArt() {
-    if (!state || !state.fusion) return;
-    var arts = document.querySelectorAll('#fusionHub .fusionSlot .fslotArt .pp-grid');
+  function fillPrestigeArt() {
+    if (!state || !state.prestige) return;
+    var arts = document.querySelectorAll('#prestigeHub .prestigeSlot .pslotArt .pp-grid');
     for (var i = 0; i < arts.length; i++) {
-      var s = state.fusion.slots[i];
+      var s = state.prestige.slots[i];
       if (!s || !s.planet) continue;
       var gridEl = arts[i];
       var artEl = gridEl.parentElement;
@@ -3867,16 +3872,16 @@ class ProtoplanetApp {
 </html>`;
   }
 
-  // -- step 4b: the Prestige / fusion panel HTML ------------------------------
+  // -- step 4b: the Prestige panel HTML ------------------------------
   // Full-screen panel, same visual language as the Solar System panel
   // (fixed-cell ASCII renders, amber accents, VS Code theme vars).
-  // Top: the two parent slots with the fusion between them. Below: the
+  // Top: the two parent slots with the prestige between them. Below: the
   // parent picker (the whole collection, with eligibility). When a
-  // fusion is confirmed, the slots give way to the collision stage —
+  // prestige is confirmed, the slots give way to the collision stage —
   // a violent ASCII smash (planet.js collisionFrame), with phase
   // captions — and only when the mess has coalesced does the offspring
   // show, with its lineage. The panel never pops anything up; it only
-  // posts fuse / dismiss / openSystem messages, and the extension
+  // posts prestige / dismiss / openSystem messages, and the extension
   // decides.
   getPrestigeHtml(webview) {
     const nonce = getNonce();
@@ -3937,7 +3942,7 @@ class ProtoplanetApp {
     padding: 9px 16px; font-size: 12px; line-height: 1.5; }
   /* Full-bleed, no centered column — the panel is the page. */
   main { padding: 18px 28px 48px; background: #050505; }
-  /* The fusion stage: two parent slots with the collision between them,
+  /* The prestige stage: two parent slots with the collision between them,
      separated by 1px hairlines, not cards. */
   #slotsRow { display: flex; gap: 1px; align-items: stretch; flex-wrap: wrap; background: #1e1e1e; }
   .parentSlot { flex: 1 1 300px; min-width: 280px; background: #050505; padding: 14px; }
@@ -3953,10 +3958,10 @@ class ProtoplanetApp {
   .mut { display: inline-block; font-size: 11px; font-weight: 700;
     color: #ffd75f; background: transparent;
     border: 1px solid rgba(255, 215, 95, 0.55); padding: 2px 7px; margin: 0 0 8px; }
-  #fusionMid { flex: 0 0 170px; display: flex; flex-direction: column; align-items: center;
+  #prestigeMid { flex: 0 0 170px; display: flex; flex-direction: column; align-items: center;
     justify-content: center; gap: 8px; text-align: center; background: #050505; }
-  #fusionGlyph { font-size: 44px; color: #e8b64c; line-height: 1; }
-  #fusionMid .hint { font-size: 12px; opacity: .65; line-height: 1.5; }
+  #prestigeGlyph { font-size: 44px; color: #e8b64c; line-height: 1; }
+  #prestigeMid .hint { font-size: 12px; opacity: .65; line-height: 1.5; }
   /* The collision stage: the smash itself, full width. */
   #collisionWrap { background: #050505; border: 1px solid #1e1e1e;
     padding: 14px; text-align: center; }
@@ -4011,12 +4016,12 @@ class ProtoplanetApp {
 </header>
 <div id="banner" hidden></div>
 <main>
-  <section id="fusion">
+  <section id="prestige">
     <div id="slotsRow">
       <div class="parentSlot empty" id="slotA"></div>
-      <div id="fusionMid">
-        <div id="fusionGlyph">✦</div>
-        <div class="hint" id="fusionHint">Pick two parents below —<br>then fuse them.</div>
+      <div id="prestigeMid">
+        <div id="prestigeGlyph">✦</div>
+        <div class="hint" id="prestigeHint">Pick two parents below —<br>then prestige them.</div>
       </div>
       <div class="parentSlot empty" id="slotB"></div>
     </div>
@@ -4043,8 +4048,8 @@ class ProtoplanetApp {
   var P = window.Protoplanet;
   var state = null, sec = 0, tick = 0;
   var pickA = null, pickB = null; // planet entries from state.planets
-  var confirmOpen = false, fusing = false, fusionT0 = 0, lastError = '';
-  var fuseA = null, fuseB = null; // the parents mid-collision (kept
+  var confirmOpen = false, prestiging = false, prestigeT0 = 0, lastError = '';
+  var prestigeA = null, prestigeB = null; // the parents mid-collision (kept
   // separate from the picks: the picks clear when the result lands,
   // but the animation still needs the two planets until it ends)
   var slotAEl = document.getElementById('slotA');
@@ -4140,15 +4145,15 @@ class ProtoplanetApp {
       slotBEl.innerHTML = '<div><b>Parent B</b><br>Pick a planet below.</div>';
     }
   }
-  function updateFusionHint() {
-    document.getElementById('fusionHint').innerHTML =
+  function updatePrestigeHint() {
+    document.getElementById('prestigeHint').innerHTML =
       (pickA && pickB) ? 'Two worlds, ready.<br>Both stay — retired, never parents again.'
-      : 'Pick two parents below —<br>then fuse them.';
+      : 'Pick two parents below —<br>then prestige them.';
   }
   function renderSlots() {
     renderSlotA();
     renderSlotB();
-    updateFusionHint();
+    updatePrestigeHint();
   }
   function refreshSlotArt() {
     // Round 17 (I): the slot holds only the planet layer now (no
@@ -4177,7 +4182,7 @@ class ProtoplanetApp {
       html += '<div class="row">Neither parent carries a mutation — the offspring rolls a fresh one at the usual rare odds.</div>';
     } else {
       // Round 10 — the numbers BEFORE you commit (Brainrot shows them
-      // on the fuse screen; so do we): the real chance per parent
+      // on the prestige screen; so do we): the real chance per parent
       // mutation. inheritOne/inheritBoth ARE the chances now (50% one
       // parent, 75% both — Devon's call, Nov 12), not multipliers.
       var base = state.mutationChance || 0.007;
@@ -4198,33 +4203,33 @@ class ProtoplanetApp {
     inheritBarEl.innerHTML = html;
   }
   function renderConfirm() {
-    if (!pickA || !pickB || fusing || (state && state.result)) { confirmBarEl.hidden = true; return; }
+    if (!pickA || !pickB || prestiging || (state && state.result)) { confirmBarEl.hidden = true; return; }
     confirmBarEl.hidden = false;
     if (!confirmOpen) {
-      confirmBarEl.innerHTML = '<button id="fuseBtn" class="big">Fuse ' + esc(pickA.name) + ' + ' + esc(pickB.name) + '</button>'
+      confirmBarEl.innerHTML = '<button id="prestigeBtn" class="big">Prestige ' + esc(pickA.name) + ' + ' + esc(pickB.name) + '</button>'
         + '<span class="warn">The offspring starts as dust. ' + (state.birthCost ? esc(state.birthCost) + ' ' : '') + 'The parents stay in your collection, but they can’t be parents again.</span>';
-      document.getElementById('fuseBtn').addEventListener('click', function () {
+      document.getElementById('prestigeBtn').addEventListener('click', function () {
         confirmOpen = true;
         renderConfirm();
       });
     } else {
-      confirmBarEl.innerHTML = '<span class="warn"><b>Fuse ' + esc(pickA.name) + ' and ' + esc(pickB.name)
+      confirmBarEl.innerHTML = '<span class="warn"><b>Prestige ' + esc(pickA.name) + ' and ' + esc(pickB.name)
         + '?</b> This is permanent — the offspring hatches right away, and both parents retire from ever being parents again.</span>'
-        + '<button id="confirmFuseBtn" class="big">Yes, fuse them</button>'
-        + '<button id="cancelFuseBtn" class="ghost">Cancel</button>';
-      document.getElementById('confirmFuseBtn').addEventListener('click', startFusion);
-      document.getElementById('cancelFuseBtn').addEventListener('click', function () {
+        + '<button id="confirmPrestigeBtn" class="big">Yes, prestige them</button>'
+        + '<button id="cancelPrestigeBtn" class="ghost">Cancel</button>';
+      document.getElementById('confirmPrestigeBtn').addEventListener('click', startPrestige);
+      document.getElementById('cancelPrestigeBtn').addEventListener('click', function () {
         confirmOpen = false;
         renderConfirm();
       });
     }
   }
-  function startFusion() {
+  function startPrestige() {
     if (!pickA || !pickB) return;
     confirmOpen = false;
-    fuseA = pickA; fuseB = pickB;
-    fusing = true;
-    fusionT0 = sec;
+    prestigeA = pickA; prestigeB = pickB;
+    prestiging = true;
+    prestigeT0 = sec;
     slotsRowEl.hidden = true;
     inheritBarEl.hidden = true;
     confirmBarEl.hidden = true;
@@ -4244,16 +4249,16 @@ class ProtoplanetApp {
     }[phase] || '';
   }
   function renderCollision() {
-    if (!state || !state.result || !fuseA || !fuseB) return;
-    var t = sec - fusionT0;
+    if (!state || !state.result || !prestigeA || !prestigeB) return;
+    var t = sec - prestigeT0;
     var phase = P.collisionPhase(t);
     collisionCaptionEl.textContent = collisionCaption(phase);
     var artEl = collisionArtEl.querySelector('.pp-grid');
     if (artEl) artEl.innerHTML = P.gridToHtml(
-      P.collisionFrame(fuseA.planet, fuseB.planet, state.result.offspring.planet, t, sec), 4.7, 8.46);
+      P.collisionFrame(prestigeA.planet, prestigeB.planet, state.result.offspring.planet, t, sec), 4.7, 8.46);
     if (t >= P.COLLISION_END) {
-      fusing = false;
-      fuseA = null; fuseB = null;
+      prestiging = false;
+      prestigeA = null; prestigeB = null;
       collisionWrapEl.hidden = true;
       renderAll();
     }
@@ -4280,13 +4285,13 @@ class ProtoplanetApp {
     }
     html += '<p class="lineage" style="opacity:.7">The parents stay in your collection, retired — each can only be a parent once.</p>'
       + '<div class="actions"><button id="openSystemBtn">Open Solar System</button>'
-      + '<button id="fuseAgainBtn" class="ghost">Fuse again</button></div>';
+      + '<button id="prestigeAgainBtn" class="ghost">Prestige again</button></div>';
     resultEl.innerHTML = html;
     resultEl.hidden = false;
     document.getElementById('openSystemBtn').addEventListener('click', function () {
       vscodeApi.postMessage({ type: 'openSystem' });
     });
-    document.getElementById('fuseAgainBtn').addEventListener('click', function () {
+    document.getElementById('prestigeAgainBtn').addEventListener('click', function () {
       vscodeApi.postMessage({ type: 'dismissResult' });
     });
   }
@@ -4334,7 +4339,7 @@ class ProtoplanetApp {
   function renderBanner() {
     if (!state) return;
     countsEl.textContent = state.eligibleCount + ' eligible · ' + state.planets.length + ' planets';
-    if (state.canFuse) {
+    if (state.canPrestige) {
       bannerEl.hidden = true;
     } else {
       bannerEl.hidden = false;
@@ -4414,7 +4419,7 @@ class ProtoplanetApp {
     });
     if ((oldA ? pickKey(oldA) : null) !== (pickA ? pickKey(pickA) : null)) renderSlotA();
     if ((oldB ? pickKey(oldB) : null) !== (pickB ? pickKey(pickB) : null)) renderSlotB();
-    updateFusionHint();
+    updatePrestigeHint();
     renderInherit();
     renderConfirm();
     if (lastError) {
@@ -4431,7 +4436,7 @@ class ProtoplanetApp {
   var lastPrestigeSig = null;
   function prestigeSig(s) {
     if (!s) return '';
-    var parts = [s.eligibleCount, s.canFuse, s.minChars, s.result ? 'result' : ''];
+    var parts = [s.eligibleCount, s.canPrestige, s.minChars, s.result ? 'result' : ''];
     for (var i = 0; i < s.planets.length; i++) {
       var p = s.planets[i];
       parts.push(p.kind + ':' + p.seed + ':' + p.generation + ':' + p.stageIdx + ':'
@@ -4486,9 +4491,9 @@ class ProtoplanetApp {
     if (p) togglePick(p);
   });
   document.getElementById('skipBtn').addEventListener('click', function () {
-    if (!fusing) return;
-    fusing = false;
-    fuseA = null; fuseB = null;
+    if (!prestiging) return;
+    prestiging = false;
+    prestigeA = null; prestigeB = null;
     collisionWrapEl.hidden = true;
     renderAll();
   });
@@ -4502,7 +4507,7 @@ class ProtoplanetApp {
     sec += 0.15;
     tick++;
     if (document.hidden) return;
-    if (fusing) { renderCollision(); return; }
+    if (prestiging) { renderCollision(); return; }
     if (tick % 3 === 0) {
       // Round 17 (H): no refreshSlotArt() here — the slot planets
       // are static (Devon: the planet isn't animated in the tiny
@@ -4526,7 +4531,7 @@ class ProtoplanetApp {
     // the character-count text — no card art, no slot art, no
     // starfields. Same signature-guard shape as the system panel.
     var sig = prestigeSig(msg);
-    if (sig === lastPrestigeSig && !msg.result && !fusing) {
+    if (sig === lastPrestigeSig && !msg.result && !prestiging) {
       state = msg;
       updatePrestigeTextOnly();
       return;
@@ -4535,16 +4540,16 @@ class ProtoplanetApp {
     var hadResult = !!(state && state.result);
     state = msg;
     if (state.result && !hadResult) {
-      // A fusion just landed: the parents retire, so the picks clear.
-      // The collision plays first (fusing stays on until it ends);
-      // if the fusion came from somewhere else, the result shows now.
+      // A prestige just landed: the parents retire, so the picks clear.
+      // The collision plays first (prestiging stays on until it ends);
+      // if the prestige came from somewhere else, the result shows now.
       pickA = null; pickB = null; confirmOpen = false;
-      if (!fusing) renderAll();
-    } else if (fusing && !state.result) {
-      // The fusion didn't go through (a parent changed mid-flight).
-      fusing = false;
+      if (!prestiging) renderAll();
+    } else if (prestiging && !state.result) {
+      // The prestige didn't go through (a parent changed mid-flight).
+      prestiging = false;
       collisionWrapEl.hidden = true;
-      lastError = 'That fusion didn’t go through — a parent may have changed. Pick again.';
+      lastError = 'That prestige didn’t go through — a parent may have changed. Pick again.';
       renderAll();
     } else {
       renderAll();
