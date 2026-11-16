@@ -60,9 +60,14 @@ class ProtoplanetApp {
     this.initSaveProtection(loaded);
     // Birth notifications (round 6): the key of the planet already
     // notified — seed:generation — so a reload never re-toasts an old
-    // hatch. Set from the LOADED state before the first pushState();
-    // a first run starts at null (no planet yet).
-    this.lastBirthKey = this.state.current ? `${this.state.current.seed}:${this.state.generation}` : null;
+    // hatch. Set from the LOADED state before the first pushState()
+    // via birthKey() — the planet's OWN stamped generation, not the
+    // lives counter (round 22: the old hand-built key used
+    // state.generation, so a reactivated planet — stamped Gen 3
+    // while the counter had moved on — mismatched on every reload
+    // and re-toasted "was born!" for a planet that hatched weeks
+    // ago). A first run starts at null (no planet yet).
+    this.lastBirthKey = this.birthKey();
     this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     this.statusBar.command = 'protoplanet.showPet';
     this.statusBar.tooltip = 'Protoplanet — click to show your planet';
@@ -281,11 +286,14 @@ class ProtoplanetApp {
     this.notify(Logic.stageUpMessage(cur, stageIdx));
   }
 
-  // Round 11 — the archive is full (200/200): archiving refuses
+  // Round 11 — the stored collection is full (200/200): archiving refuses
   // instead of silently deleting the oldest planet. One shared
   // message for every birth / switch / prestige path that hits it.
+  // Round 22: "Archive" renamed to "Stored" in the user-visible text
+  // (the collection was renamed to Index on Nov 12; "Archive" was a
+  // stale leftover). Internal names stay.
   notifyArchiveFull() {
-    this.notify(`Archive is full (${(this.state.past || []).length}/${Logic.CONFIG.PAST_LIMIT}) — salvage an archived planet from the Index to make room.`);
+    this.notify(`Stored planets are full (${(this.state.past || []).length}/${Logic.CONFIG.PAST_LIMIT}) — salvage a stored planet from the Index to make room.`);
   }
 
   // Round 14 — a birth refused for lack of a Birth mineral. One
@@ -585,7 +593,7 @@ class ProtoplanetApp {
   // family in a second pick, naming the exact mutations and odds per family.
   // Round 16 overhaul — exactly three items, labels + odds rendered
   // from the shared probability helpers (§7), never hardcoded:
-  // Birth Mineral (1,000 ✦, creates one planet), Random Mutation
+  // Birth Mineral (2,500 ✦, creates one planet), Random Mutation
   // Mineral (250,000 ✦, 1 of 13), Family Mutation Mineral (400,000 ✦,
   // Moon/Rings/Glow/Sky only). The Mystery Mineral is gone
   // (round 15 — Devon).
@@ -2316,15 +2324,6 @@ class ProtoplanetApp {
      Gold stays the legendary/set color — violet is mutation-only. */
   .badge.mut { color: #c9a6ff; border: 1px solid rgba(183, 140, 255, 0.6); background: rgba(183, 140, 255, 0.12); }
   .empty { font-size: 13px; opacity: .65; padding: 18px 0; }
-  /* Hide-UI (H): only the orrery stays. */
-  body.hide-ui #topbar, body.hide-ui #bottomStrip { display: none !important; }
-  body.hide-ui #detail { visibility: hidden; }
-  /* The way back (Devon, Nov 12 — F5 feedback: he hid the UI and got
-     stuck with no visible way back). A minimal pill in the
-     bottom-left corner while the UI is hidden — click it, or press H
-     or Esc, to show the interface again. */
-  #showUiPill { display: none; position: fixed; left: 14px; bottom: 12px; z-index: 30; }
-  body.hide-ui #showUiPill { display: block; }
 </style>
 </head>
 <body>
@@ -2336,7 +2335,6 @@ class ProtoplanetApp {
     <button id="tabMutations" class="tab" data-mode="mutations">Mutations</button>
   </div>
   <div id="stardustChip" title="Stardust — earned per character typed">✦ <span id="stardustBal">0</span><span id="stardustRate" class="rate"></span></div>
-  <button id="hideUiBtn" class="ghost" title="Hide the interface (H)">Hide UI</button>
 </header>
 <div id="orreryWrap">
   <div id="orrery"><div id="world"></div></div>
@@ -2344,12 +2342,11 @@ class ProtoplanetApp {
     <button id="zoomOut" title="Zoom out">&minus;</button>
     <button id="zoomIn" title="Zoom in">+</button>
     <button id="fitBtn" title="Fit the whole system">Fit</button>
-    <span>Drag to pan &middot; Scroll to zoom &middot; Click a planet to zoom in &middot; H hides the UI</span>
+    <span>Drag to pan &middot; Scroll to zoom &middot; Click a planet to zoom in</span>
   </div>
 </div>
 <div id="detail" hidden></div>
 <div id="pickerBanner" hidden></div>
-<button id="showUiPill" class="ghost" title="Show the interface (H)">H &middot; show UI</button>
 <section id="index">
   <p id="indexCount"></p>
   <div id="indexBar">
@@ -2497,14 +2494,6 @@ class ProtoplanetApp {
   document.getElementById('tabOrrery').addEventListener('click', function () { setMode('orrery'); });
   document.getElementById('tabIndex').addEventListener('click', function () { setMode('index'); });
   document.getElementById('tabMutations').addEventListener('click', function () { setMode('mutations'); });
-  document.getElementById('hideUiBtn').addEventListener('click', function () {
-    document.body.classList.toggle('hide-ui');
-  });
-  // The way back from a hidden UI (Devon, Nov 12 — F5 feedback).
-  // H and Esc also bring it back (see the keydown handler below).
-  document.getElementById('showUiPill').addEventListener('click', function () {
-    document.body.classList.remove('hide-ui');
-  });
 
   function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -3367,7 +3356,7 @@ class ProtoplanetApp {
     if (pickerRing !== null) list = list.filter(function (p) { return slotOf(p.seed, p.generation) < 0; });
     document.getElementById('indexCount').textContent =
       state.totalPlanets + ' planet' + (state.totalPlanets === 1 ? '' : 's') + ' — ' + state.ringsUsed + ' on rings'
-      + ' · Archive ' + (state.archiveCount || 0) + '/' + (state.archiveLimit || 200)
+      + ' · Stored ' + (state.archiveCount || 0) + '/' + (state.archiveLimit || 200)
       + ' · ✦' + (state.systemEarnRateText || '0') + '/char';
     if (list.length === 0) {
       tilesEl.innerHTML = '<div class="empty">' + (state.totalPlanets === 0
@@ -3599,12 +3588,14 @@ class ProtoplanetApp {
 
   // --- rank line -------------------------------------------------------------
   // One slim line (Devon, Nov 12 — the old one packed rank, finished
-  // planets, rings used and the next unlock into one sentence). The
-  // finished count lives in the Index count line; the lock labels on
-  // the orrery already say how many more planets the next ring needs.
+  // planets, rings used and the next unlock into one sentence; round
+  // 22 dropped the "Rank N" part — rank is just finished/3, so it is
+  // redundant with the ring total, and Devon asked what rank meant).
+  // The finished count lives in the Index count line; the lock labels
+  // on the orrery already say how many more planets the next ring needs.
   function updateRankLine() {
     if (!state) return;
-    var line = 'Rank ' + state.rank + ' &middot; ' + state.ringsUsed + '/' + state.totalSlots + ' rings';
+    var line = state.ringsUsed + '/' + state.totalSlots + ' rings';
     if (state.nextAt !== null) line += ' &middot; ' + state.toNext + ' to next ring';
     else line += ' &middot; max rings';
     document.getElementById('rankLine').innerHTML = line;
@@ -3926,13 +3917,7 @@ class ProtoplanetApp {
     if (e.key === 'Escape') {
       if (pickerRing !== null) cancelPicker();
       else if (detailOpen) closeDetail();
-      else if (document.body.classList.contains('hide-ui')) document.body.classList.remove('hide-ui');
       return;
-    }
-    // H hides the interface (only the orrery stays) — not while
-    // typing in the search box.
-    if ((e.key === 'h' || e.key === 'H') && !/^(INPUT|SELECT|TEXTAREA)$/.test((e.target && e.target.tagName) || '')) {
-      document.body.classList.toggle('hide-ui');
     }
   });
   // A resize changes the tile widths, so the tile art re-renders

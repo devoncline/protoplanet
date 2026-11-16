@@ -184,7 +184,7 @@ const CONFIG = {
   // x5, Birth only x2, because Stardust got too easy to farm.
   // The gamble gives a MINERAL, never a direct mutation — the
   // player still applies it with the 50% coin flip. The Birth
-  // mineral stays cheap at 1,000 (cheap fuel): a new player must be
+  // mineral stays cheap at 2,500 (cheap fuel): a new player must be
   // able to afford their first planet — never gate core gameplay
   // behind currency. The power items are expensive instead: a Moon
   // Lord at 81/char needs ~3,086 chars for a Random Mutation
@@ -192,7 +192,8 @@ const CONFIG = {
   // Mineral is gone (round 15): at 5% it was a lottery ticket for
   // a Birth mineral you could just buy for half the price — Devon
   // removed it.
-  SHOP_BIRTH_PRICE: 1000,
+  // Round 22 (Devon, Nov 15): Birth 1,000 -> 2,500.
+  SHOP_BIRTH_PRICE: 2500,
   SHOP_RANDOM_MUTATION_PRICE: 250000,
   SHOP_FAMILY_PICK_PRICE: 400000,
 };
@@ -985,9 +986,11 @@ function payBirthCost(state) {
   return { ok: true, free: false, spent };
 }
 
-// Plain words for a blocked birth (the host shows it).
+// Plain words for a blocked birth (the host shows it). The price
+// comes from CONFIG, never a hardcoded number (round 22 — the old
+// text said 1,000 after the price moved to 2,500).
 function needPlainMineralMessage() {
-  return 'Birthing a planet costs 1 Birth mineral — buy one in the shop (1,000 ✦) or salvage a planet.';
+  return 'Birthing a planet costs 1 Birth mineral — buy one in the shop (' + CONFIG.SHOP_BIRTH_PRICE.toLocaleString('en-US') + ' ✦) or salvage a planet.';
 }
 
 // ---------------------------------------------------------------------------
@@ -998,7 +1001,7 @@ function needPlainMineralMessage() {
 // "found" in the Mutation Index — discovery means seeing it on a
 // planet (birth or a landed apply), not owning the bottle.
 // Round 16 overhaul: the shop sells exactly three items — a Birth
-// mineral (1,000 ✦, no family, no surprise), a Random Mutation
+// mineral (2,500 ✦, no family, no surprise), a Random Mutation
 // Mineral (250,000 ✦, uniform 1 of 13), a Family Mutation Mineral
 // (400,000 ✦, Moon/Rings/Glow/Sky only). There is no random-family
 // draw anywhere anymore.
@@ -1015,7 +1018,7 @@ function randomMutationMineralSpec(rng) {
   return { family: (def && def.tags && def.tags[0]) || 'weird', mutation: id, source: 'shop' };
 }
 
-// Buy a Birth mineral (1,000 ✦): exactly one birth, no family, no
+// Buy a Birth mineral (2,500 ✦): exactly one birth, no family, no
 // surprise — it can never apply a mutation. No rng needed: there is
 // nothing random about it.
 function buyBirthMineral(state) {
@@ -1686,7 +1689,10 @@ function makeCurrent(state, index) {
   // record's generation is the authoritative birth order.
   planet.generation = revived.generation;
   state.current = planet;
-  addJournal(state.current, 'grow', 'Grew again');
+  // Round 22 (Devon, Nov 15): no journal entry for growing again —
+  // the revive is not a story beat, and the "X is growing again!"
+  // toast already says it. (The old addJournal('grow', 'Grew again')
+  // call lived here; existing entries are stripped on load.)
   normalizeSystem(state);
   return { ok: true, planet: state.current };
 }
@@ -2009,6 +2015,17 @@ function deserializeState(json) {
     if (p.planet) seedJournalFor(p.planet, p.archivedAt || Date.now());
     else seedJournalFor(p, p.archivedAt || Date.now());
   }
+  // Round 22 (Devon, Nov 15): the 'grow' journal kind is gone —
+  // reviving a planet ("Grew again") was never a story beat, so no
+  // new entries are written and stored ones are stripped here, on
+  // load (current + past records, snapshot or flat), so they never
+  // show in the journal views again. Idempotent: a clean save has
+  // nothing to strip, and the cleaned state persists on next save.
+  const stripGrow = (planet) => {
+    if (planet && Array.isArray(planet.journal)) planet.journal = planet.journal.filter((e) => e.kind !== 'grow');
+  };
+  stripGrow(s.current);
+  for (const p of s.past) { stripGrow(p); stripGrow(p.planet); }
   normalizeSystem(s);
   return {
     state: s,

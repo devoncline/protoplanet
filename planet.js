@@ -225,18 +225,19 @@ const CONFIG = {
 
   // --- Birth variants (round 12, Nov 14) ---------------------------------
   // The Shattered look a planet is BORN with is a seeded variant —
-  // most planets get the classic burst, some get one of four variant
-  // looks (Devon, Nov 14: egg, cracked shell, twin clump, and the
-  // frozen birth-morph frame with disc + ring). Same seed = same
-  // variant, forever — and every seed still looks different INSIDE
-  // its variant (crack path/angle, egg angle, twin colors all vary
-  // per seed). One tunable table, so Devon can retune after playing.
+  // five looks (Devon, Nov 14: classic burst, egg, cracked shell,
+  // twin clump, and the frozen birth-morph frame with disc + ring).
+  // Equal odds (round 22, Nov 15 — Devon: every variant 20%, so no
+  // look dominates births). Same seed = same variant, forever — and
+  // every seed still looks different INSIDE its variant (crack
+  // path/angle, egg angle, twin colors all vary per seed). One
+  // tunable table, so Devon can retune after playing.
   BIRTH_VARIANTS: [
-    { id: 'classic', weight: 70 },
-    { id: 'egg',     weight: 10 },
-    { id: 'cracked', weight: 7 },
-    { id: 'twin',    weight: 10 },
-    { id: 'morph',   weight: 5 },
+    { id: 'classic', weight: 20 },
+    { id: 'egg',     weight: 20 },
+    { id: 'cracked', weight: 20 },
+    { id: 'twin',    weight: 20 },
+    { id: 'morph',   weight: 20 },
   ],
   // Crack glow colors (Nov 14): ONE per seed — purple for even seeds,
   // neon green for odd. Never both on one planet.
@@ -1239,28 +1240,47 @@ function drawBirthVariant(grid, r, sec, planet, variant) {
     return;
   }
   if (variant === 'cracked') {
-    drawPlanet(grid, ROCK, 0.45 * r, sec, planet, 1.0, 'exploded', noMuts);
-    applyBirthCracks(grid, CX, CY, 0.45 * r, seed);
+    // Round 22 (Devon, Nov 15): the cracked core was too small in
+    // its frame — 0.45r read as a zoomed-out pebble and the crack
+    // detail was unreadable. 0.65r (~44% bigger, ~2x the area) fills
+    // the frame like the other variants; the crack path/angle and the
+    // one-hue-per-seed glow rule are unchanged.
+    drawPlanet(grid, ROCK, 0.65 * r, sec, planet, 1.0, 'exploded', noMuts);
+    applyBirthCracks(grid, CX, CY, 0.65 * r, seed);
     return;
   }
-  // Twin clump: two separate lumpy cores. The second is a different
-  // (seeded) terrain, so the clumps are two different colors; which
-  // side is which alternates by seed parity.
+  // Twin clump: two separate lumpy cores on a shared ORBIT around
+  // the disc center (round 22, Nov 15 — Devon: the old pair spun in
+  // place and never moved). Same pattern as the moons (drawMoons):
+  // a seeded phase and speed, the angle advances with sec, the two
+  // clumps sit opposite each other (PI apart), and the vertical is
+  // squashed 0.5x for the 10x18 cells — so in aspect-correct space
+  // the orbit is a circle. The far clump (oy < 0, the moons' rule)
+  // draws first, so the near one passes in front of it once per
+  // orbit. Seeded, so the same seed keeps the same phase
+  // relationship at the same time.
   const second = birthTwinSecondPlanet(seed, planet.terrain);
   const gA = makeGrid(), gB = makeGrid();
   drawPlanet(gA, ROCK, 0.22 * r, sec, planet, 1.0, 'exploded', noMuts);
   drawPlanet(gB, ROCK, 0.22 * r, sec, second, 1.0, 'exploded', noMuts);
+  const orng = mulberry32(((seed || 0) ^ 0x7A11) >>> 0);
+  const oPhase = orng() * Math.PI * 2;
+  const oSpeed = (0.25 + orng() * 0.15) * (orng() < 0.5 ? 1 : -1); // 0.25-0.40 rad/s, either direction
+  const oAng = oPhase + sec * oSpeed;
+  const oR = 0.35 * r;
+  const oA = { dx: oR * Math.cos(oAng), dy: 0.5 * oR * Math.sin(oAng) };
+  const oB = { dx: -oA.dx, dy: -oA.dy };
   const leftFirst = ((seed % 2) === 0);
-  const gL = leftFirst ? gA : gB, gR = leftFirst ? gB : gA;
-  for (let y = 0; y < CONFIG.H; y++) for (let x = 0; x < CONFIG.W; x++) {
-    const ca = gL[y][x], cb = gR[y][x];
-    if (ca[1] !== null) {
-      const xx = Math.round(x - 0.35 * r);
-      if (xx >= 0 && xx < CONFIG.W) grid[y][xx] = [ca[0], ca[1]];
-    }
-    if (cb[1] !== null) {
-      const xx = Math.round(x + 0.35 * r);
-      if (xx >= 0 && xx < CONFIG.W) grid[y][xx] = [cb[0], cb[1]];
+  const gFirst = leftFirst ? gA : gB, gSecond = leftFirst ? gB : gA;
+  const order = oA.dy < 0
+    ? [{ g: gFirst, o: oA }, { g: gSecond, o: oB }]
+    : [{ g: gSecond, o: oB }, { g: gFirst, o: oA }];
+  for (const part of order) {
+    for (let y = 0; y < CONFIG.H; y++) for (let x = 0; x < CONFIG.W; x++) {
+      const c = part.g[y][x];
+      if (c[1] === null) continue;
+      const xx = Math.round(x + part.o.dx), yy = Math.round(y + part.o.dy);
+      if (xx >= 0 && xx < CONFIG.W && yy >= 0 && yy < CONFIG.H) grid[yy][xx] = [c[0], c[1]];
     }
   }
 }

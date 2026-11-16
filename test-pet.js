@@ -1406,11 +1406,9 @@ check('ext: disc detail follows the camera zoom directly (continuous, not steppe
   extSrc.includes('return P.discDetail(zoom);') && extSrc.includes('P.sunDetail(zoom)'));
 check('ext: discs + star counter-scale so glyphs stay at final size',
   extSrc.includes('scale(var(--inv-zoom, 1))') && extSrc.includes("setProperty('--inv-zoom'"));
-check('ext: hide-UI pill exists, hidden by default, shown while hidden',
-  extSrc.includes('id="showUiPill"') && extSrc.includes('#showUiPill { display: none;')
-  && extSrc.includes('body.hide-ui #showUiPill { display: block; }'));
-check('ext: hide-UI pill click brings the UI back',
-  extSrc.includes("getElementById('showUiPill')") && extSrc.includes("classList.remove('hide-ui')"));
+check('ext: Hide UI is gone (round 22 — Devon: no reason for it)',
+  !extSrc.includes('hideUiBtn') && !extSrc.includes('showUiPill') && !extSrc.includes('hide-ui')
+  && !extSrc.includes('Hide UI') && !extSrc.includes('H hides'));
 check('ext: Index grid has no gray background (panel black, hairline tiles)',
   extSrc.includes('#tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 0; background: #050505; }'));
 check('ext: sidebar pet sits in a rounded gray card (Devon, Nov 12 — round 3 Pokechi-style; the flat #171717 square card was round 2)',
@@ -2005,8 +2003,8 @@ check('ext: share PNG caption uses the shared seed', extSrc.includes("(state.sha
   check('ext: drift pauses while the detail sheet is open (incl. while zoomed)',
     sysHtml.includes('if (!hoverPlanet && !detailOpen)')
     && sysHtml.includes("if (mode === 'orrery') zoomToPlanet(planet);"));
-  // Hide-UI (H).
-  check('ext: H hides the interface', sysHtml.includes("classList.toggle('hide-ui')") && sysHtml.includes('body.hide-ui'));
+  // Hide-UI (H) is gone (round 22 — Devon: no reason for it).
+  check('ext: no H key hides the interface', !sysHtml.includes("classList.toggle('hide-ui')") && !sysHtml.includes('body.hide-ui'));
   // Instrument style: mono type, one amber accent, no green badge.
   check('ext: system panel uses a monospace stack', sysHtml.includes("ui-monospace, SFMono-Regular, Menlo"));
   check('ext: no green badge left in the system panel', !sysHtml.includes('#7ee2a8'));
@@ -2090,8 +2088,9 @@ check('ext: share PNG caption uses the shared seed', extSrc.includes("(state.sha
     sysHtml.includes('.badge.sys') && sysHtml.includes('.tab.active') && sysHtml.includes('#e8b64c'));
   check('ext: index header is one slim line, no heading',
     !sysHtml.includes('<h2>Index</h2>') && sysHtml.includes('id="indexCount"'));
-  check('ext: rank line is trimmed (rank + rings + to-next only)',
-    sysHtml.includes("'Rank ' + state.rank") && !sysHtml.includes('finished planet'));
+  check('ext: rank line shows rings only, no Rank number (round 22)',
+    sysHtml.includes("state.ringsUsed + '/' + state.totalSlots + ' rings'")
+    && !sysHtml.includes("'Rank ' + state.rank") && !sysHtml.includes('finished planet'));
 })();
 
 // 20. Prestige Instrument restyle (Devon, Nov 12): the prestige panel gets
@@ -2580,7 +2579,8 @@ check('ext: mutationChance view model carries the base chance for the panel',
   eq('journal: prestige ok', pres.ok, true);
   check('journal: offspring born of its parents', pres.planet.journal.some((e) => e.kind === 'prestige' && e.text.includes('Born of')));
   check('journal: archived parent recorded it', st.past.some((p) => (p.planet.journal || []).some((e) => e.kind === 'prestige' && e.text === 'Became a parent')));
-  // Grow entry: growing an old planet again writes "Grew again".
+  // Grow entry (round 22, Devon, Nov 15): growing an old planet
+  // again writes NO journal entry — the revive is not a story beat.
   st = freshWithPlanet(42);
   L.applyXp(st, 500, seedSeq());
   // Round 16 — the birth costs 1 Birth mineral; fund it.
@@ -2588,7 +2588,7 @@ check('ext: mutationChance view model carries the base chance for the panel',
   L.newPlanet(st, seedSeq(8000));
   const grow = L.makeCurrent(st, 0);
   eq('journal: grow ok', grow.ok, true);
-  check('journal: grow entry appended', grow.planet.journal.some((e) => e.kind === 'grow' && e.text === 'Grew again'));
+  check('journal: grow writes no entry (round 22)', !grow.planet.journal.some((e) => e.kind === 'grow'));
   // Migration: an old save without journals gets a seeded birth entry.
   st = freshWithPlanet(42);
   L.applyXp(st, 500, seedSeq());
@@ -2648,14 +2648,14 @@ check('ext: mutationChance view model carries the base chance for the panel',
 // detail sheet to free a slot.
 check('ext: detail sheet renders the journal',
   extSrc.includes('Latest</h3>') && extSrc.includes('journalHtml') && extSrc.includes('jentry'));
-check('ext: Index header shows the archive count',
-  extSrc.includes('archiveCount') && extSrc.includes('Archive ') && extSrc.includes('archiveLimit'));
+check('ext: Index header shows the stored count (round 22 — "Archive" renamed)',
+  extSrc.includes('archiveCount') && extSrc.includes('Stored ') && extSrc.includes('archiveLimit'));
 check('ext: Index tiles show a one-line journal',
   extSrc.includes('journalLine') && extSrc.includes('jline'));
 check('ext: view model carries the journal and the archive count',
   extSrc.includes('journal: (record.journal') && extSrc.includes('archiveCount: (this.state.past'));
-check('ext: archive-full toast on refused births',
-  extSrc.includes('notifyArchiveFull') && extSrc.includes('Archive is full') && extSrc.includes('salvage an archived planet'));
+check('ext: stored-full toast on refused births (round 22 — "Archive" renamed)',
+  extSrc.includes('notifyArchiveFull') && extSrc.includes('Stored planets are full') && extSrc.includes('salvage a stored planet'));
 check('ext: event toasts once on a stage-up event',
   extSrc.includes('Something happened on') && extSrc.includes('res.event'));
 check('ext: archived planet can be salvaged from its detail sheet',
@@ -2803,7 +2803,7 @@ function ratePlanet(xp, mutations, eventTitles) {
   check('birth cost: the Birth mineral was spent, nothing left',
     st.minerals.length === 0 && paid.spentMineral !== null && paid.spentMineral.kind === 'birth');
   eq('birth cost: needPlainMineralMessage names the Birth mineral + price',
-    L.needPlainMineralMessage(), 'Birthing a planet costs 1 Birth mineral — buy one in the shop (1,000 ✦) or salvage a planet.');
+    L.needPlainMineralMessage(), 'Birthing a planet costs 1 Birth mineral — buy one in the shop (2,500 ✦) or salvage a planet.');
   // birthMineralIndex finds kind === 'birth' only.
   st = freshWithPlanet(42);
   L.addMinerals(st, [
@@ -2989,12 +2989,13 @@ function ratePlanet(xp, mutations, eventTitles) {
 // the Mystery Mineral is GONE (Devon — it was a 5% lottery ticket
 // for a Birth mineral you could just buy), and the power items
 // cost much more (Random Mutation 250,000, Family Pick 400,000) while
-// the Birth mineral is 1,000 (round 20 — Devon, Nov 15: power items
-// x5, Birth x2, because Stardust got too easy to farm).
+// the Birth mineral is 2,500 (round 22 — Devon, Nov 15: Birth
+// 1,000 -> 2,500; round 20 had set power items x5, Birth x2,
+// because Stardust got too easy to farm).
 // Round 16 overhaul: the plain mineral is a Birth mineral now
 // (kind 'birth', no family), the Wheel is buyRandomMutationMineral.
 {
-  eq('shop: Birth price is 1000 (round 20)', L.CONFIG.SHOP_BIRTH_PRICE, 1000);
+  eq('shop: Birth price is 2500 (round 22)', L.CONFIG.SHOP_BIRTH_PRICE, 2500);
   eq('shop: old plain price const is gone', L.CONFIG.SHOP_PLAIN_PRICE, undefined);
   eq('shop: mystery price is gone', L.CONFIG.SHOP_MYSTERY_PRICE, undefined);
   eq('shop: mystery chance is gone', L.CONFIG.SHOP_MYSTERY_MUTATION_CHANCE, undefined);
@@ -3007,20 +3008,20 @@ function ratePlanet(xp, mutations, eventTitles) {
   eq('shop: Family Pick families are moon/rings/glow/sky',
     L.CONFIG.FAMILY_PICK_FAMILIES.join(','), 'moon,rings,glow,sky');
   st = freshWithPlanet(42);
-  st.stardust = 1000;
+  st.stardust = 2500;
   const bought = L.buyBirthMineral(st);
-  eq('shop: Birth mineral deducts 1000', st.stardust, 0);
+  eq('shop: Birth mineral deducts 2500', st.stardust, 0);
   eq('shop: Birth mineral added', bought.ok, true);
   eq('shop: bought mineral is a Birth mineral', bought.mineral.kind, 'birth');
   eq('shop: bought mineral carries no mutation', bought.mineral.mutation, null);
   eq('shop: bought mineral carries no family', bought.mineral.family, null);
   eq('shop: bought mineral is from the shop', bought.mineral.source, 'shop');
   eq('shop: bought mineral is named Birth mineral', L.mineralName(bought.mineral), 'Birth mineral');
-  st.stardust = 999;
+  st.stardust = 2499;
   const broke = L.buyBirthMineral(st);
-  eq('shop: 999 Stardust cannot buy a Birth mineral', broke.ok, false);
+  eq('shop: 2499 Stardust cannot buy a Birth mineral', broke.ok, false);
   eq('shop: refusal reason', broke.reason, 'not enough stardust');
-  eq('shop: refused purchase spends nothing', st.stardust, 999);
+  eq('shop: refused purchase spends nothing', st.stardust, 2499);
   eq('shop: refused purchase adds nothing', st.minerals.length, 1);
   // Random Mutation Mineral: always a mutation mineral.
   st.stardust = 250000;
@@ -3140,7 +3141,7 @@ check('ext: shop buys a Birth mineral through the logic', extSrc.includes('Logic
 check('ext: shop has no mystery item left', !extSrc.includes("kind: 'mystery'") && !extSrc.includes('Logic.buyMysteryMineral') && !extSrc.includes('SHOP_MYSTERY_PRICE'));
 check('ext: shop buys a Random Mutation Mineral through the logic', extSrc.includes('Logic.buyRandomMutationMineral'));
 check('ext: shop family-picks through the logic', extSrc.includes('Logic.buyFamilyPick'));
-check('ext: shop prices read with commas (1,000 not 1000)',
+check('ext: shop prices read with commas (2,500 not 2500)',
   extSrc.includes('const price = (n) => n.toLocaleString()') && extSrc.includes('price(Logic.CONFIG.SHOP_RANDOM_MUTATION_PRICE)'));
 check('ext: shop has no old plain/wheel wiring left',
   !extSrc.includes('Logic.buyPlainMineral') && !extSrc.includes('Logic.buyMutationWheel')
@@ -3325,7 +3326,8 @@ check('ext: Stardust chip updates on every state push',
   extSrc.includes('function updateStardustChip()')
   && extSrc.includes("updateRankLine();\n    updateStardustChip();")
   && extSrc.includes("Math.floor(state.stardust || 0).toLocaleString()"));
-check('ext: Stardust chip hides with the UI', extSrc.includes("body.hide-ui #topbar"));
+check('ext: top bar is never hidden by a hide-UI rule (round 22 — the feature is gone)',
+  !extSrc.includes('body.hide-ui #topbar'));
 
 // 20h. Spending boundaries + economy exploits (round 15).
 {
@@ -3333,7 +3335,7 @@ check('ext: Stardust chip hides with the UI', extSrc.includes("body.hide-ui #top
   // spends nothing, and a failed purchase never adds a mineral.
   st = freshWithPlanet(42);
   const minerals0 = st.minerals.length;
-  st.stardust = 1000;
+  st.stardust = 2500;
   eq('spend: exact-balance Birth mineral succeeds', L.buyBirthMineral(st).ok, true);
   eq('spend: exact-balance Birth mineral leaves 0', st.stardust, 0);
   eq('spend: exact-balance Birth mineral adds one mineral', st.minerals.length, minerals0 + 1);
@@ -3366,8 +3368,8 @@ check('ext: Stardust chip hides with the UI', extSrc.includes("body.hide-ui #top
   eq('spend: second Random Mutation with 0 balance fails', L.buyRandomMutationMineral(st, () => 0.0).ok, false);
   eq('spend: balance never goes negative', st.stardust, 0);
   // Fractional balances (rates like 1.5/char accumulate fractions)
-  // spend fine: 1000.5 buys a Birth mineral and leaves 0.5.
-  st.stardust = 1000.5;
+  // spend fine: 2500.5 buys a Birth mineral and leaves 0.5.
+  st.stardust = 2500.5;
   eq('spend: fractional balance buys a Birth mineral', L.buyBirthMineral(st).ok, true);
   eq('spend: fractional remainder kept', st.stardust, 0.5);
   // Typing nothing earns nothing; a planet-less state earns nothing.

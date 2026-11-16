@@ -832,10 +832,11 @@ const s0r = 18.0 * (s0Planet.size || 1.0);
   // Deterministic: same seed, same variant — and all five ids show up.
   check('birthVariant: deterministic per seed',
     P.birthVariant(123) === P.birthVariant(123) && P.birthVariant(0) === P.birthVariant(0), '');
-  // Weights are Devon's pick (Nov 14): classic 70 / egg 10 / cracked 7 /
-  // twin 10 / morph 5 — most planets stay classic, the new ones are rare.
-  check('birthVariant: weights are classic 70 / egg 10 / cracked 7 / twin 10 / morph 5',
-    JSON.stringify(P.CONFIG.BIRTH_VARIANTS.map(v => v.weight)) === JSON.stringify([70, 10, 7, 10, 5]),
+  // Weights are Devon's pick (round 22, Nov 15): all five equal at
+  // 20% each — no look dominates births. (Was classic 70 / egg 10 /
+  // cracked 7 / twin 10 / morph 5, Nov 14.)
+  check('birthVariant: weights are all 20 (equal odds, round 22)',
+    JSON.stringify(P.CONFIG.BIRTH_VARIANTS.map(v => v.weight)) === JSON.stringify([20, 20, 20, 20, 20]),
     P.CONFIG.BIRTH_VARIANTS.map(v => `${v.id}:${v.weight}`).join(' '));
   // Stage renames (Devon, Nov 14): Oceans -> Tides, Life -> Eden.
   check('stages: renamed to Tides (4) and Eden (5)',
@@ -1021,7 +1022,7 @@ const s0r = 18.0 * (s0Planet.size || 1.0);
 // core's surface like the other stages; and the dark side didn't pulse
 // at all, so the whole core must breathe. ---------------------------
 // Two seeded ember patches, antipodal, one spin rate (a rigid sphere).
-const lavaPlanet = P.generatePlanet(423438201); // Devon's current seed
+const lavaPlanet = P.generatePlanet(20); // lava terrain + classic burst under the round-22 equal odds (the old fixture seed 423438201 is a cracked variant now — the pulse/marker tests below render the classic burst)
 function coreMarkersOf(planet) {
   const cm = P.buildCoreMarkers(planet.seed);
   const r = 18.0 * (planet.size || 1.0);
@@ -2180,7 +2181,13 @@ check('name: generatePlanet carries the seed name',
 // as stage0Style/smokeScale, which drew stage 0 as a sparse
 // non-exploded core (264 cells instead of 670).
 {
-  const cp = P.generatePlanet(805839337);
+  // Round 22: the fixture seed is a classic burst under the equal
+  // odds (the old seed 805839337 is an egg now — the density checks
+  // below render the classic burst, not the small egg core). Seed 27
+  // is classic with no ring, so its stage-6 content stays inside
+  // the crop's 4-cell fringe allowance and its canonical stage-0
+  // render is dense (464 cells, over the 400 bar).
+  const cp = P.generatePlanet(27);
   const countCells = (g) => g.flat().filter((c) => c[1] !== null).length;
   // The crop covers the body + moons + atmosphere at every stage, and
   // is much smaller than the full grid — so the planet fills the frame.
