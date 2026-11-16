@@ -983,6 +983,12 @@ class ProtoplanetApp {
     // discovered (state.discovered) — a mutation stays found even
     // after its planet is destroyed.
     const discovered = new Set(this.state.discovered || []);
+    // Round 19 — the Mutations tab is a Fusion hub + mineral inventory
+    // + Sets now (Devon, Nov 15): the bingo card (one card per mutation
+    // with per-mutation carrier lists) is gone — a mutation lives on many
+    // planets, so listing carriers reads like it can only be on one.
+    // The header keeps the found count + honest odds; the sets carry
+    // per-mutation progress instead of a single holder line.
     const mutationIndex = {
       total: Planet.CONFIG.MUTATIONS.length,
       foundCount: Planet.CONFIG.MUTATIONS.filter((m) => discovered.has(m.id)).length,
@@ -992,25 +998,80 @@ class ProtoplanetApp {
       // chance is 8.73%, "1 in 11" — never render it raw here); the
       // per-mutation "1 in 143" comes from the shared helper.
       anyOddsText: `About 1 in 10 planets is born with a mutation · each one about ${Logic.formatOdds(Logic.birthMutationOdds().perMutation, 'one-in')}`,
-      entries: Planet.CONFIG.MUTATIONS.map((m) => ({
-        id: m.id,
-        name: m.name,
-        desc: m.desc,
-        family: (m.tags && m.tags[0]) || 'weird',
-        found: discovered.has(m.id),
-        carriers: index
-          .filter((p) => (p.mutations || []).includes(m.id))
-          .map((p) => ({ name: p.name, seed: p.seed, generation: p.generation, kind: p.kind })),
-      })),
       sets: Logic.CONFIG.SETS.map((s) => {
         const holder = index.find((p) => Logic.setsForPlanet(p).includes(s.id));
         return {
           id: s.id,
           name: s.name,
-          required: s.required.map((id) => (Planet.mutationDef(id) || { name: id }).name),
-          holder: holder ? { name: holder.name, seed: holder.seed, generation: holder.generation } : null,
+          required: s.required.map((id) => {
+            const def = Planet.mutationDef(id);
+            const carrier = index.find((p) => (p.mutations || []).includes(id));
+            return {
+              id,
+              name: def ? def.name : id,
+              found: discovered.has(id),
+              carrier: carrier ? carrier.name : null,
+            };
+          }),
+          holder: holder ? holder.name : null,
         };
       }),
+    };
+    // Round 19 — Fusion hub summary: the two parent slots (best ready
+    // parents first, then the planets closest to Civilization), the
+    // ready count, and the Birth-mineral balance for the cost line.
+    // No Gen anywhere — the label was removed in round 17.
+    const eligible = Logic.eligiblePrestigeParents(this.state);
+    const resolveRecord = (desc) => (desc.kind === 'current' ? this.state.current : this.state.past[desc.index]);
+    const readyParents = eligible
+      .map((d) => ({ record: resolveRecord(d), kind: d.kind }))
+      .filter((x) => x.record)
+      .sort((a, b) => (((b.record.mutations || []).length - (a.record.mutations || []).length)
+        || ((b.record.chars || 0) - (a.record.chars || 0))));
+    const allRecords = [
+      ...(this.state.current ? [{ record: this.state.current, kind: 'current' }] : []),
+      ...(this.state.past || []).map((p) => ({ record: p, kind: 'past' })),
+    ];
+    const nextClosest = allRecords
+      .filter((x) => !Logic.prestigeEligible(x.record))
+      .sort((a, b) => (b.record.chars || 0) - (a.record.chars || 0));
+    const slotFor = (x) => {
+      if (!x) return null;
+      return {
+        planet: renderable(x.record, x.kind),
+        ready: Logic.prestigeEligible(x.record),
+        chars: x.record.chars || 0,
+        toCiv: Math.max(0, Logic.CONFIG.PRESTIGE_MIN_CHARS - (x.record.chars || 0)),
+      };
+    };
+    const fusionSlots = [];
+    if (readyParents.length >= 2) {
+      fusionSlots.push(slotFor(readyParents[0]), slotFor(readyParents[1]));
+    } else if (readyParents.length === 1) {
+      fusionSlots.push(slotFor(readyParents[0]), slotFor(nextClosest[0]));
+    } else {
+      fusionSlots.push(slotFor(nextClosest[0]), slotFor(nextClosest[1]));
+    }
+    const fusion = {
+      readyCount: eligible.length,
+      minChars: Logic.CONFIG.PRESTIGE_MIN_CHARS,
+      slots: fusionSlots,
+      birthCount: Logic.mineralSummary(this.state).birth,
+      birthCost: 1,
+    };
+    // Round 19 — the mineral inventory for the tab: Mutation minerals
+    // first (alphabetical), then Birth — the same grouping as
+    // mineralInventory(), plus each mutation's real description and
+    // the shop prices for the footer line.
+    const minerals = Logic.mineralInventory(this.state);
+    minerals.groups = minerals.groups.map((g) => ({
+      ...g,
+      desc: g.mutation ? ((Planet.mutationDef(g.mutation) || {}).desc || '') : '',
+    }));
+    minerals.shopPrices = {
+      birth: Logic.CONFIG.SHOP_BIRTH_PRICE,
+      random: Logic.CONFIG.SHOP_RANDOM_MUTATION_PRICE,
+      family: Logic.CONFIG.SHOP_FAMILY_PICK_PRICE,
     };
     return {
       type: 'system',
@@ -1027,6 +1088,10 @@ class ProtoplanetApp {
       slots,
       index,
       mutationIndex,
+      // Round 19 — Fusion hub summary + mineral inventory for the
+      // redesigned Mutations tab.
+      fusion,
+      minerals,
       // Round 14: the Stardust balance and what the whole system earns.
       stardust: this.state.stardust || 0,
       systemEarnRate: Logic.systemEarnRate(this.state),
@@ -1085,6 +1150,21 @@ class ProtoplanetApp {
       this.notifySalvageLoss(doomedPanel, salvagePanelRes);
       this.saveNow();
       this.pushState();
+    } else if (msg.type === 'openPrestige') {
+      // Round 19 — the Mutations tab's Fusion hub opens the fusion
+      // panel without the command palette.
+      this.openPrestige();
+    } else if (msg.type === 'applyMineral' && typeof msg.mutation === 'string') {
+      // Round 19 — an Apply button on a mineral row runs the same
+      // apply flow as the command, pre-filled with that mineral
+      // (named confirm, 50/50, nothing consumed on cancel).
+      const inv = Logic.mineralInventory(this.state);
+      const group = inv.groups.find((g) => g.mutation === msg.mutation);
+      if (!group) {
+        this.notify("That mineral is gone — it may have been spent already.");
+        return;
+      }
+      await this.handleMineralGroupPick(group);
     }
   }
 
@@ -1358,6 +1438,10 @@ class ProtoplanetApp {
       stardust: this.state.stardust || 0,
       earnRate: Logic.earnRate(cur),
       earnRateText: Logic.formatRate(Logic.earnRate(cur)),
+      // Round 19: the whole system's per-character total, for the
+      // floating chip next to the balance (the meta line above already
+      // shows this planet's own rate).
+      systemEarnRateText: Logic.formatRate(Logic.systemEarnRate(this.state)),
     };
   }
 
@@ -1523,7 +1607,7 @@ class ProtoplanetApp {
   // 'state' handler below keeps #sdBal live per keystroke.
   const sdChipEl = document.createElement('div');
   sdChipEl.id = 'sdChip';
-  sdChipEl.innerHTML = '✦ <span id="sdBal">0</span>';
+  sdChipEl.innerHTML = '✦ <span id="sdBal">0</span><span id="sdRate" class="rate"></span>';
   wrapEl.insertBefore(sdChipEl, wrapEl.firstChild);
   const root = document.documentElement;
   const FONT_STACK = ${JSON.stringify(FONT_STACK)};
@@ -1727,6 +1811,11 @@ class ProtoplanetApp {
     // meta line. Every keystroke pushes a fresh 'state' message, so
     // this stays live per character, like the status bar.
     document.getElementById('sdBal').textContent = Math.floor(msg.stardust || 0).toLocaleString();
+    // Round 19 — the system's per-character total rides in the chip
+    // next to the balance (the meta line already shows this planet's
+    // own rate).
+    var sdRateEl = document.getElementById('sdRate');
+    if (sdRateEl) sdRateEl.textContent = '· +' + (msg.systemEarnRateText || '0') + '/char';
     layout(); // text heights changed — re-fit the grid to the view height
   });
 
@@ -1867,6 +1956,11 @@ class ProtoplanetApp {
     padding: 4px 10px; border: 1px solid #e8b64c; border-radius: 999px;
     color: #e8b64c; font-size: 12px; white-space: nowrap;
     background: transparent; }
+  /* Round 19 — the per-character rate rides dimmed inside both
+     Stardust chips (system top bar + sidebar), so the balance stays
+     the hero and the rate reads as the gain it is. */
+  #stardustChip .rate, #sdChip .rate { opacity: .75; }
+  #sdChip .rate { margin-left: 6px; }
   /* The orrery takes up the whole screen below the top line — the
      panel never scrolls to a second section anymore. The Index is
      its own mode, reached from the tabs above. */
@@ -1981,28 +2075,65 @@ class ProtoplanetApp {
     padding: 14px 28px 48px; background: #050505; }
   body.mode-index #index { display: block; }
   body.mode-index #orreryWrap { display: none; }
-  /* The Mutation Index (round 10): the collection, not the orrery —
-     all 13 mutations, found vs missing, which planets carry each. */
+  /* The Mutations tab (round 19): Fusion hub + mineral inventory +
+     Sets. The bingo card is gone (Devon, Nov 15) — a mutation lives
+     on many planets, so listing carriers read like it can only be
+     on one. */
   #mutations { display: none; height: calc(100vh - 37px); overflow-y: auto;
     padding: 14px 28px 48px; background: #050505; }
   body.mode-mutations #mutations { display: block; }
   body.mode-mutations #orreryWrap { display: none; }
   body.mode-mutations #index { display: none; }
   #mutCount { font-size: 11px; opacity: .55; margin: 0 0 10px; }
+  .fusionHub { border: 1px solid rgba(232, 182, 76, .65); padding: 12px 14px; margin-bottom: 18px; }
+  .fhubTitle { font-size: 13px; font-weight: 700; color: #ffd75f; }
+  .fhubRules { font-size: 12px; opacity: .8; line-height: 1.6; margin-top: 4px; }
+  .fhubRules b { color: #ffd75f; font-weight: 700; }
+  .fusionSlots { display: flex; gap: 1px; background: #1e1e1e; margin-top: 10px; }
+  .fusionSlot { flex: 1 1 0; background: #050505; padding: 10px 12px; display: flex; gap: 12px; align-items: center; min-width: 0; }
+  .fusionSlot.empty { align-items: flex-start; }
+  .fslotArt { width: 120px; flex: none; }
+  .fslotBody { min-width: 0; }
+  .fslotName { font-size: 13px; font-weight: 700; }
+  .fslotMeta { font-size: 11px; opacity: .7; margin-top: 3px; line-height: 1.5; }
+  .fslotReady { font-size: 11px; color: #ffd75f; margin-top: 6px; }
+  .fslotProg { margin-top: 6px; }
+  .fslotBar { height: 4px; background: #1e1e1e; }
+  .fslotBar > div { height: 100%; background: #e8b64c; }
+  .fslotProgText { font-size: 11px; opacity: .7; margin-top: 4px; }
+  .fhubFoot { display: flex; align-items: center; gap: 14px; margin-top: 12px; flex-wrap: wrap; }
+  #mutations button.primary { border: 1px solid #e8b64c; background: rgba(232, 182, 76, 0.14); color: #ffd75f; padding: 6px 12px; font-size: 12px; cursor: pointer; font-family: inherit; }
+  .fhubCost { font-size: 12px; }
+  .fhubCost b { color: #ffd75f; }
+  .fhubState { font-size: 11px; opacity: .65; }
+  .mutSectionHead { font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: #ffd75f; margin: 0 0 8px; }
+  .mutSectionHead .mutSectionRight { float: right; letter-spacing: 0; text-transform: none; font-weight: 400; opacity: .75; color: #d4d4d4; }
+  .minRow { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid #1e1e1e; }
+  .minBody { flex: 1; min-width: 0; }
+  .minName { font-size: 13px; font-weight: 700; }
+  .minDesc { font-size: 12px; opacity: .8; margin-top: 2px; }
+  .minApply { font-size: 11px; opacity: .65; margin-top: 2px; line-height: 1.5; }
+  /* Pokémon bag rule: the count lives in its own right-aligned column
+     at a fixed x, never glued to the name — so the numbers line up
+     down the list and you can scan them at a glance. The number is
+     the hero (big, gold); the × is small and dim. */
+  .minCount { flex: none; min-width: 64px; text-align: right; font-size: 18px; font-weight: 700; color: #ffd75f; }
+  .minCount .x { font-size: 12px; font-weight: 400; opacity: .6; margin-right: 3px; }
+  .minApplyBtn { flex: none; }
+  .minTag { flex: none; font-size: 10px; letter-spacing: .08em; color: #888; border: 1px solid #333; padding: 4px 8px; }
+  /* The action column is a fixed width too (button and tag alike) —
+     otherwise the count column's x would shift with the action's
+     width and the numbers would stop lining up. */
+  .minApplyBtn, .minTag { width: 92px; text-align: center; box-sizing: border-box; }
+  .minFooter { font-size: 11px; opacity: .55; margin-top: 8px; }
+  .mutEmpty { font-size: 12px; opacity: .7; padding: 8px 0; }
   #mutSets { display: flex; gap: 1px; background: #1e1e1e; margin-bottom: 14px; flex-wrap: wrap; }
   .setCard { flex: 1 1 240px; background: #050505; padding: 12px 14px; }
   .setCard.earned { outline: 1px solid rgba(232, 182, 76, .65); outline-offset: -1px; }
   .setCard .sname { font-size: 13px; font-weight: 700; color: #ffd75f; }
   .setCard .sreq { font-size: 11px; opacity: .7; margin-top: 4px; line-height: 1.5; }
+  .setCard .sdots { font-size: 11px; color: #ffd75f; margin-top: 6px; letter-spacing: 2px; }
   .setCard .sholder { font-size: 11px; color: #ffd75f; margin-top: 4px; }
-  #mutCards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 1px; background: #1e1e1e; }
-  .mutCard { background: #050505; padding: 14px; }
-  .mutCard.found { outline: 1px solid rgba(232, 182, 76, .65); outline-offset: -1px; }
-  .mutCard .mname { font-size: 13px; font-weight: 700; color: #ffd75f; }
-  .mutCard.missing .mname { color: #888; }
-  .mutCard .mdesc { font-size: 12px; opacity: .8; margin-top: 4px; line-height: 1.5; }
-  .mutCard .mmeta { font-size: 11px; opacity: .65; margin-top: 8px; line-height: 1.6; }
-  .mutCard .mcarriers { font-size: 11px; color: #ffd75f; margin-top: 4px; line-height: 1.6; }
   #indexCount { font-size: 11px; opacity: .55; margin: 0 0 10px; }
   #indexBar { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
   #search { flex: 1; min-width: 180px; background: #0a0a0a;
@@ -2057,7 +2188,7 @@ class ProtoplanetApp {
     <button id="tabIndex" class="tab" data-mode="index">Index</button>
     <button id="tabMutations" class="tab" data-mode="mutations">Mutations</button>
   </div>
-  <div id="stardustChip" title="Stardust — earned per character typed">✦ <span id="stardustBal">0</span></div>
+  <div id="stardustChip" title="Stardust — earned per character typed">✦ <span id="stardustBal">0</span><span id="stardustRate" class="rate"></span></div>
   <button id="hideUiBtn" class="ghost" title="Hide the interface (H)">Hide UI</button>
 </header>
 <div id="orreryWrap">
@@ -2094,8 +2225,10 @@ class ProtoplanetApp {
 </section>
 <section id="mutations">
   <p id="mutCount"></p>
+  <div id="fusionHub"></div>
+  <div id="mutMinerals"></div>
+  <div class="mutSectionHead">Sets</div>
   <div id="mutSets"></div>
-  <div id="mutCards"></div>
 </section>
 <script nonce="${nonce}" src="${planetJsUri}"></script>
 <script nonce="${nonce}">
@@ -3014,6 +3147,11 @@ class ProtoplanetApp {
       state.slots.map(function (s) { return s.planet ? s.planet.seed + ':' + s.planet.generation : ''; }),
       cur,
       state.mutationIndex ? state.mutationIndex.foundCount : 0,
+      // Round 19: the Mutations tab lists the mineral inventory now —
+      // spending or buying a mineral must re-render it. Stardust is
+      // deliberately NOT here: it changes on every keystroke and would
+      // rebuild the orrery discs with it.
+      state.minerals ? state.minerals.groups.map(function (g) { return g.kind + ':' + (g.mutation || '') + 'x' + g.count; }).join(',') : '',
     ]);
   }
   var mutFilter = ''; // '' = all, 'mutated' = mutated only, else a mutation id
@@ -3156,38 +3294,140 @@ class ProtoplanetApp {
     }
   }
 
-  // --- mutation index (round 10) -------------------------------------------
-  // The collection, not the orrery: all 13 mutations as cards — found
-  // ones gold with their carriers, missing ones dimmed with honest
-  // odds — plus the two set titles and who holds them.
+  // --- mutations tab (round 19) -------------------------------------------
+  // The tab is a Fusion hub + mineral inventory + Sets now (Devon, Nov 15):
+  // the bingo card is gone — a mutation lives on many planets, so listing
+  // carriers read like it can only be on one. No Gen lines anywhere.
   function renderMutations() {
     if (!state || !state.mutationIndex) return;
     var mi = state.mutationIndex;
     document.getElementById('mutCount').textContent =
       mi.foundCount + ' / ' + mi.total + ' mutations found — ' + (mi.anyOddsText || ('each ' + mi.oddsText + ' when a planet is born'));
+    // 1. Fusion hub — the two parent slots, the rules, the cost, and
+    // the button. The button stays primary in both states (the fusion
+    // panel itself is where parents are picked); the state line names
+    // the blocker when fewer than 2 parents are ready.
+    var hubHtml = '';
+    var f = state.fusion;
+    if (f) {
+      var nextName = null;
+      for (var n = 0; n < f.slots.length; n++) {
+        if (f.slots[n] && !f.slots[n].ready) { nextName = f.slots[n].planet.name; break; }
+      }
+      var slotsHtml = '';
+      for (var i = 0; i < 2; i++) {
+        var s = f.slots[i];
+        if (!s) {
+          slotsHtml += '<div class="fusionSlot empty"><div class="fslotBody"><div class="fslotName">No planet yet</div>'
+            + '<div class="fslotMeta">Grow a planet to fuse.</div></div></div>';
+          continue;
+        }
+        var p = s.planet;
+        var setNames = (p.sets || []).map(function (x) { return x.name; }).join(' · ');
+        var meta = esc(p.stageName) + ' · ' + p.mutations.length + ' mutation' + (p.mutations.length === 1 ? '' : 's')
+          + (setNames ? ' · ' + esc(setNames) : '');
+        slotsHtml += '<div class="fusionSlot"><div class="fslotArt"><div class="pp-grid"></div></div>'
+          + '<div class="fslotBody"><div class="fslotName">' + esc(p.name) + '</div>'
+          + '<div class="fslotMeta">' + meta + '</div>'
+          + (s.ready
+            ? '<div class="fslotReady">✓ Ready to fuse</div>'
+            : '<div class="fslotProg"><div class="fslotBar"><div style="width:' + Math.round(100 * s.chars / f.minChars) + '%"></div></div>'
+            + '<div class="fslotProgText">' + s.chars.toLocaleString() + ' / ' + f.minChars.toLocaleString() + ' chars — ' + s.toCiv.toLocaleString() + ' to Civilization</div></div>')
+          + '</div></div>';
+      }
+      var stateLine = f.readyCount >= 2
+        ? '2 of 2 parents ready'
+        : (f.readyCount + ' of 2 parents ready' + (nextName ? ' — grow ' + nextName + ' to Civilization to fuse.' : '.'));
+      hubHtml = '<div class="fusionHub"><div class="fhubTitle">✦ Fusion</div>'
+        + '<div class="fhubRules">Fuse two Civilization planets into a child. The child inherits each parent\u2019s mutations — <b>50% from one parent, 75% if both carry it</b>. Parents stay in your collection — each pair fuses once.</div>'
+        + '<div class="fusionSlots">' + slotsHtml + '</div>'
+        + '<div class="fhubFoot"><button class="primary" id="openFusionBtn">Open fusion</button>'
+        + '<span class="fhubCost">Costs <b>1 Birth mineral</b> — you have <b>' + f.birthCount + '</b></span>'
+        + '<span class="fhubState">' + esc(stateLine) + '</span></div></div>';
+    }
+    document.getElementById('fusionHub').innerHTML = hubHtml;
+    var openBtn = document.getElementById('openFusionBtn');
+    if (openBtn) openBtn.addEventListener('click', function () { vscodeApi.postMessage({ type: 'openPrestige' }); });
+    fillFusionArt();
+    // 2. Your minerals — the inventory, grouped exactly the way
+    // mineralInventory() groups it: Mutation minerals first
+    // (alphabetical), then Birth. Apply runs the existing apply flow
+    // pre-filled with that mineral; Birth can never apply.
+    var minHtml = '';
+    var inv = state.minerals;
+    if (inv) {
+      minHtml = '<div class="mutSectionHead">Your minerals<span class="mutSectionRight">' + inv.total + ' total · ✦ ' + Math.floor(inv.stardust || 0).toLocaleString() + ' Stardust</span></div>';
+      if (inv.groups.length === 0) {
+        minHtml += '<div class="mutEmpty">No minerals yet — salvage a planet to get one, or buy one in the Protoplanet shop.</div>';
+      } else {
+        for (var k = 0; k < inv.groups.length; k++) {
+          var g = inv.groups[k];
+          minHtml += '<div class="minRow"><div class="minBody">'
+            + '<div class="minName">' + esc(g.label) + '</div>'
+            + (g.desc ? '<div class="minDesc">' + esc(g.desc) + '</div>' : '')
+            + '<div class="minApply">' + esc(g.applyText) + '</div></div>'
+            + '<div class="minCount"><span class="x">×</span>' + g.count.toLocaleString() + '</div>'
+            + (g.mutation
+              ? '<button class="ghost minApplyBtn" data-mutation="' + esc(g.mutation) + '">Apply ›</button>'
+              : '<span class="minTag">BIRTH COST</span>')
+            + '</div>';
+        }
+        minHtml += '<div class="minFooter">Buy more in the shop — Birth ' + inv.shopPrices.birth.toLocaleString() + ' ✦ · Random Mutation ' + inv.shopPrices.random.toLocaleString() + ' ✦ · Family Mutation ' + inv.shopPrices.family.toLocaleString() + ' ✦</div>';
+      }
+    }
+    document.getElementById('mutMinerals').innerHTML = minHtml;
+    var applyBtns = document.querySelectorAll('#mutMinerals .minApplyBtn');
+    for (var b = 0; b < applyBtns.length; b++) {
+      applyBtns[b].addEventListener('click', function (e) {
+        vscodeApi.postMessage({ type: 'applyMineral', mutation: e.currentTarget.getAttribute('data-mutation') });
+      });
+    }
+    // 3. Sets — kept, with progress dots and the carrier of the first
+    // found mutation when incomplete. (The "Sets" header lives in the
+    // static HTML above #mutSets, not in the flex row — a header div
+    // inside the flex container lays out as a flex item.)
     var setsHtml = '';
-    for (var i = 0; i < mi.sets.length; i++) {
-      var s = mi.sets[i];
-      setsHtml += '<div class="setCard' + (s.holder ? ' earned' : '') + '">'
-        + '<div class="sname">✦ ' + esc(s.name) + '</div>'
-        + '<div class="sreq">' + s.required.map(esc).join(' + ') + ' on one planet</div>'
-        + (s.holder ? '<div class="sholder">Held by ' + esc(s.holder.name) + '</div>' : '<div class="sreq">Not earned yet.</div>')
-        + '</div>';
+    for (var j = 0; j < mi.sets.length; j++) {
+      var st = mi.sets[j];
+      var found = st.required.filter(function (r) { return r.found; });
+      var dots = st.required.map(function (r) { return r.found ? '●' : '○'; }).join(' ');
+      var line;
+      if (st.holder) {
+        line = 'Held by ' + st.holder + ' — ' + st.required.length + ' / ' + st.required.length;
+      } else if (found.length > 0) {
+        var first = found[0];
+        line = found.length + ' / ' + st.required.length + ' — ' + first.name + ' on ' + (first.carrier || 'a planet') + ', ' + (st.required.length - found.length) + ' more to earn';
+      } else {
+        line = '0 / ' + st.required.length + ' — earn ' + st.required.map(function (r) { return r.name; }).join(' + ') + ' on one planet';
+      }
+      setsHtml += '<div class="setCard' + (st.holder ? ' earned' : '') + '">'
+        + '<div class="sname">✦ ' + esc(st.name) + '</div>'
+        + '<div class="sreq">' + st.required.map(function (r) { return esc(r.name); }).join(' + ') + ' on one planet</div>'
+        + '<div class="sdots">' + dots + '</div>'
+        + '<div class="sholder">' + esc(line) + '</div></div>';
     }
     document.getElementById('mutSets').innerHTML = setsHtml;
-    var html = '';
-    for (var j = 0; j < mi.entries.length; j++) {
-      var e = mi.entries[j];
-      html += '<div class="mutCard' + (e.found ? ' found' : ' missing') + '">'
-        + '<div class="mname">' + (e.found ? '✦ ' : '? ') + esc(e.name) + '</div>'
-        + '<div class="mdesc">' + esc(e.desc) + '</div>'
-        + '<div class="mmeta">' + esc(e.family) + ' family · ' + mi.oddsText + '</div>'
-        + (e.found && e.carriers.length > 0
-          ? '<div class="mcarriers">On: ' + e.carriers.map(function (c) { return esc(c.name); }).join(', ') + '</div>'
-          : (e.found ? '<div class="mcarriers">Found — but its planet is gone.</div>' : ''))
-        + '</div>';
+  }
+
+  // Static planet art for the fusion slots — same render path as the
+  // Index tiles (sidebarCrop + gridToHtml), one still frame per slot.
+  function fillFusionArt() {
+    if (!state || !state.fusion) return;
+    var arts = document.querySelectorAll('#fusionHub .fusionSlot .fslotArt .pp-grid');
+    for (var i = 0; i < arts.length; i++) {
+      var s = state.fusion.slots[i];
+      if (!s || !s.planet) continue;
+      var gridEl = arts[i];
+      var artEl = gridEl.parentElement;
+      var artW = Math.max(80, artEl.clientWidth || 120);
+      var crop = P.sidebarCrop(s.planet.planet, s.planet.stageIdx, 10, 1.15);
+      var cellW = artW / crop.cols;
+      var cellH = cellW * 1.8;
+      gridEl.style.setProperty('--pp-fs', cellFont(cellW, cellH) + 'px');
+      gridEl.style.setProperty('--pp-ch', cellH.toFixed(2) + 'px');
+      gridEl.innerHTML = P.gridToHtml(
+        P.cropGrid(P.render(s.planet.planet, s.planet.stageIdx, 10, 5, P.stageScale(s.planet.stageIdx), undefined, 0.5, true), crop), cellW, cellH);
     }
-    document.getElementById('mutCards').innerHTML = html;
   }
 
   // --- picker mode (choosing a planet for a ring) ---------------------------
@@ -3230,6 +3470,10 @@ class ProtoplanetApp {
     if (!state) return;
     var el = document.getElementById('stardustBal');
     if (el) el.textContent = Math.floor(state.stardust || 0).toLocaleString();
+    // Round 19 — the system's per-character total rides in the chip
+    // next to the balance, dimmed so the balance stays the hero.
+    var rateEl = document.getElementById('stardustRate');
+    if (rateEl) rateEl.textContent = '· +' + (state.systemEarnRateText || '0') + '/char';
   }
 
   // --- pan / zoom --------------------------------------------------------------

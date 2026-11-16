@@ -2494,8 +2494,23 @@ check('ext: Index filters and sorts by mutation',
 check('ext: mutated Index tiles get the gold outline and the ✦ corner',
   extSrc.includes("(mutCount > 0 ? ' mutated' : '')")
   && extSrc.includes("'<div class=\"corner\">✦'") && extSrc.includes('.tile.mutated'));
-check('ext: detail sheet shows mutation title cards and set title cards',
-  extSrc.includes('mutCard') && extSrc.includes('setCard'));
+check('ext: detail sheet shows mutation pills and set chips',
+  extSrc.includes("'<span class=\"badge mut\">'") && extSrc.includes("'<span class=\"chip\">✦ '"));
+check('ext: Mutations tab is a Fusion hub + inventory + Sets, no bingo card (round 19)',
+  extSrc.includes('fusionHub') && extSrc.includes('openFusionBtn')
+  && extSrc.includes("type: 'openPrestige'") && extSrc.includes("type: 'applyMineral'")
+  && extSrc.includes('BIRTH COST') && extSrc.includes('sdots')
+  && !extSrc.includes('mutCard') && !extSrc.includes('mutCards') && !extSrc.includes('mcarriers')
+  && !extSrc.includes('On: '));
+check('ext: Mutations tab re-renders when minerals change, not on keystrokes (round 19)',
+  extSrc.includes("g.kind + ':' + (g.mutation || '') + 'x' + g.count")
+  && !/indexSignature\(\) \{[^}]*stardust/.test(extSrc));
+check('ext: mineral counts live in their own right-aligned column, not in the name (round 19)',
+  extSrc.includes('minCount') && extSrc.includes('class="minCount"')
+  && !extSrc.includes("esc(g.label) + ' ×'"));
+check('ext: Stardust chips show the system per-character rate (round 19)',
+  extSrc.includes("id=\"stardustRate\"") && extSrc.includes("id=\"sdRate\"")
+  && extSrc.includes("'/char'") && extSrc.includes('systemEarnRateText'));
 check('ext: prestige shows the real % per parent mutation before fusing',
   extSrc.includes('mutationChance') && extSrc.includes('both parents carry it')
   && extSrc.includes('Anything else can still appear at its usual rare odds'));
