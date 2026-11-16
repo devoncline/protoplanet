@@ -1,337 +1,127 @@
-# Protoplanet — a VS Code extension (in progress)
+# Protoplanet
 
-A coding pet for VS Code: as you type, a little ASCII planet grows —
-through an 8-stage lifecycle (dust → rock →
-world → civilization → end — no automatic rebirth). Typing is the fuel: the planet
-is made of the characters you type.
+Type, and a little ASCII planet grows in your editor.
 
-**Built in polished pieces, one at a time.** Devon reviews each piece
-before the next one starts. Nothing is published to the Marketplace yet.
+![A planet growing in the sidebar as you type](images/listing-demo-sidebar-1125a.gif)
 
-## Piece 1 — seeded generator + renderer (DONE)
+## Install
 
-The foundation everything else depends on.
+**From the Marketplace:** open the Extensions view in VS Code, search for
+**Protoplanet**, and click Install.
 
-- **`planet.js`** — plain JS, no dependencies, no build step. Two parts:
-  - **Seeded generator:** a number (seed) → a unique planet, every time.
-    Same seed = same planet, forever. A deterministic PRNG (mulberry32)
-    rolls the traits: terrain (icy, lava, jungle, rocky, ocean, desert,
-    crystal, toxic, gas, metal), atmosphere color, ring type (none / thin /
-    wide / double / colored ice / shattered), moons (0–3), size. No AI —
-    just an algorithm, No Man's Sky style. Devon designs the trait lists,
-    the algorithm does the combining.
-  - **Renderer:** started as a faithful port of `../lifecycle.py` —
-    same ramp, same fixed top-left light, same spin illusion (glyph
-    flicker + texture drift), same ring math (orbiting brightness wave,
-    3D shading, planet shadow, Cassini gap). **Restyled Nov 11 toward
-    the reel's look** (Devon asked to keep working that night): grid
-    136×76 (was 100×48), stage radii ×1.5 (Civilization disc now 57
-    cells wide, was 38), atmospheric limb fade (edges dissolve into
-    black), softer light, thin bright rim, irregular edge, denser
-    rings. The JS renderer is now the **look authority** — it
-    intentionally diverges from `lifecycle.py`, which stays as the
-    original Python loop. Same seeds still produce the same planets;
-    only the drawing changed. Terrain bands replace the stage's default
-    bands, so each planet keeps its own colors through every stage.
-    Ring types change the drawing: double draws two bands with a real
-    gap, colored uses ice-cyan rings, shattered widens the gap and
-    frays the edge. Moons orbit the planet.
-- **`CONFIG`** at the top of `planet.js` holds every tunable number —
-  terrain colors + weights, atmosphere colors, ring types, moon odds,
-  size range — with comments. Tweak there.
-- **`preview.html`** — open it in a browser to SEE the variety: ten
-  showcase planets (one per terrain, animated), one planet across all
-  7 stages, and a "Roll a new planet" button for a fresh random seed.
-- **Tests:** `node test-planet.js` — determinism (same seed → same
-  planet, same render → identical grid), variety (500 seeds cover all
-  10 terrains, 6 ring types, moon counts 0–3), starfield match, and
-  roundness (the rendered disc displays as a circle, ratio near the
-  approved ~1.11, and is bigger than the old 100×48 disc). The old
-  cell-for-cell fidelity check vs `lifecycle.py` was **retired by
-  design** when the renderer was restyled (Nov 11) — the JS renderer
-  is the look authority now and is supposed to differ from the Python
-  loop. Do not re-add it.
+**From Quick Open:** press Ctrl+P (or Cmd+P on Mac), paste
+`ext install devoncline.protoplanet`, and press Enter.
 
-```bash
-node test-planet.js        # run the checks
-node pick-samples.js       # pick a diverse showcase set of seeds
-python3 make-samples.py    # redraw the PNG stills (after dump-samples.js)
-```
+**From a `.vsix` file:** Extensions view → **…** → **Install from VSIX…**,
+then pick the file.
 
-## Piece 2 — extension shell + typing XP (DONE)
+Requires VS Code 1.85 or later.
 
-The actual VS Code extension. Open the folder in VS Code and press **F5**
-(Extension Development Host) to run it, or `npx @vscode/vsce package`
-then **Install from VSIX**. Nothing is published to the Marketplace.
+## How it works
 
-- **`package.json`** — publisher `devoncline`, name `protoplanet`, activates
-  on startup. Contributes a pet view as a collapsible section in the
-  Explorer (no separate Activity Bar icon), plus commands **Protoplanet: Show pet**
-  and **Protoplanet: New planet** (asks first; the old planet is kept in
-  the collection record). A "New planet" button also sits in the view's
-  title bar.
-- **`petLogic.js`** — the pure logic, no `vscode` import, tested in plain
-  Node (`node test-pet.js`, 110 checks). Typing = XP (1 inserted char =
-  1 XP; deletions earn nothing; undo/redo and non-text documents like
-  the output panel earn nothing). XP grows the planet through the 7
-  stages — thresholds `0 / 100 / 300 / 600 / 1000 / 1500 / 2200`,
-  then no automatic rebirth: past the last stage the planet just keeps
-  gaining XP indefinitely. A new planet only starts when the player
-  asks for one (New planet command, recycle, prestige) — the old
-  planet is archived, generation +1. At Civilization (2200+ XP) the
-  XP bar turns orange and a one-time prompt offers a new planet.
-  First run asks for a starter terrain (icy / lava / jungle / rocky /
-  ocean), which biases the first planet's seed. All numbers live in one
-  `CONFIG` object at the top of `petLogic.js`.
-- **`extension.js`** — VS Code wiring only: sidebar webview, status bar
-  (globe icon + `Tides · 640/1000 XP`, click to show the pet), `globalState`
-  persistence (one key, debounced 3s while typing, immediate on stage
-  change / new planet). **Ambient:** no popups while typing —
-  evolutions show in the pet window and status bar only (one
-  exception: a single prompt when the planet first reaches
-  Civilization, offering a new planet).
-- **The pet window** reuses `planet.js`'s `gridToHtml()` + the
-  fixed-size-cell CSS from the piece-1 fix (10:18 ratio, `text-size-adjust:
-  none`, runtime font measurement, nonce CSP). It animates at ~7 fps and
-  shows stage name + description, an XP bar, and "grown from N
-  characters". The sidebar is narrow, so cells scale down to fit — the
-  glyphs get tiny, but the planet's shape, colors, rings and motion
-  still read. A full-size view is piece 4's panel.
-- **The look is tunable, not baked in:** terrain colors, bands and ring
-  styles live in the `CONFIG` object in `planet.js`, separate from the
-  generator — changing how a planet looks is changing values, not
-  rebuilding. A design polish pass is a later piece, after living with
-  the pet a while.
-- **Tests:** `node test-pet.js` — 531 checks (XP counting, stage
-  boundaries, no-auto-rebirth + orange max bar, starter bias, new-planet
-  command, persistence round-trip, bad-data fallback, minerals /
-  salvage / prestige, System Rank / slots / overflow, package.json
-  contract, share card, seed hatch, Instrument redesign, disc rules). Plus a wiring harness
-  (`../scratch/test-system-panel.js`, fake `vscode` module) that
-  loads `extension.js` for real and drives activation, typing
-  events, status bar, webview messages and the generated HTML,
-  including opening the Solar System panel and driving place /
-  remove through it: 38 checks, all passing.
-- **Not verified here:** the Extension Development Host can't run
-  headless on this VM — Devon runs it with F5 on his PC. That's the
-  real test.
+Every character you type is 1 XP for your planet. Deletions don't count.
+Your planet grows through seven stages:
 
-## Step 4 — Solar System / collection view (DONE Nov 11; redesigned Nov 12)
+| Stage | XP to reach it |
+| --- | --- |
+| Shattered birth | 0 |
+| Accretion | 100 |
+| Molten | 300 |
+| Crust | 600 |
+| Tides | 1,000 |
+| Eden | 1,500 |
+| Civilization | 2,200 |
 
-Command: **Protoplanet: Open solar system** (`protoplanet.openSolarSystem`).
+At Civilization the XP bar turns orange and the planet just keeps growing —
+there's no forced rebirth. When you want a new planet, you start one.
 
-A full-screen webview panel in the Instrument style (Devon, Nov 12):
-near-black background, thin hairline rules, monospace type, one amber
-accent, lots of empty space — no gradients, no glow, no cards, no
-dashboard chrome. Two full-screen modes, not one crowded screen: the
-**Orrery** (tilted, full-bleed, the star at the center) and the
-**Index** (the collection), switched from the tabs in the one thin top
-line. The star sits in the middle (default star for now — no rarity or
-upgrades yet); one ring per unlocked slot, one planet per ring. Orbit
-rings are ellipses (tilt 0.34) while the planet discs stay upright,
-facing the viewer — the Stellaris-style tilted view Devon asked for,
-not top-down and not pure side view.
+Your first planet is free. After that, a new planet costs one Birth Mineral.
 
-- **Slots / System Rank:** 4 rings at Rank 0. Each rank unlocks +1
-  ring (Rank = floor(finished planets / 3), capped at 12 rings).
-  Locked rings are visible as dashed rings with the unlock
-  requirement written on them, e.g. "Ring 5 — grow 3 more planets".
-  The header shows "N / M rings used" and the next unlock.
-- **Zoom to a planet:** click a planet → the camera zooms into it
-  and its details show in a floating sheet beside it — name, seed,
-  terrain, ring type, moons, size, stage, characters grown,
-  mutations, and generation — plus **Remove from system** (moves it
-  to the Index, never deletes it) and **Replace**. X or Esc zooms back
-  out to the view you had. This replaces the old detail modal, which
-  covered the solar system. Free zoom (Ctrl+scroll) and drag-pan to
-  explore; H hides the interface (only the orrery stays).
-- **Zoom detail (Nov 12):** zooming in doesn't just blow up the same
-  letters — the disc re-renders at a denser grid, so the planet gets
-  more detailed as you get closer. Stepped tiers from
-  `discDetail(zoom / fitZoom)` in `planet.js`: 46x24 below 2x, 92x48
-  from 2x, 136x76 (the full render, the cap) from 3x. The cell sizes
-  shrink in exact proportion, so the disc never changes size on
-  screen and the planet never jumps; the tier swaps once per
-  threshold, never continuously. Same planet at every tier (the
-  tier-2 grid downsampled is exactly the tier-0 grid). Applies to
-  the orrery zoom (Ctrl+scroll and click-to-zoom); the detail sheet
-  already shows the full render.
-- **Index:** the collection as its own mode — big tiles, 2–3 per row,
-  the planet's ASCII art as the tile, name + one datum, 1px hairline
-  gaps, no card chrome and no amber border on the tiles (amber is
-  kept only for the badges and the active tab); searchable and
-  sortable, each tile with an "In system" badge and the one slim
-  count line "N planets — M in system". The top line is trimmed too
-  ("Rank 1 · 4/5 rings · 2 to next ring").
-  Click an empty ring → the Index opens in picker mode, filtered
-  to planets not already displayed.
-- **Stage-driven scale (Nov 12):** a planet's rendered size grows
-  with its stage — a newborn (Shattered birth) renders at half the
-  size of a mature planet (Civilization), so the collection reads as
-  a growth story and a newborn is clearly smaller than a mature
-  planet (and much smaller than the sun). `stageScale(stageIdx)` in
-  `planet.js` (0.5 → 1.0).
-- **No stars in the solar system (Nov 12):** the planet renders
-  carry their own starfield, but in the orrery and the Index tiles
-  it is dropped — plain black behind the planets, no stars hugging
-  each one. The panel has no shared starfield either (Devon's call:
-  good how it was). Stars stay in the planet's own frames (sidebar
-  pet view, zoom detail), where they twinkle.
-- **Full rings in the orrery (Nov 12):** a planet's entire ring
-  system is visible in its orrery disc — `ringFitZoom(planet, stage,
-  46, 24)` in `planet.js` shrinks a planet just enough that its
-  widest, steepest ring fits the disc grid. Rings may still clip at
-  a tile's or a standalone frame's edge — that stays as-is.
-- **Orbits:** always on. The planets drift slowly around the star —
-  there is no static mode and no toggle (Devon's call, Nov 11). The
-  drift pauses momentarily on hover and while the detail sheet is
-  open, so a moving planet can still be clicked. 2D zoom
-  (wheel/buttons, fit-to-system reset) and drag-pan only — no 3D
-  rotation (ASCII shears, and rotation hurts click-to-select).
-- **Hard rules:** growing a new planet never fails because the system
-  is full — the new planet lands in the Index. Removing a planet
-  from the system never deletes it.
-- **Planet names:** every planet gets a real catalog-style name tied
-  to its seed — `generatePlanetName(seed)` in `planet.js` builds a
-  designation like Kepler-442b, TRAPPIST-1e, HD-209458b, or TOI-700d
-  (catalog + number + letter b–f) from `NAME_CATALOGS` in `CONFIG`,
-  on its own RNG stream (`seed ^ 0x9E3779B9`), so naming never
-  disturbs the trait draws. The name is stored on the planet record
-  at birth and derived from the seed for older records. A birth-time
-  uniqueness layer (`uniquePlanetName` in `petLogic.js`) nudges the
-  number/letter deterministically when a name is already used by
-  another planet in the collection, so no two planets share a name.
-  Shown in the orrery, the detail sheet, and the Index tiles.
-- **Tests:** `node test-pet.js` — now 537 checks (was 110; sections 13–19
-  cover System Rank / slot unlocks, place/remove validation,
-  salvage clearing a slot, rank-drop returning the planet to the
-  Index, overflow-to-Index, persistence, panel wiring, the
-  share card below, seed hatch, the Instrument redesign, the
-  disc rules, and the zoom detail + Index de-box).
-  `node test-planet.js` — 223 checks; section 15 covers name determinism
-  (same seed → same name, starter/tilt don't change the name),
-  format, and variety; section 18 covers the disc rules (stage
-  scale, noStars, ring fit); section 19 covers the zoom detail
-  (tiers, DOM size, same planet, ring fit at the top tier). Plus a wiring harness
-  (`../scratch/test-system-panel.js`, fake `vscode` module) that
-  loads `extension.js` for real, grows 4 finished planets by typing
-  and spawning, opens the panel, and drives place/remove messages
-  through the webview: 38 checks, all passing.
+The planet lives in the Explorer sidebar, with your stage and XP in the
+status bar. Pick a starter terrain on your first run — icy, lava, jungle,
+rocky, or ocean — and every planet gets a catalog-style name tied to its
+seed. Same seed, same planet.
 
-## Share card (DONE Nov 12)
+I built this for myself first — a planet that grows while I code.
 
-One click, one card. Command **Protoplanet: Share planet** opens a panel
-with the live animated planet (same fixed-cell render as the sidebar),
-its catalog name, stage, generation, mutation badge when it has one,
-and seed — plus three actions:
+## Mutations
 
-- **Download PNG** — draws the same planet on a canvas at 8px cells
-  (the full 136×76 grid, 1088px wide + an amber `Name · seed <seed>`
-  caption) and saves it via a save dialog as
-  `protoplanet-<name>-gen<N>.png`. Postable on X/Reddit or in a README.
-- **Copy seed** — the seed on the clipboard. A friend can paste it into
-  their own Protoplanet and hatch the same base planet, without
-  mutations (see Hatch from seed below).
-- **Copy Markdown** — a README-ready block (image line, bold name/terrain/
-  stage/generation/characters line, mutation line when present, seed line
-  linking back to https://github.com/devoncline/protoplanet).
+About 1 in 10 planets is born with a rare mutation — a blood moon, glowing
+oceans, double rings, a comet, and nine more. A planet can carry more than
+one. Mutations boost how much Stardust the planet earns, and matching sets
+(like Moon Lord or Ring King) are worth collecting.
 
-The filename and the Markdown are pure helpers in `petLogic.js`
-(`shareCardFilename`, `shareCardMarkdown`) so the panel and the tests
-agree on exactly what gets shared. The card stays live while typing
-(`pushState` posts fresh state) and re-opening the command reveals the
-same panel. No new popups: the save confirmation flashes on the Download
-button in the panel, and the only info message is the no-planet guard
-("No planet yet — pick a starter first, then share it.").
-- **Tests:** `node test-pet.js` — section 15 (filename slug rules,
-  markdown shape with/without a mutation, panel wiring). Plus a wiring
-  harness (`../scratch/test-share-panel.js`, fake `vscode` module) that
-  loads `extension.js` for real, opens the panel, and drives the
-  download / copy-seed / copy-markdown messages through the webview:
-  36 checks, all passing. The PNG itself was rendered in headless
-  Chrome (`../scratch/share-png-probe.html`) and eyeballed: the full
-  grid at 8px cells reads as the dense sphere Devon knows — the cozy
-  68×38 grid at 16px cells was tried first and looked like a loose
-  scatter of letters with a hole for a night side, so it was cut.
+![A Glitch-mutated planet flickering in the sidebar](images/listing-demo-glitch-1125a.gif)
 
-## Hatch from seed (DONE Nov 12)
+## Minerals and the shop
 
-Command: **Protoplanet: Hatch from seed** (`protoplanet.hatchFromSeed`).
+Minerals are what you spend. There are two kinds:
 
-Paste a seed number and hatch that seed's planet. Same seed = same
-planet: same terrain, rings, moons, size, and catalog name. **But never
-the mutations** — a planet hatched from a shared seed is the seed's
-base planet, mutations stripped (`stripMutations` in `planet.js`:
-mutations cleared, ring back to the base roll, mutation-granted hue /
-second tilt / oversized moon reset, summary recomputed). Mutations stay
-unique to the original — nobody gets your rare mutated planet just by
-pasting its seed.
+- **Birth Mineral** — pays for one new planet. 2,500 ✦ in the shop.
+- **Mutation Mineral** — one exact mutation, applied to your growing planet
+  on a 50/50 flip. It works or it's gone either way. Random ones cost
+  250,000 ✦, family picks (Moon, Rings, Glow, or Sky) cost 400,000 ✦.
 
-Flow: input box for the seed (validated: digits only, 0–999999999),
-then the same modal confirm as New planet. The current planet is
-archived into the collection — mutations and all — and the hatched
-planet becomes the new current planet at Gen +1, 0 XP. A fed mineral
-is NOT consumed: the hatch is the seed's canonical planet, not a roll,
-so the fed mineral stays fed for the next birth that actually rolls.
-On a fresh install (no planet yet) the hatch IS the first planet —
-starter done + the one free starter mineral, still Gen 1. One honest
-limit: a first planet born from a starter pick has its terrain forced
-by the pick, not the seed, so hatching from its seed gives the seed's
-canonical terrain, which can differ. No new popups: the input box and
-confirm are user-invoked from the Command Palette, and the result
-shows in the pet window and status bar.
-- **Tests:** `node test-planet.js` — section 17 (strip per mutation,
-  13/13 clean, stripped renders exactly like the plain twin and
-  differently from the mutated original, plain planet untouched,
-  determinism). `node test-pet.js` — section 16 (seed parsing,
-  makeSeedPlanet, archive-keeps-mutations, fed mineral survives the
-  hatch, first-run hatch, same-seed name nudge, package.json +
-  extension wiring). Plus a wiring harness
-  (`../scratch/test-seed-hatch.js`, fake `vscode` module) that loads
-  `extension.js` for real, activates it with a live mutated planet,
-  and drives the command end to end (happy path, bad input, dismissed
-  box, declined confirm): 13 checks, all passing.
+You earn Stardust for every character you type — never passively, never
+while you're away. A Civilization planet with mutations earns far more per
+character than a newborn, so growing planets pays for the next ones.
 
-## What's next (pieces 3+, only after Devon approves piece 2)
-- **Design polish: DONE Nov 11** — reel-style restyle of the renderer
-  (136×76 grid, limb fade, softer light, denser rings). See above.
-- **Piece 3 — mutations: DONE Nov 11** — birth rolls, no tiers,
-  13 mutations (see `MUTATIONS.md`). Rarity: ~9.0% any mutation.
-- **Piece 4 — collection panel: DONE Nov 11, redesigned Nov 12** — the Solar System
-  view above (tilted orrery, zoom-to-planet detail, Index, System Rank,
-  planet names; stage-scaled planets, no stars in the system, full rings
-  in the orrery).
-- **Piece 5 — minerals, salvage, prestige: DONE Nov 11** — feed
-  minerals to tilt the NEXT planet's birth roll; destroy a planet
-  for mineral pieces (a mutation planet yields a mineral of that
-  mutation); combine two Civilization-stage planets — offspring
-  inherits each parent mutation at multiplied odds, parents stay
-  in the collection (one-time parents, tunable flag).
-- **Piece 6 — public polish:** Marketplace-ready (icon, README,
-  publisher, packaging). Only when Devon says go.
+Every price and every odd is shown before you commit to anything.
 
-## Rules the build follows
+## Salvage and prestige
 
-- **Fixed-size cells for ALL HTML rendering — no exceptions.** A grid
-  is rendered with `gridToHtml()` (explicit-width inline-block run
-  spans, 10:18 cell ratio) + the `.pp-grid` / `.pp-run` CSS + a
-  runtime-measured font size so one glyph advance == one cell width +
-  `text-size-adjust: none`. NEVER render a grid in a bare `<pre>` with
-  a font-size/line-height and trust the font — iOS Safari inflates
-  small text while line-height stays fixed and the planet comes out
-  squashed ~2:1 wide and flat (found by Devon on his phone, Nov 10;
-  fixed in preview.html the same night). The VS Code webview in
-  piece 2 MUST reuse `gridToHtml()` and these CSS rules — it has the
-  exact same font-variance problem. The cell ratio may scale down on
-  narrow screens, but it must stay 10:18.
-- **Never crop the planet:** when the window shrinks, re-render the
-  same planet at a lower resolution (fewer, bigger characters) — still
-  a whole planet made of readable characters. Scaling glyphs down has
-  a floor. Full detail lives in the big panel (piece 4). (Devon,
-  Nov 11 — cropping ruins the "characters make up the planet" idea.)
-- **Ambient, never interrupting:** no popups while typing. Evolutions
-  show in the pet window and status bar only. The full panel opens
-  only when Devon opens it.
-- **Local only until Devon says otherwise:** no Marketplace
-  publishing, no network calls, no AI generation.
-- **Devon reviews before anything goes live.**
+**Salvage** a planet to get minerals back. A planet salvaged at Crust
+(600 XP) or later returns its mutation minerals plus a Birth Mineral; a
+Civilization planet returns two Birth Minerals. Salvage below Crust and
+the mutations are lost — grow it first if you want them back.
+
+**Prestige** two Civilization planets into a child. The child inherits
+each parent's mutations — 50% from one parent, 75% if both carry it.
+Parents stay in your collection, and each planet can only be a parent
+once.
+
+## Solar system
+
+Finished planets go into your solar system — a tilted orrery around a
+star, plus an Index of your whole collection. Finishing more planets
+unlocks more rings. Click a planet to zoom in and
+see its details.
+
+![The solar system — finished planets on the orrery](images/listing-solar-system-real-1125a.png)
+
+## Share a planet
+
+Every planet has a seed. Share it and a friend can hatch the same base
+planet on their machine — same terrain, rings, moons, and name, but
+without your mutations. Those stay yours.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| Protoplanet: Show pet | Open the sidebar pet view |
+| Protoplanet: New planet | Start a new planet (costs 1 Birth Mineral after the first) |
+| Protoplanet: Apply a mineral to your planet | Apply a Mutation Mineral to the growing planet (50/50) |
+| Protoplanet: Salvage / recycle a planet | Destroy or recycle a planet for minerals |
+| Protoplanet: Prestige two planets | Combine two Civilization planets into a child |
+| Protoplanet: Open prestige | Open the prestige picker |
+| Protoplanet: Open solar system | Open the orrery and Index |
+| Protoplanet: Share planet | Share the current planet (PNG, seed, or Markdown) |
+| Protoplanet: Hatch from seed | Hatch a planet from a shared seed |
+| Protoplanet: View mineral inventory | See your minerals |
+| Protoplanet: Open shop | Buy minerals with Stardust |
+
+## Known limitations
+
+- **Saves are local to one machine.** Everything is stored in VS Code on
+  the computer where you play — no account, no server, nothing leaves your
+  computer. There is no sync between machines and no export yet, so a
+  planet can't move to another computer for now. Export is planned.
+- **Early release.** This is 0.1.0. Things will change, and there will be
+  rough edges. Bugs and ideas are welcome on the
+  [GitHub repo](https://github.com/devoncline/protoplanet).
+
+## Changelog and license
+
+See [CHANGELOG.md](CHANGELOG.md) for what's in each release. Protoplanet
+is [MIT licensed](LICENSE).
