@@ -886,7 +886,8 @@ function growFinished(st, n, seedStart) {
 }
 
 // 13a. System Rank ladder: 4 rings at Rank 0, +1 ring per 3 finished
-// planets, capped at 12 rings.
+// planets, capped at 8 rings (round 24 — Devon, Nov 16: 12 read as
+// a messy nest, 8 is the max).
 st = freshWithPlanet(42);
 let rk = L.systemRank(st);
 eq('rank: fresh state is Rank 0', rk.rank, 0);
@@ -906,16 +907,19 @@ growFinished(st, 3);
 rk = L.systemRank(st);
 eq('rank: 6 finished -> Rank 2', rk.rank, 2);
 eq('rank: 6 finished -> 6 rings', rk.totalSlots, 6);
-growFinished(st, 18);
-rk = L.systemRank(st);
-eq('rank: 24 finished -> Rank 8 (max)', rk.rank, 8);
-eq('rank: 24 finished -> 12 rings (max)', rk.totalSlots, 12);
-eq('rank: at max, no next rank', rk.nextAt, null);
-eq('rank label: at max, locked ring says max', L.lockedRingLabel(st, 12), 'Ring 13 — max rings reached');
 growFinished(st, 6);
 rk = L.systemRank(st);
-eq('rank: 30 finished stays at max', rk.totalSlots, 12);
-eq('rank: system array padded to the ring count', st.system.length, 12);
+eq('rank: 12 finished -> Rank 4 (max)', rk.rank, 4);
+eq('rank: 12 finished -> 8 rings (max)', rk.totalSlots, 8);
+eq('rank: at max, no next rank', rk.nextAt, null);
+eq('rank label: at max, locked ring says max', L.lockedRingLabel(st, 8), 'Ring 9 — max rings reached');
+growFinished(st, 12);
+rk = L.systemRank(st);
+eq('rank: 24 finished stays at max', rk.totalSlots, 8);
+growFinished(st, 6);
+rk = L.systemRank(st);
+eq('rank: 30 finished stays at max', rk.totalSlots, 8);
+eq('rank: system array padded to the ring count', st.system.length, 8);
 
 // 13b. Place / remove: rules and rejections.
 st = freshWithPlanet(42);
@@ -1563,10 +1567,10 @@ check('ext: panel has no collision-avoidance or hiding logic',
 // 13k. Geometry, numerically: the slot scheme puts ring i at a
 // cumulative angle, where the gap after ring i is SLOT_C / SLOT_R[i]
 // (wider for inner rings — the same angle is fewer pixels of arc
-// there). The gaps sum to a full circle (42deg at ring 0 down to
-// 22deg at ring 11). A seeded jitter of at most +/-2deg can close a
+// there). The gaps sum to a full circle (63deg at ring 0 down to
+// 33deg at ring 7). A seeded jitter of at most +/-2deg can close a
 // gap by 4deg at most. Sweep a full orbit at that worst case for
-// every ring count 2..12 and every ring pair, and check the SOLID
+// every ring count 2..8 and every ring pair, and check the SOLID
 // discs never touch: two discs overlap iff their center distance is
 // less than the sum of their ellipse radii along the separation
 // direction (max-size Civilization disc: 58x63, semi-axes 29x32).
@@ -1585,18 +1589,24 @@ check('ext: panel has no collision-avoidance or hiding logic',
   const RMAX = rm ? +rm[2] : NaN;
   check('orrery geometry: constants parse from the panel source',
     TILT === 0.34 && R0 === 330 && RMAX === 640, `TILT ${TILT} R0 ${R0} RMAX ${RMAX}`);
+  // Round 24: the panel's slot layout is 8 rings (was 12) — parse the
+  // bound from the panel source so the test tracks the real code, and
+  // check it matches SYSTEM_MAX_RINGS.
+  const maxRings = grab(/for \(var si = 0; si < (\d+); si\+\+\) SLOT_R\.push/);
+  check('orrery geometry: panel ring layout matches SYSTEM_MAX_RINGS',
+    maxRings === L.CONFIG.SYSTEM_MAX_RINGS, `panel ${maxRings} config ${L.CONFIG.SYSTEM_MAX_RINGS}`);
   const SLOT_R = [];
-  for (let i = 0; i < 12; i++) SLOT_R.push(R0 + (i * (RMAX - R0)) / 11);
+  for (let i = 0; i < maxRings; i++) SLOT_R.push(R0 + (i * (RMAX - R0)) / (maxRings - 1));
   let SLOT_C = 0;
-  for (let i = 0; i < 12; i++) SLOT_C += 1 / SLOT_R[i];
+  for (let i = 0; i < maxRings; i++) SLOT_C += 1 / SLOT_R[i];
   SLOT_C = (Math.PI * 2) / SLOT_C;
   const slots = [0];
-  for (let i = 1; i < 12; i++) slots.push(slots[i - 1] + SLOT_C / SLOT_R[i - 1]);
+  for (let i = 1; i < maxRings; i++) slots.push(slots[i - 1] + SLOT_C / SLOT_R[i - 1]);
   const spacing = (total) => Math.max(28, Math.min(160, (RMAX - R0) / Math.max(1, total - 1)));
   const radius = (i, total) => R0 + i * spacing(total);
   const JITTER = 2 * Math.PI / 180;
   const ellR = (ux, uy, a, b) => 1 / Math.sqrt((ux / a) ** 2 + (uy / b) ** 2);
-  for (let total = 2; total <= 12; total++) {
+  for (let total = 2; total <= maxRings; total++) {
     const Rs = [];
     for (let i = 0; i < total; i++) Rs.push(radius(i, total));
     check(`orrery geometry: outermost ring fits the world (${total} rings)`,

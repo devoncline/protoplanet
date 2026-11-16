@@ -2505,22 +2505,26 @@ class ProtoplanetApp {
   // Slot angles: the gap after ring i is SLOT_C / SLOT_R[i], so inner
   // rings (small radius) get wider gaps — the same angle is fewer
   // pixels of arc there, so they need more of it to keep the discs
-  // clear. The gaps are scaled so all 12 sum to a full circle (42deg
-  // at ring 0 down to 22deg at ring 11). The radii are the FIXED
-  // 12-ring layout (the tightest spacing), so the slots never move
+  // clear. The gaps are scaled so all 8 sum to a full circle (63deg
+  // at ring 0 down to 33deg at ring 7). The radii are the FIXED
+  // 8-ring layout (the tightest spacing), so the slots never move
   // when rings unlock — and with fewer rings the spacing is wider, so
   // the same slots are even safer. A small seeded jitter (+/-2deg)
-  // keeps it from looking mechanical. Measured (worst case, 12 rings,
+  // keeps it from looking mechanical. Measured (worst case, 8 rings,
   // max-size discs, jitter at its worst): the tightest pair still
-  // clears by 6px. Uniform drift preserves these angles forever.
+  // clears by 49px. Uniform drift preserves these angles forever.
   // (Devon, Nov 11: no overlap. A uniform 30deg slot and a greedy
   // nudge scheme were both tried first and both failed at 12 rings —
   // the inner rings are too close together for them. The orbit is
   // always on; there is no static mode and no toggle.)
+  // Round 24: the layout is 8 rings to match SYSTEM_MAX_RINGS in
+  // petLogic.js — the old 12-ring layout only spanned 74% of the
+  // circle with 8 rings (a 94deg dead wedge), so it is re-derived,
+  // not just truncated.
   var SLOT_R = [];
-  for (var si = 0; si < 12; si++) SLOT_R.push(R0 + si * (RMAX - R0) / 11);
+  for (var si = 0; si < 8; si++) SLOT_R.push(R0 + si * (RMAX - R0) / 7);
   var SLOT_C = 0;
-  for (var si = 0; si < 12; si++) SLOT_C += 1 / SLOT_R[si];
+  for (var si = 0; si < 8; si++) SLOT_C += 1 / SLOT_R[si];
   SLOT_C = (Math.PI * 2) / SLOT_C;
   function slotAngle(planet, ring) {
     var a = 0;
@@ -3852,7 +3856,7 @@ class ProtoplanetApp {
   // inside one hit area — mouseover only fires on element entry, so
   // moving toward a ring line from inside its own ellipse would
   // otherwise never light it up (and a lit ring would stick after
-  // the pointer drifted off its line). One rect read + a <=12-ring
+  // the pointer drifted off its line). One rect read + a <=8-ring
   // loop per move is trivial.
   worldEl.addEventListener('mousemove', function (e) {
     setHotRing(ringAtPoint(e.clientX, e.clientY));
@@ -3956,7 +3960,7 @@ class ProtoplanetApp {
     // visibly low and the moon jumped 5-12 cells a frame. Discs and
     // sun now re-render every 150ms tick (~7fps, the same cadence as
     // the sidebar pet, which Devon said looks good). A disc render is
-    // ~3-6ms, so even a full 12-ring system stays inside the budget.
+    // ~3-6ms, so even a full 8-ring system stays inside the budget.
     // Round 18: skip these while a pointer is pressed (see pressing
     // above) — re-rendering destroys the nodes under the cursor and
     // Chrome then never generates the click. A press lasts ~100ms, so

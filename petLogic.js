@@ -138,7 +138,7 @@ const CONFIG = {
   // Trust Rank style, not a shop).
   SYSTEM_BASE_RINGS: 4, // rings at Rank 0
   SYSTEM_FINISHED_PER_RANK: 3, // finished planets per +1 ring
-  SYSTEM_MAX_RINGS: 12, // the orrery gets unreadable past this; retune if needed
+  SYSTEM_MAX_RINGS: 8, // round 24 (Devon, Nov 16): 12 read as a messy nest of lines — 8 is the max
 
   // --- Stardust economy (round 14, Nov 14 — Devon) ---------------------
   // The anti-farming update: births are no longer free spins for a
