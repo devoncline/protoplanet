@@ -1998,7 +1998,8 @@ check('ext: share PNG caption uses the shared seed', extSrc.includes("(state.sha
   check('ext: index tiles use the cropped full render like the sidebar (not the 68x38 cozy downsample)',
     sysHtml.includes('function fillTileArt(')
     && sysHtml.includes('P.render(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx), undefined, 0.5, true)')
-    && sysHtml.includes('P.sidebarCrop(p.planet, p.stageIdx, 10, 1.15)')
+    && sysHtml.includes('var tileMargin = p.stageIdx === 0 ? 2.25 : 1.15')
+    && sysHtml.includes('P.sidebarCrop(p.planet, p.stageIdx, 10, tileMargin)')
     && sysHtml.includes('P.cropGrid(P.render(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx), undefined, 0.5, true), crop)')
     && !sysHtml.includes('P.renderCozy(p.planet, p.stageIdx, 10, 5, P.stageScale(p.stageIdx), 68, 38'));
   check('ext: no card chrome in the system panel',

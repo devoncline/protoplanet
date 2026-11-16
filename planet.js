@@ -580,6 +580,20 @@ function mutationLabel(planet) {
   return `MUTATION · ${names.join(' + ')}`;
 }
 
+// The mutation names only — "Glitch", or "Glitch + Big Moon" when a
+// planet carries several. Null when the planet has no mutation.
+// Round 25 (Devon, Nov 16): the sidebar pill shows this, violet,
+// matching the Index pills (round 17 fix C) — no "MUTATION" word, no
+// "·" separator. mutationLabel keeps the full "MUTATION · …" form
+// for the status bar and the prestige cards, which Devon has NOT
+// asked to change — so this is a separate function, not an edit to
+// mutationLabel.
+function mutationNames(planet) {
+  const ids = planet.mutations || [];
+  if (ids.length === 0) return null;
+  return ids.map((id) => (mutationDef(id) || { name: id }).name).join(' + ');
+}
+
 // ---------------------------------------------------------------------------
 // SEEDED GENERATOR — seed (number) -> planet traits. Deterministic:
 // calling this twice with the same seed gives the exact same planet.
@@ -3060,7 +3074,7 @@ function gridToText(grid) {
 const API = {
   CONFIG, STAGES, STARS, STAGE0_STYLES,
   mulberry32, generatePlanet, stripMutations, generatePlanetName, formatCatalogName, parseCatalogName, birthVariant, birthVariantName, buildFragments, buildSmoke, buildSparkles, buildCoreMarkers, coreMarkerAt, smokeCellAt,
-  mutationDef, activeMutations, hasMutation, mutationLabel,
+  mutationDef, activeMutations, hasMutation, mutationLabel, mutationNames,
   applyMutationToPlanet, applyRng, planetSummaryFor, MUTATION_OVERRIDE_ORDER,
   collisionFrame, collisionPhase, collisionShardAt, COLLISION_TIMELINE, COLLISION_END,
   drawComet, drawMeteorShower, applyGlitch,

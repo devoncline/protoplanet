@@ -1568,6 +1568,11 @@ class ProtoplanetApp {
       // planet (Nov 11 redesign), so it's in the view model from stage
       // 0: the window shows it right away, no tier, just the name.
       mutationLabel: Planet.mutationLabel(cur),
+      // Round 25 (Devon, Nov 16) — the sidebar pill shows the
+      // mutation NAME ONLY, violet, matching the Index pills (round
+      // 17 fix C). mutationLabel keeps the full "MUTATION · …" form
+      // for the status bar (and the prestige cards read it too).
+      mutationNames: Planet.mutationNames(cur),
       // Round 10: the mutation id to flash gold in the sidebar on this
       // push (a birth or a successful apply) — null the rest of the
       // time, so typing never re-flashes it.
@@ -1712,18 +1717,21 @@ class ProtoplanetApp {
     white-space: pre; font-kerning: none; }
   #stageName { font-size: 13px; font-weight: 600; margin: 10px 0 2px; }
   #stageDesc { font-size: 12px; opacity: .75; margin: 0 0 8px; line-height: 1.4; }
-  /* The mutation tag — Devon's rule: rarities must be VERY noticeable,
-     or people click past them. Bold, letter-spaced, amber on dark,
-     right under the stage name. Hidden when the planet has none. */
-  #mutationLabel { display: inline-block; font-size: 11px; font-weight: 700;
-    letter-spacing: .12em; text-transform: uppercase; color: #ffd75f;
-    background: rgba(255, 215, 95, .12); border: 1px solid rgba(255, 215, 95, .55);
-    border-radius: 3px; padding: 2px 7px; margin: 0 0 8px; }
+  /* The mutation tag — round 25 (Devon, Nov 16): a violet pill with
+     the mutation NAME ONLY ("Double Rings"), matching the Index pills
+     (round 17 fix C) — same color, same filled-tint treatment. The
+     color (not the text) is what marks a mutation at a glance; gold
+     stays the legendary/status color. Right under the stage name.
+     Hidden when the planet has none. */
+  #mutationLabel { display: inline-block; font-size: 10px; font-weight: 700;
+    letter-spacing: .08em; text-transform: uppercase; color: #c9a6ff;
+    background: rgba(183, 140, 255, 0.12); border: 1px solid rgba(183, 140, 255, 0.6);
+    padding: 1px 6px; margin: 0 0 8px; }
   /* Round 10 — the reveal moment: when a mutation lands (birth or a
-     successful apply), the tag pulses gold for 2s and the card
+     successful apply), the tag pulses violet for 2s and the card
      flickers once. One-shot, driven by msg.mutationFlash. */
   #mutationLabel.flash { animation: ppFlash 2s ease 1; }
-  @keyframes ppFlash { 0% { box-shadow: 0 0 0 rgba(255, 215, 95, 0); } 15% { box-shadow: 0 0 16px rgba(255, 215, 95, .9); } 100% { box-shadow: 0 0 0 rgba(255, 215, 95, 0); } }
+  @keyframes ppFlash { 0% { box-shadow: 0 0 0 rgba(183, 140, 255, 0); } 15% { box-shadow: 0 0 16px rgba(183, 140, 255, .9); } 100% { box-shadow: 0 0 0 rgba(183, 140, 255, 0); } }
   #wrap.glitchFlash { animation: ppGlitch .9s steps(2) 1; }
   @keyframes ppGlitch { 0%, 100% { opacity: 1; } 20% { opacity: .35; } 40% { opacity: .9; } 60% { opacity: .45; } 80% { opacity: .95; } }
   /* The XP bar has to READ as a bar, not a black strip (Devon, Nov 11):
@@ -1917,13 +1925,20 @@ class ProtoplanetApp {
     // fragments, shimmer); only the morph is gone.
     stageStartSec = sec - 10; // settled — no birth morph
     state = msg;
+    // Round 25 (Devon, Nov 16) — the stage line carries the growing
+    // planet's name first: "GJ-364c · Stage 7/7 · Civilization".
+    // The detail panel and Index cards keep their own lines.
     document.getElementById('stageName').textContent =
-      'Stage ' + (msg.stageIdx + 1) + '/7 \\u00b7 ' + msg.stageName;
+      (msg.planet && msg.planet.name ? msg.planet.name + ' \\u00b7 ' : '')
+      + 'Stage ' + (msg.stageIdx + 1) + '/7 \\u00b7 ' + msg.stageName;
+    // Round 25 — the pill shows the mutation NAME ONLY, violet
+    // (see #mutationLabel CSS), matching the Index pills. The full
+    // "MUTATION · …" label still rides the status bar.
     const mutEl = document.getElementById('mutationLabel');
-    if (msg.mutationLabel) { mutEl.textContent = msg.mutationLabel; mutEl.style.display = 'inline-block'; }
+    if (msg.mutationNames) { mutEl.textContent = msg.mutationNames; mutEl.style.display = 'inline-block'; }
     else { mutEl.style.display = 'none'; }
     // Round 10 — the reveal moment: a mutation just landed (birth or
-    // apply). The tag pulses gold for 2s and the card flickers once.
+    // apply). The tag pulses violet for 2s and the card flickers once.
     // One-shot: the flag rides one push only, and the classes are
     // removed on a timer so typing never re-flashes them.
     if (msg.mutationFlash) {
@@ -3415,6 +3430,9 @@ class ProtoplanetApp {
   // a wide field. Same fix as the open "Index shattered-burst
   // planet unreadable" call (stage 0 was the worst: disc ~42% of
   // tile width).
+  // Round 25 (Devon, Nov 16) carves out stage 0: the 1.15 crop cut
+  // 73% of the birth ring, so Shattered tiles use 2.25 instead —
+  // the full outer ring fits, the planet reads smaller, his pick.
   function fillTileArt(list) {
     var artW = tileArtWidth();
     var arts = tilesEl.querySelectorAll('.tile .art');
@@ -3424,7 +3442,8 @@ class ProtoplanetApp {
       if (!artEl) continue;
       var gridEl = artEl.querySelector('.pp-grid');
       if (!gridEl) continue;
-      var crop = P.sidebarCrop(p.planet, p.stageIdx, 10, 1.15);
+      var tileMargin = p.stageIdx === 0 ? 2.25 : 1.15;
+      var crop = P.sidebarCrop(p.planet, p.stageIdx, 10, tileMargin);
       var cellW = artW / crop.cols;
       var cellH = cellW * 1.8;
       gridEl.style.setProperty('--pp-fs', cellFont(cellW, cellH) + 'px');
