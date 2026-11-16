@@ -2296,12 +2296,13 @@ function discBlend(zoom, zcrop, detail, instant) {
 // is mostly empty sky around a small planet. sidebarCrop returns the
 // grid box to show: the body + its moons and atmosphere, centered on
 // the planet's center. Rings are allowed to clip at the frame edge
-// (standalone frames, same rule as the Index tiles). Stage 0's
-// shattered smoke used to get a wider margin (2.2); round 2 tightens
-// it to 1.6 — the wispy outer fringe clips at the frame edge, but the
-// dense burst + core stay, and the crop shrinks from 80 to 60 cols,
-// so the glyphs grow from ~3.3px to ~4.5px at a 280px sidebar. Later
-// stages keep 1.7, which covers the body + moon orbits (~1.55x). The
+// (standalone frames, same rule as the Index tiles). Stage 0 uses
+// a 2.25 margin — the same rule as the round-25 Index tiles — so the
+// full birth ring shows instead of clipping at the frame edge (Devon,
+// Nov 16 — F5 feedback). The crop is wider, so the glyphs shrink a
+// little at stage 0; that is the accepted tradeoff for seeing the
+// whole ring. Later stages keep 1.7, which covers the body + moon
+// orbits (~1.55x). The
 // radius follows the stage morph (lerp from the previous stage over
 // 3s), so the box tracks the birth condensing instead of clipping it.
 // Geometry-based, not content-based, so the box never jitters as smoke
@@ -2316,7 +2317,7 @@ function sidebarCrop(planet, stageIdx, t, marginOverride) {
   const prev = STAGES[(s - 1 + STAGES.length) % STAGES.length];
   const m = clamp((t || 0) / 3.0, 0, 1);
   const r = lerp(prev.radius, st.radius, m) * (planet.size || 1);
-  const margin = marginOverride !== undefined ? marginOverride : (s === 0 ? 1.6 : 1.7);
+  const margin = marginOverride !== undefined ? marginOverride : (s === 0 ? 2.25 : 1.7);
   const qW = Math.max(8, Math.ceil((r * margin * 2) / 4) * 4);
   const qH = Math.max(6, Math.ceil((r * margin) / 4) * 4);
   const x0 = Math.max(0, Math.round(CX - qW / 2));

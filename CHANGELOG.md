@@ -18,5 +18,8 @@
 - Sidebar pet view, status bar with stage and XP, and a discovery
   journal that records your planet's story.
 - Renamed from Protoplanet to Terrabyte — new extension name
-  (`devoncline.terrabyte`), new commands, same game. Existing saves
-  carry over untouched.
+  (`devoncline.terrabyte`), new commands, same game. Note: VS Code
+  stores saves per extension ID, so a save made under Protoplanet
+  does not automatically appear under Terrabyte — copy
+  `state.vscdb` from the old extension's globalStorage folder to
+  the new one to bring it over.
