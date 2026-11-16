@@ -2,7 +2,7 @@
 
 Type, and a little ASCII planet grows in your editor.
 
-![A planet growing in the sidebar as you type](images/listing-demo-sidebar-1125a.gif)
+<img src="https://github.com/devoncline/protoplanet/raw/HEAD/images/listing-demo-sidebar-1125a.gif" width="300" alt="A planet growing in the sidebar as you type">
 
 ## Install
 
