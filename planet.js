@@ -1,4 +1,4 @@
-// planet.js — Piece 1 of the Protoplanet VS Code extension.
+// planet.js — Piece 1 of the Terrabyte VS Code extension.
 // The foundation everything else builds on:
 //
 //   1. A SEEDED GENERATOR: a numeric seed -> a unique planet, every time.
@@ -25,7 +25,7 @@
 // Plain JS, no dependencies, no build step. Runs in Node (for tests and
 // sample dumps) and in a VS Code webview (loaded via <script>).
 // In Node:  const P = require('./planet.js');
-// In a browser/webview: <script src="planet.js"></script> gives window.Protoplanet.
+// In a browser/webview: <script src="planet.js"></script> gives window.Terrabyte.
 
 'use strict';
 
@@ -3069,7 +3069,7 @@ function gridToText(grid) {
 }
 
 // ---------------------------------------------------------------------------
-// Exports: Node (require) and browser/webview (window.Protoplanet).
+// Exports: Node (require) and browser/webview (window.Terrabyte).
 // ---------------------------------------------------------------------------
 const API = {
   CONFIG, STAGES, STARS, STAGE0_STYLES,
@@ -3083,4 +3083,4 @@ const API = {
   noise2, continentField, valueNoise, hash2, clamp, lerp,
 };
 if (typeof module !== 'undefined' && module.exports) module.exports = API;
-if (typeof window !== 'undefined') window.Protoplanet = API;
+if (typeof window !== 'undefined') window.Terrabyte = API;

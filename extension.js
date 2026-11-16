@@ -1,4 +1,4 @@
-// extension.js — Piece 2: the VS Code wiring for Protoplanet.
+// extension.js — Piece 2: the VS Code wiring for Terrabyte.
 //
 // This file only talks to VS Code (events, webview, status bar,
 // globalState). All the pet logic lives in petLogic.js, which is pure
@@ -21,7 +21,7 @@ const Logic = require('./petLogic.js');
 
 const STATE_KEY = 'protoplanet.state';
 const BACKUP_KEY = 'protoplanet.state.backup.v1';
-const VIEW_ID = 'protoplanet.petView';
+const VIEW_ID = 'terrabyte.petView';
 const FONT_STACK = "ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace";
 
 function getNonce() {
@@ -34,7 +34,7 @@ function getNonce() {
 // ---------------------------------------------------------------------------
 // The app: owns the state, the status bar, the sidebar view, and saving.
 // ---------------------------------------------------------------------------
-class ProtoplanetApp {
+class TerrabyteApp {
   constructor(context) {
     this.context = context;
     // Round 16 overhaul — deserializeState returns a result object:
@@ -69,8 +69,8 @@ class ProtoplanetApp {
     // ago). A first run starts at null (no planet yet).
     this.lastBirthKey = this.birthKey();
     this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-    this.statusBar.command = 'protoplanet.showPet';
-    this.statusBar.tooltip = 'Protoplanet — click to show your planet';
+    this.statusBar.command = 'terrabyte.showPet';
+    this.statusBar.tooltip = 'Terrabyte — click to show your planet';
     this.statusBar.show();
     this.viewProvider = new PetViewProvider(this);
     this.systemPanel = null; // the Solar System panel (step 4), or null
@@ -84,37 +84,37 @@ class ProtoplanetApp {
       vscode.window.registerWebviewViewProvider(VIEW_ID, this.viewProvider)
     );
     context.subscriptions.push(
-      vscode.commands.registerCommand('protoplanet.showPet', () => this.showPet())
+      vscode.commands.registerCommand('terrabyte.showPet', () => this.showPet())
     );
     context.subscriptions.push(
-      vscode.commands.registerCommand('protoplanet.openSolarSystem', () => this.openSolarSystem())
+      vscode.commands.registerCommand('terrabyte.openSolarSystem', () => this.openSolarSystem())
     );
     context.subscriptions.push(
-      vscode.commands.registerCommand('protoplanet.openPrestige', () => this.openPrestige())
+      vscode.commands.registerCommand('terrabyte.openPrestige', () => this.openPrestige())
     );
     context.subscriptions.push(
-      vscode.commands.registerCommand('protoplanet.sharePlanet', () => this.openShare())
+      vscode.commands.registerCommand('terrabyte.sharePlanet', () => this.openShare())
     );
     context.subscriptions.push(
-      vscode.commands.registerCommand('protoplanet.hatchFromSeed', () => this.hatchFromSeed())
+      vscode.commands.registerCommand('terrabyte.hatchFromSeed', () => this.hatchFromSeed())
     );
     context.subscriptions.push(
-      vscode.commands.registerCommand('protoplanet.newPlanet', () => this.newPlanet())
+      vscode.commands.registerCommand('terrabyte.newPlanet', () => this.newPlanet())
     );
     context.subscriptions.push(
-      vscode.commands.registerCommand('protoplanet.applyMineral', () => this.applyMineral())
+      vscode.commands.registerCommand('terrabyte.applyMineral', () => this.applyMineral())
     );
     context.subscriptions.push(
-      vscode.commands.registerCommand('protoplanet.salvagePlanet', () => this.salvagePlanet())
+      vscode.commands.registerCommand('terrabyte.salvagePlanet', () => this.salvagePlanet())
     );
     context.subscriptions.push(
-      vscode.commands.registerCommand('protoplanet.prestige', () => this.prestige())
+      vscode.commands.registerCommand('terrabyte.prestige', () => this.prestige())
     );
     context.subscriptions.push(
-      vscode.commands.registerCommand('protoplanet.viewMinerals', () => this.viewMinerals())
+      vscode.commands.registerCommand('terrabyte.viewMinerals', () => this.viewMinerals())
     );
     context.subscriptions.push(
-      vscode.commands.registerCommand('protoplanet.openShop', () => this.openShop())
+      vscode.commands.registerCommand('terrabyte.openShop', () => this.openShop())
     );
     context.subscriptions.push(
       vscode.workspace.onDidChangeTextDocument((e) => this.onDidChangeTextDocument(e))
@@ -188,7 +188,7 @@ class ProtoplanetApp {
       // never silently discard.
       this.backupFailed = true;
       this.writesBlocked = true;
-      this.notify('Protoplanet couldn\'t back up your save, so nothing was changed. Restart VS Code to try again — your progress is untouched.');
+      this.notify('Terrabyte couldn\'t back up your save, so nothing was changed. Restart VS Code to try again — your progress is untouched.');
     }
   }
 
@@ -200,7 +200,7 @@ class ProtoplanetApp {
   // blocked, so the prompt returns on the next launch.
   async promptCorruptSave() {
     const answer = await vscode.window.showWarningMessage(
-      'Your Protoplanet save couldn\'t be read. Your original save is backed up and nothing has been overwritten.',
+      'Your Terrabyte save couldn\'t be read. Your original save is backed up and nothing has been overwritten.',
       { modal: true },
       'Start a new game',
       'Restore backup'
@@ -386,7 +386,7 @@ class ProtoplanetApp {
   // pet window and status bar.
   async hatchFromSeed() {
     const raw = await vscode.window.showInputBox({
-      prompt: 'Protoplanet: hatch a planet from a shared seed',
+      prompt: 'Terrabyte: hatch a planet from a shared seed',
       placeHolder: 'Seed, e.g. 805839337 or 948502300-icy',
       ignoreFocusOut: true,
       validateInput: (v) => {
@@ -496,7 +496,7 @@ class ProtoplanetApp {
   async pickMineralGroup(placeHolder) {
     const inv = Logic.mineralInventory(this.state);
     if (inv.groups.length === 0) {
-      this.notify('No minerals yet — salvage a planet to get one, or buy one in the Protoplanet shop.');
+      this.notify('No minerals yet — salvage a planet to get one, or buy one in the Terrabyte shop.');
       return null;
     }
     const items = inv.groups.map((g) => ({
@@ -561,7 +561,7 @@ class ProtoplanetApp {
     }
     const odds = Logic.applyOdds();
     const group = await this.pickMineralGroup(
-      `Protoplanet: spend a mineral — ${Logic.formatOdds(odds.success)} chance to put its mutation on your planet`
+      `Terrabyte: spend a mineral — ${Logic.formatOdds(odds.success)} chance to put its mutation on your planet`
     );
     await this.handleMineralGroupPick(group);
   }
@@ -581,7 +581,7 @@ class ProtoplanetApp {
   async viewMinerals() {
     const inv = Logic.mineralInventory(this.state);
     const group = await this.pickMineralGroup(
-      `Protoplanet: minerals — ✦ ${Math.floor(inv.stardust).toLocaleString()} Stardust`
+      `Terrabyte: minerals — ✦ ${Math.floor(inv.stardust).toLocaleString()} Stardust`
     );
     await this.handleMineralGroupPick(group);
   }
@@ -627,7 +627,7 @@ class ProtoplanetApp {
       },
     ];
     const pick = await vscode.window.showQuickPick(items, {
-      placeHolder: `Protoplanet: shop — ✦ ${bal()} Stardust`,
+      placeHolder: `Terrabyte: shop — ✦ ${bal()} Stardust`,
       ignoreFocusOut: true,
     });
     if (!pick) return;
@@ -642,7 +642,7 @@ class ProtoplanetApp {
         };
       });
       const famPick = await vscode.window.showQuickPick(famItems, {
-        placeHolder: 'Protoplanet: pick a family for your mutation mineral',
+        placeHolder: 'Terrabyte: pick a family for your mutation mineral',
         ignoreFocusOut: true,
       });
       if (!famPick) return;
@@ -658,7 +658,7 @@ class ProtoplanetApp {
       if (famAnswer !== 'Yes, buy it') return;
       const res = Logic.buyFamilyPick(this.state, famPick.id);
       if (!res.ok) { this.notify(`Not enough Stardust — a Family Mutation Mineral costs ${price(famPrice)} ✦.`); return; }
-      this.notify(`Family Mutation Mineral: you got a ${Logic.mineralName(res.mineral)}! Spend it from 'Protoplanet: Apply a mineral to your planet'.`);
+      this.notify(`Family Mutation Mineral: you got a ${Logic.mineralName(res.mineral)}! Spend it from 'Terrabyte: Apply a mineral to your planet'.`);
     } else if (pick.kind === 'birth') {
       const birthPrice = Logic.CONFIG.SHOP_BIRTH_PRICE;
       if ((this.state.stardust || 0) < birthPrice) { this.notify(`Not enough Stardust — a Birth Mineral costs ${price(birthPrice)} ✦.`); return; }
@@ -682,7 +682,7 @@ class ProtoplanetApp {
       if (randomAnswer !== 'Yes, buy it') return;
       const res = Logic.buyRandomMutationMineral(this.state);
       if (!res.ok) { this.notify(`Not enough Stardust — a Random Mutation Mineral costs ${price(randomPrice)} ✦.`); return; }
-      this.notify(`Random Mutation Mineral: you got a ${Logic.mineralName(res.mineral)}! Spend it from 'Protoplanet: Apply a mineral to your planet'.`);
+      this.notify(`Random Mutation Mineral: you got a ${Logic.mineralName(res.mineral)}! Spend it from 'Terrabyte: Apply a mineral to your planet'.`);
     }
     this.saveNow();
     this.pushState();
@@ -752,7 +752,7 @@ class ProtoplanetApp {
     });
     if (items.length === 0) return;
     const pick = await vscode.window.showQuickPick(items, {
-      placeHolder: 'Protoplanet: destroy a planet for minerals (permanent)',
+      placeHolder: 'Terrabyte: destroy a planet for minerals (permanent)',
       ignoreFocusOut: true,
     });
     if (!pick) return;
@@ -825,7 +825,7 @@ class ProtoplanetApp {
       kind: 'birthTerrain',
     });
     const pick = await vscode.window.showQuickPick(items, {
-      placeHolder: 'Protoplanet: your planet is gone — what grows next?',
+      placeHolder: 'Terrabyte: your planet is gone — what grows next?',
       ignoreFocusOut: true,
     });
     if (!pick) return;
@@ -839,7 +839,7 @@ class ProtoplanetApp {
         index: i,
       }));
       const planetPick = await vscode.window.showQuickPick(planetItems, {
-        placeHolder: 'Protoplanet: grow an old planet again',
+        placeHolder: 'Terrabyte: grow an old planet again',
         ignoreFocusOut: true,
       });
       if (!planetPick) return;
@@ -870,7 +870,7 @@ class ProtoplanetApp {
         return { label: t ? t.label : id, description: t ? t.desc : '', id };
       });
       const terrainPick = await vscode.window.showQuickPick(terrainItems, {
-        placeHolder: 'Protoplanet: pick a starter terrain',
+        placeHolder: 'Terrabyte: pick a starter terrain',
         ignoreFocusOut: true,
       });
       // Dismissing the pick is fine — the planet is fully random then.
@@ -906,7 +906,7 @@ class ProtoplanetApp {
           parent: p,
         }));
       return vscode.window.showQuickPick(items, {
-        placeHolder: exclude ? 'Protoplanet: pick the second parent' : 'Protoplanet: pick the first parent',
+        placeHolder: exclude ? 'Terrabyte: pick the second parent' : 'Terrabyte: pick the first parent',
         ignoreFocusOut: true,
       });
     };
@@ -940,7 +940,7 @@ class ProtoplanetApp {
         };
       });
       const inheritPick = await vscode.window.showQuickPick(inheritItems, {
-        placeHolder: 'Protoplanet: inheritance chances — pick any row to continue to the confirm',
+        placeHolder: 'Terrabyte: inheritance chances — pick any row to continue to the confirm',
         ignoreFocusOut: true,
       });
       if (!inheritPick) return;
@@ -980,8 +980,8 @@ class ProtoplanetApp {
   openSolarSystem() {
     if (this.systemPanel) { this.systemPanel.reveal(); return; }
     const panel = vscode.window.createWebviewPanel(
-      'protoplanet.system',
-      'Protoplanet — Solar System',
+      'terrabyte.system',
+      'Terrabyte — Solar System',
       vscode.ViewColumn.One,
       {
         enableScripts: true,
@@ -1336,8 +1336,8 @@ class ProtoplanetApp {
   openPrestige() {
     if (this.prestigePanel) { this.prestigePanel.reveal(); return; }
     const panel = vscode.window.createWebviewPanel(
-      'protoplanet.prestige',
-      'Protoplanet — Prestige',
+      'terrabyte.prestige',
+      'Terrabyte — Prestige',
       vscode.ViewColumn.One,
       {
         enableScripts: true,
@@ -1454,8 +1454,8 @@ class ProtoplanetApp {
     }
     if (this.sharePanel) { this.sharePanel.reveal(); return; }
     const panel = vscode.window.createWebviewPanel(
-      'protoplanet.share',
-      'Protoplanet — Share your planet',
+      'terrabyte.share',
+      'Terrabyte — Share your planet',
       vscode.ViewColumn.One,
       {
         enableScripts: true,
@@ -1533,7 +1533,7 @@ class ProtoplanetApp {
       return { label: t ? t.label : id, description: t ? t.desc : '', id };
     });
     const pick = await vscode.window.showQuickPick(items, {
-      placeHolder: 'Protoplanet: pick your first planet',
+      placeHolder: 'Terrabyte: pick your first planet',
       ignoreFocusOut: true,
     });
     // Dismissing the pick is fine — the planet is fully random then.
@@ -1626,7 +1626,7 @@ class ProtoplanetApp {
         + ` · ✦${Math.floor(vm.stardust).toLocaleString()}`
         + (vm.minerals && vm.minerals.total > 0 ? ` · ◆${vm.minerals.total}` : '');
     } else {
-      this.statusBar.text = '$(globe) Protoplanet — hatching…';
+      this.statusBar.text = '$(globe) Terrabyte — hatching…';
     }
     this.viewProvider.postState(vm);
     // The flash is one-shot: it rode this push to the sidebar, and
@@ -1759,7 +1759,7 @@ class ProtoplanetApp {
 <script nonce="${nonce}">
 (function () {
   const vscodeApi = acquireVsCodeApi();
-  const P = window.Protoplanet;
+  const P = window.Terrabyte;
   const gridEl = document.getElementById('grid');
   const wrapEl = document.getElementById('wrap');
   // Round 17 (D) — floating Stardust chip: created here as the card's
@@ -2393,7 +2393,7 @@ class ProtoplanetApp {
 <script nonce="${nonce}">
 (function () {
   var vscodeApi = acquireVsCodeApi();
-  var P = window.Protoplanet;
+  var P = window.Terrabyte;
   // TILT is the ring squash (scaleY): 1.0 would be top-down, 0 a side
   // view. 0.34 is a little more tilted than the first 0.42 (Devon,
   // Nov 11 — steeper reads more realistic) but the rings are still
@@ -3206,7 +3206,7 @@ class ProtoplanetApp {
     var html = '<button id="detailClose" class="ghost" data-action="close" title="Close">&times;</button>'
       + '<h2>' + esc(planet.name) + '</h2>'
       + '<div class="chips">' + chips + '</div>'
-      + '<p class="sub">' + esc(planet.terrainLabel || 'Protoplanet') + ' &middot; Seed ' + planet.seed + '</p>'
+      + '<p class="sub">' + esc(planet.terrainLabel || 'Terrabyte') + ' &middot; Seed ' + planet.seed + '</p>'
       + '<div id="detailArt" class="pp-frame" data-cw="4" data-ch="7.2" data-atmo="' + planet.planet.atmosphere + '"><div class="pp-stars"></div><div class="pp-planet"><div class="pp-grid"></div></div></div>'
       + (mutChips ? '<div class="mutchips">' + mutChips + '</div>' : '')
       + '<div class="vitals">'
@@ -3517,7 +3517,7 @@ class ProtoplanetApp {
     if (inv) {
       minHtml = '<div class="mutSectionHead">Your minerals<span class="mutSectionRight">' + inv.total + ' total · ✦ ' + Math.floor(inv.stardust || 0).toLocaleString() + ' Stardust</span></div>';
       if (inv.groups.length === 0) {
-        minHtml += '<div class="mutEmpty">No minerals yet — salvage a planet to get one, or buy one in the Protoplanet shop.</div>';
+        minHtml += '<div class="mutEmpty">No minerals yet — salvage a planet to get one, or buy one in the Terrabyte shop.</div>';
       } else {
         for (var k = 0; k < inv.groups.length; k++) {
           var g = inv.groups[k];
@@ -4195,7 +4195,7 @@ class ProtoplanetApp {
 <script nonce="${nonce}">
 (function () {
   var vscodeApi = acquireVsCodeApi();
-  var P = window.Protoplanet;
+  var P = window.Terrabyte;
   var state = null, sec = 0, tick = 0;
   var pickA = null, pickB = null; // planet entries from state.planets
   var confirmOpen = false, prestiging = false, prestigeT0 = 0, lastError = '';
@@ -4798,14 +4798,14 @@ class ProtoplanetApp {
   </div>
   <h2>GitHub README</h2>
   <pre id="markdownBlock"></pre>
-  <p id="hint">The seed hatches the same base planet &mdash; a friend can paste it into their own Protoplanet and grow the same world. The PNG is the planet art, ready to post.</p>
+  <p id="hint">The seed hatches the same base planet &mdash; a friend can paste it into their own Terrabyte and grow the same world. The PNG is the planet art, ready to post.</p>
 </div>
 <canvas id="pngCanvas" style="display:none"></canvas>
 <script nonce="${nonce}" src="${planetJsUri}"></script>
 <script nonce="${nonce}">
 (function () {
   var vscodeApi = acquireVsCodeApi();
-  var P = window.Protoplanet;
+  var P = window.Terrabyte;
   var gridEl = document.getElementById('grid');
   var wrapEl = document.getElementById('wrap');
   var root = document.documentElement;
@@ -5034,7 +5034,7 @@ class PetViewProvider {
 let activeApp = null;
 
 function activate(context) {
-  activeApp = new ProtoplanetApp(context);
+  activeApp = new TerrabyteApp(context);
   // First run (once): ask for the starter terrain. Fire and forget —
   // the extension works fine while the pick is open.
   activeApp.maybeFirstRun();

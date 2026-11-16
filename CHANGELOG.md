@@ -17,3 +17,6 @@
   the same base planet (without its mutations).
 - Sidebar pet view, status bar with stage and XP, and a discovery
   journal that records your planet's story.
+- Renamed from Protoplanet to Terrabyte — new extension name
+  (`devoncline.terrabyte`), new commands, same game. Existing saves
+  carry over untouched.

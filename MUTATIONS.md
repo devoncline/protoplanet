@@ -1,4 +1,4 @@
-# Mutation list — Protoplanet (decided with Devon, Nov 11, 2026; reworked Nov 12)
+# Mutation list — Terrabyte (decided with Devon, Nov 11, 2026; reworked Nov 12)
 
 Keep this list current. Devon asks for it on demand — send him this list.
 
@@ -111,7 +111,7 @@ is preserved. Inventory lives in petLogic state
 **Apply (round 10 — the mineral IS the mutation; feeding is gone):**
 Devon, Nov 12: feeding a mineral to tilt the NEXT planet's birth roll
 was "confusing and clunky". Replaced. Now you spend a mineral on the
-planet you already love — Command Palette: "Protoplanet: Apply a
+planet you already love — Command Palette: "Terrabyte: Apply a
 mineral to your planet". The pick list only shows Mutation minerals
 whose mutation this planet doesn't already have (a Birth mineral
 can never be applied — it pays for births). Then a 50% flip

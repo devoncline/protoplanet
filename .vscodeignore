@@ -18,6 +18,7 @@ MUTATIONS.md
 DEVLOG.md
 images/**
 .gitignore
+.github/**
 .vscode/**
 *.vsix
 __pycache__/**

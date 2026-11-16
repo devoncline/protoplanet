@@ -1,4 +1,4 @@
-// petLogic.js — Piece 2: the PURE logic of the Protoplanet extension.
+// petLogic.js — Piece 2: the PURE logic of the Terrabyte extension.
 //
 // No `vscode` import here: every function in this file runs in plain Node
 // (see test-pet.js). extension.js does the VS Code wiring (events,
@@ -1813,11 +1813,11 @@ function hatchFromSeed(state, seed, terrain) {
 // so the panel and the tests agree on exactly what gets shared.
 // A seed hatches the exact same planet — same seed = same planet —
 // so the seed IS the shareable planet: the markdown embeds it so a
-// friend can paste it into their own Protoplanet and grow the same
+// friend can paste it into their own Terrabyte and grow the same
 // world. The image line points at the downloaded PNG file, which
 // sits next to the README wherever the player puts it.
 // ---------------------------------------------------------------------------
-const SHARE_REPO_URL = 'https://github.com/devoncline/protoplanet';
+const SHARE_REPO_URL = 'https://github.com/devoncline/terrabyte';
 
 // The seed as it is SHARED (Nov 12 seed-hatch fix): the bare seed
 // when the planet's terrain is what its seed rolls anyway, otherwise
@@ -1836,13 +1836,13 @@ function shareSeedFor(planet) {
   return `${planet.seed}-${terrain}`;
 }
 
-// protoplanet-k2-277c-gen5.png — the catalog name slugified, so the
+// terrabyte-k2-277c-gen5.png — the catalog name slugified, so the
 // file is readable and unique per planet (names are unique in a
 // collection, and the generation disambiguates across collections).
 function shareCardFilename(name, generation) {
   const slug = String(name || 'planet').toLowerCase()
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'planet';
-  return `protoplanet-${slug}-gen${generation || 1}.png`;
+  return `terrabyte-${slug}-gen${generation || 1}.png`;
 }
 
 // The README block. `planet` is the renderable shape from
@@ -1851,11 +1851,11 @@ function shareCardFilename(name, generation) {
 // planet has one — a plain planet's card stays clean.
 function shareCardMarkdown(planet, filename) {
   const lines = [];
-  lines.push(`![${planet.name} — Protoplanet](${filename})`);
+  lines.push(`![${planet.name} — Terrabyte](${filename})`);
   lines.push('');
-  lines.push(`**${planet.name}** · ${planet.terrainLabel || 'Protoplanet'} · ${planet.stageName} · grown from ${Number(planet.chars || 0).toLocaleString()} characters`);
+  lines.push(`**${planet.name}** · ${planet.terrainLabel || 'Terrabyte'} · ${planet.stageName} · grown from ${Number(planet.chars || 0).toLocaleString()} characters`);
   if (planet.mutationLabel) lines.push(planet.mutationLabel);
-  lines.push(`Seed \`${shareSeedFor(planet)}\` — hatch the same base planet in [Protoplanet](${SHARE_REPO_URL}).`);
+  lines.push(`Seed \`${shareSeedFor(planet)}\` — hatch the same base planet in [Terrabyte](${SHARE_REPO_URL}).`);
   return lines.join('\n');
 }
 

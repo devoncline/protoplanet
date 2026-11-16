@@ -1,29 +1,29 @@
-# Protoplanet
+# Terrabyte
 
 Type, and a little ASCII planet grows in your editor.
 
-<img src="https://github.com/devoncline/protoplanet/raw/HEAD/images/listing-demo-sidebar-1125a.gif" width="300" alt="A planet growing in the sidebar as you type">
+<img src="https://github.com/devoncline/terrabyte/raw/HEAD/images/listing-demo-sidebar-1125a.gif" width="300" alt="A planet growing in the sidebar as you type">
 
 ## Install
 
 **From the Marketplace:** open the Extensions view in VS Code, search for
-**Protoplanet**, and click Install (or press Ctrl+P / Cmd+P and paste
-`ext install devoncline.protoplanet`).
+**Terrabyte**, and click Install (or press Ctrl+P / Cmd+P and paste
+`ext install devoncline.terrabyte`).
 
-![Search for Protoplanet in the Extensions view](images/readme-install-search-1116.png)
+![Search for Terrabyte in the Extensions view](images/readme-install-search-1116.png)
 
 **From a `.vsix` file:** Extensions view → **…** → **Install from VSIX…**,
 then pick the file.
 
 Requires VS Code 1.85 or later.
 
-## Using Protoplanet
+## Using Terrabyte
 
 Open the Command Palette (Ctrl+Shift+P / Cmd+Shift+P), type
-**Protoplanet**, and run a command. Show pet opens the sidebar, Open shop
+**Terrabyte**, and run a command. Show pet opens the sidebar, Open shop
 buys minerals, and the rest are all listed there too.
 
-![All of Protoplanet's commands in the Command Palette](images/readme-command-palette-1116.png)
+![All of Terrabyte's commands in the Command Palette](images/readme-command-palette-1116.png)
 
 ## How it works
 
@@ -111,17 +111,17 @@ without your mutations. Those stay yours.
 
 | Command | What it does |
 | --- | --- |
-| Protoplanet: Show pet | Open the sidebar pet view |
-| Protoplanet: New planet | Start a new planet (costs 1 Birth Mineral after the first) |
-| Protoplanet: Apply a mineral to your planet | Apply a Mutation Mineral to the growing planet (50/50) |
-| Protoplanet: Salvage / recycle a planet | Destroy or recycle a planet for minerals |
-| Protoplanet: Prestige two planets | Combine two Civilization planets into a child |
-| Protoplanet: Open prestige | Open the prestige picker |
-| Protoplanet: Open solar system | Open the orrery and Index |
-| Protoplanet: Share planet | Share the current planet (PNG, seed, or Markdown) |
-| Protoplanet: Hatch from seed | Hatch a planet from a shared seed |
-| Protoplanet: View mineral inventory | See your minerals |
-| Protoplanet: Open shop | Buy minerals with Stardust |
+| Terrabyte: Show pet | Open the sidebar pet view |
+| Terrabyte: New planet | Start a new planet (costs 1 Birth Mineral after the first) |
+| Terrabyte: Apply a mineral to your planet | Apply a Mutation Mineral to the growing planet (50/50) |
+| Terrabyte: Salvage / recycle a planet | Destroy or recycle a planet for minerals |
+| Terrabyte: Prestige two planets | Combine two Civilization planets into a child |
+| Terrabyte: Open prestige | Open the prestige picker |
+| Terrabyte: Open solar system | Open the orrery and Index |
+| Terrabyte: Share planet | Share the current planet (PNG, seed, or Markdown) |
+| Terrabyte: Hatch from seed | Hatch a planet from a shared seed |
+| Terrabyte: View mineral inventory | See your minerals |
+| Terrabyte: Open shop | Buy minerals with Stardust |
 
 ## Known limitations
 
@@ -131,9 +131,9 @@ without your mutations. Those stay yours.
   planet can't move to another computer for now. Export is planned.
 - **Early release.** This is 0.1.0. Things will change, and there will be
   rough edges. Bugs and ideas are welcome on the
-  [GitHub repo](https://github.com/devoncline/protoplanet).
+  [GitHub repo](https://github.com/devoncline/terrabyte).
 
 ## Changelog and license
 
-See [CHANGELOG.md](CHANGELOG.md) for what's in each release. Protoplanet
+See [CHANGELOG.md](CHANGELOG.md) for what's in each release. Terrabyte
 is [MIT licensed](LICENSE).

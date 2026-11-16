@@ -1,12 +1,12 @@
 # Dev log (archived)
 
-This is the original development log for Protoplanet, kept for history. It
+This is the original development log for Terrabyte, kept for history. It
 was the README before the first Marketplace release (0.1.0). The
 player-facing README is now `README.md`.
 
 ---
 
-# Protoplanet — a VS Code extension (in progress)
+# Terrabyte — a VS Code extension (in progress)
 
 A coding pet for VS Code: as you type, a little ASCII planet grows —
 through an 8-stage lifecycle (dust → rock →
@@ -72,10 +72,10 @@ The actual VS Code extension. Open the folder in VS Code and press **F5**
 (Extension Development Host) to run it, or `npx @vscode/vsce package`
 then **Install from VSIX**. Nothing is published to the Marketplace.
 
-- **`package.json`** — publisher `devoncline`, name `protoplanet`, activates
+- **`package.json`** — publisher `devoncline`, name `terrabyte`, activates
   on startup. Contributes a pet view as a collapsible section in the
-  Explorer (no separate Activity Bar icon), plus commands **Protoplanet: Show pet**
-  and **Protoplanet: New planet** (asks first; the old planet is kept in
+  Explorer (no separate Activity Bar icon), plus commands **Terrabyte: Show pet**
+  and **Terrabyte: New planet** (asks first; the old planet is kept in
   the collection record). A "New planet" button also sits in the view's
   title bar.
 - **`petLogic.js`** — the pure logic, no `vscode` import, tested in plain
@@ -126,7 +126,7 @@ then **Install from VSIX**. Nothing is published to the Marketplace.
 
 ## Step 4 — Solar System / collection view (DONE Nov 11; redesigned Nov 12)
 
-Command: **Protoplanet: Open solar system** (`protoplanet.openSolarSystem`).
+Command: **Terrabyte: Open solar system** (`terrabyte.openSolarSystem`).
 
 A full-screen webview panel in the Instrument style (Devon, Nov 12):
 near-black background, thin hairline rules, monospace type, one amber
@@ -228,7 +228,7 @@ not top-down and not pure side view.
 
 ## Share card (DONE Nov 12)
 
-One click, one card. Command **Protoplanet: Share planet** opens a panel
+One click, one card. Command **Terrabyte: Share planet** opens a panel
 with the live animated planet (same fixed-cell render as the sidebar),
 its catalog name, stage, generation, mutation badge when it has one,
 and seed — plus three actions:
@@ -236,13 +236,13 @@ and seed — plus three actions:
 - **Download PNG** — draws the same planet on a canvas at 8px cells
   (the full 136×76 grid, 1088px wide + an amber `Name · seed <seed>`
   caption) and saves it via a save dialog as
-  `protoplanet-<name>-gen<N>.png`. Postable on X/Reddit or in a README.
+  `terrabyte-<name>-gen<N>.png`. Postable on X/Reddit or in a README.
 - **Copy seed** — the seed on the clipboard. A friend can paste it into
-  their own Protoplanet and hatch the same base planet, without
+  their own Terrabyte and hatch the same base planet, without
   mutations (see Hatch from seed below).
 - **Copy Markdown** — a README-ready block (image line, bold name/terrain/
   stage/generation/characters line, mutation line when present, seed line
-  linking back to https://github.com/devoncline/protoplanet).
+  linking back to https://github.com/devoncline/terrabyte).
 
 The filename and the Markdown are pure helpers in `petLogic.js`
 (`shareCardFilename`, `shareCardMarkdown`) so the panel and the tests
@@ -264,7 +264,7 @@ button in the panel, and the only info message is the no-planet guard
 
 ## Hatch from seed (DONE Nov 12)
 
-Command: **Protoplanet: Hatch from seed** (`protoplanet.hatchFromSeed`).
+Command: **Terrabyte: Hatch from seed** (`terrabyte.hatchFromSeed`).
 
 Paste a seed number and hatch that seed's planet. Same seed = same
 planet: same terrain, rings, moons, size, and catalog name. **But never

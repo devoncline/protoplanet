@@ -322,8 +322,8 @@ eq('persist: malformed current -> flagged corrupt', badCurrentRes.corrupt, true)
 const pkgPath = path.join(__dirname, 'package.json');
 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
 eq('pkg: publisher', pkg.publisher, 'devoncline');
-eq('pkg: name', pkg.name, 'protoplanet');
-eq('pkg: displayName', pkg.displayName, 'Protoplanet');
+eq('pkg: name', pkg.name, 'terrabyte');
+eq('pkg: displayName', pkg.displayName, 'Terrabyte');
 eq('pkg: main is extension.js', pkg.main, './extension.js');
 check('pkg: activates onStartupFinished', (pkg.activationEvents || []).includes('onStartupFinished'));
 check('pkg: engines.vscode present', typeof pkg.engines === 'object' && typeof pkg.engines.vscode === 'string');
@@ -332,22 +332,22 @@ check('pkg: engines.vscode present', typeof pkg.engines === 'object' && typeof p
 check('pkg: no activity bar container',
   !(pkg.contributes && pkg.contributes.viewsContainers && pkg.contributes.viewsContainers.activitybar));
 const views = (pkg.contributes && pkg.contributes.views && pkg.contributes.views.explorer) || [];
-check('pkg: pet view lives in the Explorer', views.some((v) => v.id === 'protoplanet.petView' && v.type === 'webview'));
+check('pkg: pet view lives in the Explorer', views.some((v) => v.id === 'terrabyte.petView' && v.type === 'webview'));
 const cmds = (pkg.contributes && pkg.contributes.commands) || [];
-check('pkg: showPet command', cmds.some((c) => c.command === 'protoplanet.showPet'));
-check('pkg: newPlanet command', cmds.some((c) => c.command === 'protoplanet.newPlanet'));
-check('pkg: applyMineral command', cmds.some((c) => c.command === 'protoplanet.applyMineral'));
-check('pkg: salvagePlanet command', cmds.some((c) => c.command === 'protoplanet.salvagePlanet'));
-check('pkg: prestige command', cmds.some((c) => c.command === 'protoplanet.prestige'));
+check('pkg: showPet command', cmds.some((c) => c.command === 'terrabyte.showPet'));
+check('pkg: newPlanet command', cmds.some((c) => c.command === 'terrabyte.newPlanet'));
+check('pkg: applyMineral command', cmds.some((c) => c.command === 'terrabyte.applyMineral'));
+check('pkg: salvagePlanet command', cmds.some((c) => c.command === 'terrabyte.salvagePlanet'));
+check('pkg: prestige command', cmds.some((c) => c.command === 'terrabyte.prestige'));
 check('pkg: no activity bar icon reference', !JSON.stringify(pkg.contributes).includes('media/planet.svg'));
 check('pkg: planet.js exists for the webview', fs.existsSync(path.join(__dirname, 'planet.js')));
 
 const extSrc = fs.readFileSync(path.join(__dirname, 'extension.js'), 'utf8');
-check('ext: registers showPet', extSrc.includes("'protoplanet.showPet'"));
-check('ext: registers newPlanet', extSrc.includes("'protoplanet.newPlanet'"));
-check('ext: registers applyMineral', extSrc.includes("'protoplanet.applyMineral'"));
-check('ext: registers salvagePlanet', extSrc.includes("'protoplanet.salvagePlanet'"));
-check('ext: registers prestige', extSrc.includes("'protoplanet.prestige'"));
+check('ext: registers showPet', extSrc.includes("'terrabyte.showPet'"));
+check('ext: registers newPlanet', extSrc.includes("'terrabyte.newPlanet'"));
+check('ext: registers applyMineral', extSrc.includes("'terrabyte.applyMineral'"));
+check('ext: registers salvagePlanet', extSrc.includes("'terrabyte.salvagePlanet'"));
+check('ext: registers prestige', extSrc.includes("'terrabyte.prestige'"));
 check('ext: status bar shows minerals', extSrc.includes('mineralSummary'));
 check('ext: listens for typing', extSrc.includes('onDidChangeTextDocument'));
 check('ext: uses gridToHtml (fixed cells)', extSrc.includes('gridToHtml'));
@@ -382,13 +382,13 @@ check('ext: XP bar turns orange at max (maxed class)', extSrc.includes('#xpfill.
 check('ext: view model carries isMax', extSrc.includes('isMax: info.isMax'));
 check('ext: status bar shows MAX at max', extSrc.includes('· MAX'));
 check('ext: sidebar handles a null next threshold at max', extSrc.includes('msg.nextXp === null'));
-// The sidebar webview runs planet.js as window.Protoplanet only — a bare
+// The sidebar webview runs planet.js as window.Terrabyte only — a bare
 // `Planet` global does not exist there. (Nov 11: layout() threw
 // ReferenceError: Planet is not defined at load, so 'ready' never fired
 // and the pet art never rendered — placeholder text + black strip.)
 // The webview script must use the P alias throughout.
 check('ext: sidebar webview never uses a bare Planet global', !extSrc.includes('Planet.CONFIG.W'));
-check('ext: sidebar webview uses the Protoplanet alias', extSrc.includes('P.CONFIG.W'));
+check('ext: sidebar webview uses the Terrabyte alias', extSrc.includes('P.CONFIG.W'));
 // The two locked-ring labels sit above adjacent ring tops, which are
 // only (spacing * TILT) apart — under one label height when many rings
 // exist. The second label is staggered 26px higher so they can never
@@ -1044,8 +1044,8 @@ check('persist: old save gets a 4-ring system',
   Array.isArray(migrated2.system) && migrated2.system.length === 4 && migrated2.system.every((s) => s === null));
 
 // 13g. package.json + extension.js wiring for the Solar System panel.
-check('pkg: openSolarSystem command', cmds.some((c) => c.command === 'protoplanet.openSolarSystem'));
-check('ext: registers openSolarSystem', extSrc.includes("'protoplanet.openSolarSystem'"));
+check('pkg: openSolarSystem command', cmds.some((c) => c.command === 'terrabyte.openSolarSystem'));
+check('ext: registers openSolarSystem', extSrc.includes("'terrabyte.openSolarSystem'"));
 check('ext: opens a webview panel', extSrc.includes('createWebviewPanel'));
 check('ext: panel keeps context when hidden', extSrc.includes('retainContextWhenHidden'));
 check('ext: builds a system view model', extSrc.includes('solarSystemViewModel'));
@@ -1675,8 +1675,8 @@ check('panel-logic: the eligible list includes archived planets',
   elig.some((p) => p.kind === 'past' && p.index === 0));
 
 // 14b. package.json + extension.js wiring for the Prestige panel.
-check('pkg: openPrestige command', cmds.some((c) => c.command === 'protoplanet.openPrestige'));
-check('ext: registers openPrestige', extSrc.includes("'protoplanet.openPrestige'"));
+check('pkg: openPrestige command', cmds.some((c) => c.command === 'terrabyte.openPrestige'));
+check('ext: registers openPrestige', extSrc.includes("'terrabyte.openPrestige'"));
 check('ext: prestige panel HTML exists', extSrc.includes('getPrestigeHtml'));
 check('ext: builds a prestige view model', extSrc.includes('prestigeViewModel'));
 check('ext: handles prestige messages', extSrc.includes('onPrestigeMessage'));
@@ -1703,7 +1703,7 @@ check('panel: re-roll WITH the stored terrain reproduces the planet exactly',
     && gjFixed.ringType === gjLive.ringType && gjFixed.size === gjLive.size,
   `fixed=${gjFixed.terrain}`);
 check('ext: panel posts the prestige result for the result view', extSrc.includes('recordPrestigeResult'));
-check('ext: panel has a dedicated webview panel (not a QuickPick)', extSrc.includes("'protoplanet.prestige'"));
+check('ext: panel has a dedicated webview panel (not a QuickPick)', extSrc.includes("'terrabyte.prestige'"));
 check('ext: panel keeps context when hidden', extSrc.includes('retainContextWhenHidden'));
 check('ext: panel uses the fixed-cell renderer', extSrc.includes('gridToHtml'));
 // 14c. The prestige itself: a violent ASCII collision, not a gentle
@@ -1736,26 +1736,26 @@ const sharePlanet = {
   terrainLabel: 'Toxic world',
 };
 eq('share: filename slugifies the catalog name',
-  L.shareCardFilename('K2-277c', 5), 'protoplanet-k2-277c-gen5.png');
+  L.shareCardFilename('K2-277c', 5), 'terrabyte-k2-277c-gen5.png');
 eq('share: filename strips spaces and dots',
-  L.shareCardFilename('TOI 700.d', 2), 'protoplanet-toi-700-d-gen2.png');
+  L.shareCardFilename('TOI 700.d', 2), 'terrabyte-toi-700-d-gen2.png');
 eq('share: filename falls back for an empty name',
-  L.shareCardFilename('', 1), 'protoplanet-planet-gen1.png');
+  L.shareCardFilename('', 1), 'terrabyte-planet-gen1.png');
 eq('share: filename defaults the generation to 1',
-  L.shareCardFilename('Kepler-442b'), 'protoplanet-kepler-442b-gen1.png');
-const shareMd = L.shareCardMarkdown(sharePlanet, 'protoplanet-k2-277c-gen5.png');
+  L.shareCardFilename('Kepler-442b'), 'terrabyte-kepler-442b-gen1.png');
+const shareMd = L.shareCardMarkdown(sharePlanet, 'terrabyte-k2-277c-gen5.png');
 check('share: markdown embeds the PNG file',
-  shareMd.includes('![K2-277c — Protoplanet](protoplanet-k2-277c-gen5.png)'), shareMd);
+  shareMd.includes('![K2-277c — Terrabyte](terrabyte-k2-277c-gen5.png)'), shareMd);
 check('share: markdown names the planet, terrain, stage and chars',
   shareMd.includes('**K2-277c** · Toxic world · Civilization · grown from 2,400 characters'), shareMd);
 check('share: markdown carries the mutation label when the planet has one',
   shareMd.includes('MUTATION · Green Moon'), shareMd);
 check('share: markdown embeds the seed in backticks',
   shareMd.includes('Seed `805839337`'), shareMd);
-check('share: markdown links the Protoplanet repo',
-  shareMd.includes('[Protoplanet](https://github.com/devoncline/protoplanet)'), shareMd);
+check('share: markdown links the Terrabyte repo',
+  shareMd.includes('[Terrabyte](https://github.com/devoncline/terrabyte)'), shareMd);
 // A plain planet (no mutation) gets a clean card — no mutation line.
-const plainMd = L.shareCardMarkdown({ ...sharePlanet, mutationLabel: null }, 'protoplanet-k2-277c-gen5.png');
+const plainMd = L.shareCardMarkdown({ ...sharePlanet, mutationLabel: null }, 'terrabyte-k2-277c-gen5.png');
 check('share: markdown has no mutation line for a plain planet',
   !plainMd.includes('MUTATION'), plainMd);
 check('share: plain card still embeds the seed',
@@ -1774,17 +1774,17 @@ eq('share: bare seed for an unknown terrain',
   L.shareSeedFor({ seed: 948502300, terrain: 'bogus' }), '948502300');
 const taggedMd = L.shareCardMarkdown(
   { ...sharePlanet, seed: 948502300, terrain: 'icy', terrainLabel: 'Icy world', name: 'GJ-364c', mutationLabel: null },
-  'protoplanet-gj-364c-gen1.png');
+  'terrabyte-gj-364c-gen1.png');
 check('share: markdown embeds the tagged seed for a starter-picked planet',
   taggedMd.includes('Seed `948502300-icy`'), taggedMd);
 check('share: markdown still names the tagged planet',
   taggedMd.includes('**GJ-364c** · Icy world'), taggedMd);
 
 // 15b. package.json + extension.js wiring for the Share panel.
-check('pkg: sharePlanet command', cmds.some((c) => c.command === 'protoplanet.sharePlanet'));
-check('ext: registers sharePlanet', extSrc.includes("'protoplanet.sharePlanet'"));
+check('pkg: sharePlanet command', cmds.some((c) => c.command === 'terrabyte.sharePlanet'));
+check('ext: registers sharePlanet', extSrc.includes("'terrabyte.sharePlanet'"));
 check('ext: share panel HTML exists', extSrc.includes('getShareHtml'));
-check('ext: share panel is a dedicated webview panel', extSrc.includes("'protoplanet.share'"));
+check('ext: share panel is a dedicated webview panel', extSrc.includes("'terrabyte.share'"));
 check('ext: share builds its view model from the shared renderable helper', extSrc.includes('shareViewModel') && extSrc.includes('renderablePlanet'));
 check('ext: share filename comes from petLogic', extSrc.includes('Logic.shareCardFilename'));
 check('ext: share markdown comes from petLogic', extSrc.includes('Logic.shareCardMarkdown'));
@@ -1969,8 +1969,8 @@ check('seed input: tagged out-of-range rejected', L.parseSeedInput('1000000000-i
   check('seed hatch: past keeps the original name', st.past.length === 1 && st.past[0].name === oldName);
 }
 // Wiring: package.json + extension.js.
-check('pkg: hatchFromSeed command', cmds.some((c) => c.command === 'protoplanet.hatchFromSeed'));
-check('ext: registers hatchFromSeed', extSrc.includes("'protoplanet.hatchFromSeed'"));
+check('pkg: hatchFromSeed command', cmds.some((c) => c.command === 'terrabyte.hatchFromSeed'));
+check('ext: registers hatchFromSeed', extSrc.includes("'terrabyte.hatchFromSeed'"));
 check('ext: hatchFromSeed asks for the seed', extSrc.includes('showInputBox') && extSrc.includes('hatchFromSeed'));
 check('ext: hatchFromSeed validates with parseSeedInput', extSrc.includes('Logic.parseSeedInput'));
 check('ext: hatchFromSeed calls Logic.hatchFromSeed', extSrc.includes('Logic.hatchFromSeed(this.state'));
@@ -2495,7 +2495,7 @@ check('ext: share panel does not crash on a planet-less push',
 // the legendary Index tiles, the prestige % preview, and no feeding
 // left anywhere.
 check('ext: applyMineral is the only mineral command (no feed command)',
-  extSrc.includes("'protoplanet.applyMineral'") && !extSrc.includes('feedMineral'));
+  extSrc.includes("'terrabyte.applyMineral'") && !extSrc.includes('feedMineral'));
 check('ext: no fed slot anywhere in the host',
   !extSrc.includes('fedMineral') && !extSrc.includes('takeTilt'));
 check('ext: sidebar flashes on a new mutation',
@@ -3143,10 +3143,10 @@ function ratePlanet(xp, mutations, eventTitles) {
 
 // 20g. Host wiring: package.json + extension.js for the inventory,
 // the shop, the Stardust display, and the earn-rate display.
-check('pkg: viewMinerals command', cmds.some((c) => c.command === 'protoplanet.viewMinerals'));
-check('pkg: openShop command', cmds.some((c) => c.command === 'protoplanet.openShop'));
-check('ext: registers viewMinerals', extSrc.includes("'protoplanet.viewMinerals'"));
-check('ext: registers openShop', extSrc.includes("'protoplanet.openShop'"));
+check('pkg: viewMinerals command', cmds.some((c) => c.command === 'terrabyte.viewMinerals'));
+check('pkg: openShop command', cmds.some((c) => c.command === 'terrabyte.openShop'));
+check('ext: registers viewMinerals', extSrc.includes("'terrabyte.viewMinerals'"));
+check('ext: registers openShop', extSrc.includes("'terrabyte.openShop'"));
 check('ext: inventory command reads the grouped inventory', extSrc.includes('Logic.mineralInventory'));
 check('ext: shop buys a Birth mineral through the logic', extSrc.includes('Logic.buyBirthMineral'));
 check('ext: shop has no mystery item left', !extSrc.includes("kind: 'mystery'") && !extSrc.includes('Logic.buyMysteryMineral') && !extSrc.includes('SHOP_MYSTERY_PRICE'));
@@ -3233,7 +3233,7 @@ check('ext: apply confirm states the 50% odds from the shared helper',
 check('ext: apply confirm names the growing planet, no picker',
   extSrc.includes('const planetName = Logic.nameForPlanet(this.state.current);') && extSrc.includes('— your growing planet?'));
 check('ext: inventory tap goes straight to the apply confirm (no redirect toast)',
-  extSrc.includes('await this.confirmAndApplyMineral(mineral.id, mutName)') && !extSrc.includes("Spend one from 'Protoplanet: Apply a mineral to your planet'"));
+  extSrc.includes('await this.confirmAndApplyMineral(mineral.id, mutName)') && !extSrc.includes("Spend one from 'Terrabyte: Apply a mineral to your planet'"));
 check('ext: inventory Birth tap shows the guidance copy, never an apply',
   extSrc.includes('if (!group.mutation)') && extSrc.includes("Birth minerals can't be applied — they pay for births. Get a Mutation mineral from the shop or salvage."));
 check('ext: inventory tap on a mutation the planet already has says so and consumes nothing',
@@ -3241,7 +3241,7 @@ check('ext: inventory tap on a mutation the planet already has says so and consu
 check('ext: apply confirm offers Apply / Cancel and cancelling consumes nothing',
   extSrc.includes("'Apply',\n      'Cancel'") && extSrc.includes("if (confirm !== 'Apply') return;"));
 check('ext: apply empty state for no minerals points at shop/salvage',
-  extSrc.includes('No minerals yet — salvage a planet to get one, or buy one in the Protoplanet shop.'));
+  extSrc.includes('No minerals yet — salvage a planet to get one, or buy one in the Terrabyte shop.'));
 check('ext: apply empty state for Birth-only inventory names the rule',
   extSrc.includes("Birth minerals can't be applied — they pay for births. Get a Mutation mineral from the shop or salvage."));
 check('ext: new-planet confirm states the Birth mineral cost',
