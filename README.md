@@ -6,14 +6,12 @@ Type, and a little ASCII planet grows in your editor.
 
 ## Install
 
-**From the Marketplace:** open the Extensions view in VS Code, search for
-**Protoplanet**, and click Install.
-
-**From Quick Open:** press Ctrl+P (or Cmd+P on Mac), paste
-`ext install devoncline.protoplanet`, and press Enter.
-
 **From a `.vsix` file:** Extensions view → **…** → **Install from VSIX…**,
 then pick the file.
+
+**From the Marketplace:** coming soon — once it's listed, open the
+Extensions view in VS Code, search for **Protoplanet**, and click Install
+(or press Ctrl+P / Cmd+P and paste `ext install devoncline.protoplanet`).
 
 Requires VS Code 1.85 or later.
 

@@ -1970,70 +1970,118 @@ function deserializeState(json) {
   if (s.current !== null && (typeof s.current !== 'object' || typeof s.current.seed !== 'number' || typeof s.current.xp !== 'number')) {
     return freshWithBackup(typeof json === 'string' ? json : null, unreadableNotice);
   }
-  const migrated = s.version === 1;
-  if (migrated) migrateV1toV2(s);
-  if (!Array.isArray(s.past)) s.past = [];
-  if (typeof s.generation !== 'number' || s.generation < 1) s.generation = 1;
-  if (typeof s.starterDone !== 'boolean') s.starterDone = !!s.current;
-  // Step 2 fields: old saves (from before minerals existed) get
-  // defaults. No starter gift anymore (round 16 overhaul — the
-  // starter is gone; a pre-mineral save starts with zero minerals).
-  if (!Array.isArray(s.minerals)) s.minerals = [];
-  if (typeof s.mineralSeq !== 'number' || s.mineralSeq < 0) s.mineralSeq = 0;
-  // Round 14: Stardust. Old saves start at 0.
-  if (typeof s.stardust !== 'number' || s.stardust < 0) s.stardust = 0;
-  delete s.starterMineralGranted;
-  // Round 10: the Mutation Index. Old saves get it rebuilt from
-  // everything still observable — mutations on the current planet,
-  // on archived planets, and on SALVAGE-sourced mutation minerals
-  // in the inventory (a salvaged mineral means that mutation was
-  // seen on a planet). Shop-sourced minerals never discover. A
-  // legacy fed mineral (feeding was cut in round 10) counts too,
-  // then the fed slot is deleted — there is no fed slot anymore.
-  if (!Array.isArray(s.discovered)) s.discovered = [];
-  const seen = new Set(s.discovered);
-  if (s.current) for (const id of (s.current.mutations || [])) seen.add(id);
-  for (const p of s.past) for (const id of (p.mutations || [])) seen.add(id);
-  for (const m of s.minerals) if (m.mutation && m.source === 'salvage') seen.add(m.mutation);
-  if (s.fedMineral && s.fedMineral.mutation) seen.add(s.fedMineral.mutation);
-  s.discovered = [...seen];
-  delete s.fedMineral;
-  // Step 4 fields: old saves get an empty 4-ring system.
-  if (!Array.isArray(s.system)) s.system = [null, null, null, null];
-  // Round 11: the Discovery Journal. Old saves get a seeded birth
-  // entry on every planet (timestamp = archivedAt for past records,
-  // now for the current one) — the story starts from the migration;
-  // earlier history is lost, but the planet keeps its birth. The
-  // entry lives on the snapshot when there is one (that is what
-  // the panels render); snapshot-less records keep it flat.
-  const seedJournalFor = (planet, when) => {
-    if (!planet || Array.isArray(planet.journal)) return;
-    planet.journal = [{ t: when, kind: 'born', text: bornJournalText(planet) }];
-  };
-  if (s.current) seedJournalFor(s.current, Date.now());
-  for (const p of s.past) {
-    if (p.planet) seedJournalFor(p.planet, p.archivedAt || Date.now());
-    else seedJournalFor(p, p.archivedAt || Date.now());
+  // Round 23 (release audit, Nov 16): a save that parses as JSON
+  // but is structurally malformed — a null / non-object entry in
+  // minerals, past, or system — used to throw out of the loops
+  // below and kill activation with no recovery offered. Any throw
+  // during migration / normalization is now a corrupt save, exactly
+  // like garbage JSON: the raw bytes come back as the backup, and
+  // the round-21 corrupt flow (backup first, writes blocked, the
+  // player chooses Restore backup / Start a new game) takes it
+  // from there.
+  try {
+    // The guard also validates entry shapes up front, so a null /
+    // wrong-typed entry in ANY persisted collection routes into the
+    // corrupt flow instead of slipping through silently: the raw
+    // bytes go to the backup and the player chooses (round 21).
+    // Absent fields still get migration defaults below (a v1 save
+    // never had system / minerals / discovered / stardust); only a
+    // field that is PRESENT with the wrong type is corrupt.
+    const isObj = (e) => e !== null && typeof e === 'object' && !Array.isArray(e);
+    const badList = (arr, ok) => Array.isArray(arr) && arr.some((e) => !ok(e));
+    const badJournal = (planet) => !!planet && planet.journal !== undefined
+      && (!Array.isArray(planet.journal) || planet.journal.some((e) => !isObj(e)));
+    const badMutations = (planet) => !!planet && planet.mutations !== undefined
+      && (!Array.isArray(planet.mutations) || planet.mutations.some((e) => typeof e !== 'string'));
+    const pastBad = Array.isArray(s.past) && s.past.some((p) => !isObj(p)
+      || (p.seed !== undefined && typeof p.seed !== 'number')
+      || (p.generation !== undefined && typeof p.generation !== 'number')
+      || (p.mutations !== undefined && (!Array.isArray(p.mutations) || p.mutations.some((e) => typeof e !== 'string')))
+      || (p.planet !== undefined && p.planet !== null && !isObj(p.planet))
+      || (p.parents !== undefined && p.parents !== null && (!Array.isArray(p.parents) || p.parents.some((e) => !isObj(e))))
+      || badJournal(p) || badJournal(p.planet));
+    if ((s.minerals !== undefined && !Array.isArray(s.minerals))
+      || badList(s.minerals, isObj)
+      || (s.past !== undefined && !Array.isArray(s.past)) || pastBad
+      || (s.system !== undefined && !Array.isArray(s.system))
+      || badList(s.system, (slot) => slot === null || (isObj(slot) && typeof slot.seed === 'number' && typeof slot.generation === 'number'))
+      || (s.discovered !== undefined && !Array.isArray(s.discovered))
+      || badList(s.discovered, (e) => typeof e === 'string')
+      || (s.stardust !== undefined && (typeof s.stardust !== 'number' || s.stardust < 0))
+      || (s.generation !== undefined && (typeof s.generation !== 'number' || s.generation < 1))
+      || (s.mineralSeq !== undefined && (typeof s.mineralSeq !== 'number' || s.mineralSeq < 0))
+      || (s.starterDone !== undefined && typeof s.starterDone !== 'boolean')
+      || (s.fedMineral !== undefined && s.fedMineral !== null && !isObj(s.fedMineral))
+      || badMutations(s.current) || badJournal(s.current)) {
+      return freshWithBackup(typeof json === 'string' ? json : null, unreadableNotice);
+    }
+    const migrated = s.version === 1;
+    if (migrated) migrateV1toV2(s);
+    if (!Array.isArray(s.past)) s.past = [];
+    if (typeof s.generation !== 'number' || s.generation < 1) s.generation = 1;
+    if (typeof s.starterDone !== 'boolean') s.starterDone = !!s.current;
+    // Step 2 fields: old saves (from before minerals existed) get
+    // defaults. No starter gift anymore (round 16 overhaul — the
+    // starter is gone; a pre-mineral save starts with zero minerals).
+    if (!Array.isArray(s.minerals)) s.minerals = [];
+    if (typeof s.mineralSeq !== 'number' || s.mineralSeq < 0) s.mineralSeq = 0;
+    // Round 14: Stardust. Old saves start at 0.
+    if (typeof s.stardust !== 'number' || s.stardust < 0) s.stardust = 0;
+    delete s.starterMineralGranted;
+    // Round 10: the Mutation Index. Old saves get it rebuilt from
+    // everything still observable — mutations on the current planet,
+    // on archived planets, and on SALVAGE-sourced mutation minerals
+    // in the inventory (a salvaged mineral means that mutation was
+    // seen on a planet). Shop-sourced minerals never discover. A
+    // legacy fed mineral (feeding was cut in round 10) counts too,
+    // then the fed slot is deleted — there is no fed slot anymore.
+    if (!Array.isArray(s.discovered)) s.discovered = [];
+    const seen = new Set(s.discovered);
+    if (s.current) for (const id of (s.current.mutations || [])) seen.add(id);
+    for (const p of s.past) for (const id of (p.mutations || [])) seen.add(id);
+    for (const m of s.minerals) if (m.mutation && m.source === 'salvage') seen.add(m.mutation);
+    if (s.fedMineral && s.fedMineral.mutation) seen.add(s.fedMineral.mutation);
+    s.discovered = [...seen];
+    delete s.fedMineral;
+    // Step 4 fields: old saves get an empty 4-ring system.
+    if (!Array.isArray(s.system)) s.system = [null, null, null, null];
+    // Round 11: the Discovery Journal. Old saves get a seeded birth
+    // entry on every planet (timestamp = archivedAt for past records,
+    // now for the current one) — the story starts from the migration;
+    // earlier history is lost, but the planet keeps its birth. The
+    // entry lives on the snapshot when there is one (that is what
+    // the panels render); snapshot-less records keep it flat.
+    const seedJournalFor = (planet, when) => {
+      if (!planet || Array.isArray(planet.journal)) return;
+      planet.journal = [{ t: when, kind: 'born', text: bornJournalText(planet) }];
+    };
+    if (s.current) seedJournalFor(s.current, Date.now());
+    for (const p of s.past) {
+      if (p.planet) seedJournalFor(p.planet, p.archivedAt || Date.now());
+      else seedJournalFor(p, p.archivedAt || Date.now());
+    }
+    // Round 22 (Devon, Nov 15): the 'grow' journal kind is gone —
+    // reviving a planet ("Grew again") was never a story beat, so no
+    // new entries are written and stored ones are stripped here, on
+    // load (current + past records, snapshot or flat), so they never
+    // show in the journal views again. Idempotent: a clean save has
+    // nothing to strip, and the cleaned state persists on next save.
+    const stripGrow = (planet) => {
+      if (planet && Array.isArray(planet.journal)) planet.journal = planet.journal.filter((e) => e.kind !== 'grow');
+    };
+    stripGrow(s.current);
+    for (const p of s.past) { stripGrow(p); stripGrow(p.planet); }
+    normalizeSystem(s);
+    return {
+      state: s,
+      backupJson: migrated ? (typeof json === 'string' ? json : null) : null,
+      notice: null,
+      migrated,
+      corrupt: false,
+    };
+  } catch (e) {
+    return freshWithBackup(typeof json === 'string' ? json : null, unreadableNotice);
   }
-  // Round 22 (Devon, Nov 15): the 'grow' journal kind is gone —
-  // reviving a planet ("Grew again") was never a story beat, so no
-  // new entries are written and stored ones are stripped here, on
-  // load (current + past records, snapshot or flat), so they never
-  // show in the journal views again. Idempotent: a clean save has
-  // nothing to strip, and the cleaned state persists on next save.
-  const stripGrow = (planet) => {
-    if (planet && Array.isArray(planet.journal)) planet.journal = planet.journal.filter((e) => e.kind !== 'grow');
-  };
-  stripGrow(s.current);
-  for (const p of s.past) { stripGrow(p); stripGrow(p.planet); }
-  normalizeSystem(s);
-  return {
-    state: s,
-    backupJson: migrated ? (typeof json === 'string' ? json : null) : null,
-    notice: null,
-    migrated,
-    corrupt: false,
-  };
 }
 
 module.exports = {
