@@ -6,14 +6,24 @@ Type, and a little ASCII planet grows in your editor.
 
 ## Install
 
+**From the Marketplace:** open the Extensions view in VS Code, search for
+**Protoplanet**, and click Install (or press Ctrl+P / Cmd+P and paste
+`ext install devoncline.protoplanet`).
+
+![Search for Protoplanet in the Extensions view](images/readme-install-search-1116.png)
+
 **From a `.vsix` file:** Extensions view → **…** → **Install from VSIX…**,
 then pick the file.
 
-**From the Marketplace:** coming soon — once it's listed, open the
-Extensions view in VS Code, search for **Protoplanet**, and click Install
-(or press Ctrl+P / Cmd+P and paste `ext install devoncline.protoplanet`).
-
 Requires VS Code 1.85 or later.
+
+## Using Protoplanet
+
+Open the Command Palette (Ctrl+Shift+P / Cmd+Shift+P), type
+**Protoplanet**, and run a command. Show pet opens the sidebar, Open shop
+buys minerals, and the rest are all listed there too.
+
+![All of Protoplanet's commands in the Command Palette](images/readme-command-palette-1116.png)
 
 ## How it works
 
@@ -39,6 +49,10 @@ The planet lives in the Explorer sidebar, with your stage and XP in the
 status bar. Pick a starter terrain on your first run — icy, lava, jungle,
 rocky, or ocean — and every planet gets a catalog-style name tied to its
 seed. Same seed, same planet.
+
+Your progress is saved automatically — close VS Code and reopen it, and
+your planet, XP, Stardust, and minerals are all still there. The
+starter-terrain pick only appears the first time.
 
 I built this for myself first — a planet that grows while I code.
 
