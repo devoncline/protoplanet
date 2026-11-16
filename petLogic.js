@@ -1904,27 +1904,35 @@ function migrateV1toV2(state) {
 
 // Parse stored JSON. Returns a RESULT, not a bare state, so the
 // caller can tell the cases apart:
-//   { state, backupJson, notice, migrated }
+//   { state, backupJson, notice, migrated, corrupt }
 //   * state — the loaded (or fresh) state. Always a state object.
 //   * backupJson — the raw input JSON the caller must stash under
 //     the backup key BEFORE any save overwrites it, or null when no
 //     backup is needed.
 //   * notice — a one-time message for the player, or null.
 //   * migrated — true when a v1 save was migrated to v2.
+//   * corrupt — true when the input was unreadable (bad JSON,
+//     unknown version, malformed planet). The caller must NOT
+//     treat the fresh state as a replacement save: writes stay
+//     blocked until the player explicitly chooses recovery or a
+//     new game (round 21).
 // Cases:
 //   * Empty input ('', null, undefined) — a brand-new install: fresh
-//     state, no backup, no notice. ("Fresh because empty/new".)
-//   * Valid v2 — the state, no backup, no notice.
+//     state, no backup, no notice, not corrupt. ("Fresh because empty/new".)
+//   * Valid v2 — the state, no backup, no notice, not corrupt.
 //   * Valid v1 — migrated to v2; backupJson is the raw v1 JSON
 //     (the caller writes it to `protoplanet.state.backup.v1`
 //     before saving the migrated state); no notice, migration is
-//     a normal upgrade.
+//     a normal upgrade, not corrupt.
 //   * Corrupt JSON, unknown version, or a malformed current planet
 //     — fresh state, backupJson is the raw input, notice tells the
 //     player once ("Your save couldn't be read — backed up,
 //     starting fresh."). NEVER silently replaces an incompatible
 //     save with a fresh game: the raw JSON is handed back for
 //     backup first, and the caller must write it before saving.
+//     (Round 21: the caller also blocks writes and asks the player
+//     what to do — the notice text is kept for the message, but
+//     "starting fresh" no longer happens on its own.)
 // Discovery rebuild (round 16 overhaul — hole K): only mutations
 // seen ON A PLANET count, plus mutation minerals from SALVAGE
 // (salvaging a planet means that mutation was seen on it).
@@ -1938,10 +1946,11 @@ function deserializeState(json) {
     backupJson: backupJson || null,
     notice: notice || null,
     migrated: false,
+    corrupt: true,
   });
   const unreadableNotice = 'Your save couldn\u2019t be read — backed up, starting fresh.';
   if (json === '' || json === null || json === undefined) {
-    return { state: freshState(), backupJson: null, notice: null, migrated: false };
+    return { state: freshState(), backupJson: null, notice: null, migrated: false, corrupt: false };
   }
   let s;
   try {
@@ -2006,6 +2015,7 @@ function deserializeState(json) {
     backupJson: migrated ? (typeof json === 'string' ? json : null) : null,
     notice: null,
     migrated,
+    corrupt: false,
   };
 }
 

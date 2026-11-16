@@ -20,6 +20,7 @@ const Planet = require('./planet.js');
 const Logic = require('./petLogic.js');
 
 const STATE_KEY = 'protoplanet.state';
+const BACKUP_KEY = 'protoplanet.state.backup.v1';
 const VIEW_ID = 'protoplanet.petView';
 const FONT_STACK = "ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace";
 
@@ -37,19 +38,26 @@ class ProtoplanetApp {
   constructor(context) {
     this.context = context;
     // Round 16 overhaul — deserializeState returns a result object:
-    // { state, backupJson, notice, migrated }. A migration or an
-    // unreadable save carries the ORIGINAL serialized JSON in
+    // { state, backupJson, notice, migrated, corrupt }. A migration
+    // or an unreadable save carries the ORIGINAL serialized JSON in
     // backupJson — stash it under the backup key BEFORE any saveNow()
-    // can overwrite STATE_KEY (load runs in the constructor, before
-    // the first save, so doing it here is safe). The constructor
-    // can't await, so the write is fire-and-forget like saveNow().
-    // The notice fires once, only when a backup was needed.
+    // can overwrite STATE_KEY.
+    // Round 21 — save protection (ChatGPT review, Devon Nov 15):
+    // the backup write is AWAITED inside initSaveProtection, and
+    // every save is gated on this.writesBlocked until that settles,
+    // so no migrated/fresh state can overwrite the active save
+    // before the original is persisted. An unreadable save keeps
+    // writes blocked until the player explicitly chooses recovery
+    // or a new game (promptCorruptSave) — the old one-time notice
+    // ("backed up, starting fresh") is gone: nothing starts fresh
+    // on its own anymore. The gate is set synchronously here, so
+    // the constructor's own pushState and anything that fires
+    // during activation are covered too.
     const loaded = Logic.deserializeState(context.globalState.get(STATE_KEY, ''));
-    if (loaded.backupJson !== null) {
-      context.globalState.update('protoplanet.state.backup.v1', loaded.backupJson);
-    }
     this.state = loaded.state;
-    if (loaded.notice) this.notify(loaded.notice);
+    this.writesBlocked = loaded.corrupt || loaded.backupJson !== null;
+    this.backupFailed = false;
+    this.initSaveProtection(loaded);
     // Birth notifications (round 6): the key of the planet already
     // notified — seed:generation — so a reload never re-toasts an old
     // hatch. Set from the LOADED state before the first pushState();
@@ -112,6 +120,13 @@ class ProtoplanetApp {
   // -- state ---------------------------------------------------------------
 
   saveNow() {
+    // Round 21 — writes stay blocked until the save-protection
+    // init settles (backup persisted) and, for unreadable saves,
+    // until the player chooses recovery or a new game. Every write
+    // funnels through here (scheduleSave and deactivate too), so
+    // one gate covers all of them — a blocked save is a no-op, and
+    // the active save is never overwritten while blocked.
+    if (this.writesBlocked) return;
     if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
     // globalState.update is async; we don't wait — a save is also
     // triggered on every stage change / new planet.
@@ -122,6 +137,97 @@ class ProtoplanetApp {
     if (immediate) { this.saveNow(); return; }
     if (this.saveTimer) return; // one pending save is enough
     this.saveTimer = setTimeout(() => { this.saveTimer = null; this.saveNow(); }, Logic.CONFIG.SAVE_DEBOUNCE_MS);
+  }
+
+  // -- save protection (round 21 — ChatGPT review, Devon Nov 15) ---------
+  // The backup write is AWAITED here, and writes stay blocked until
+  // it settles, so the ordering is: original persisted first, only
+  // then can any migrated/fresh state overwrite the active save.
+  // Runs fire-and-forget from the constructor — the synchronous
+  // writesBlocked gate is what makes that safe, not the timing.
+  async initSaveProtection(loaded) {
+    try {
+      if (loaded.backupJson !== null) {
+        const existing = this.context.globalState.get(BACKUP_KEY, '');
+        let needWrite = existing !== loaded.backupJson;
+        if (needWrite && existing && loaded.corrupt) {
+          // Unreadable bytes must never clobber a backup that still
+          // reads as a usable save — that backup is the recovery
+          // path (promptCorruptSave offers it). A migration backup
+          // is readable itself, so it always refreshes when it
+          // differs; identical bytes are never rewritten.
+          const existingLoad = Logic.deserializeState(existing);
+          if (!existingLoad.corrupt && existingLoad.notice === null) needWrite = false;
+        }
+        if (needWrite) {
+          await this.context.globalState.update(BACKUP_KEY, loaded.backupJson);
+        }
+      }
+      if (loaded.corrupt) {
+        // The original is backed up (or already was). Writes stay
+        // blocked until the player explicitly chooses recovery or a
+        // new game — never auto-start fresh.
+        this.writesBlocked = true;
+        await this.promptCorruptSave();
+        return;
+      }
+      // Healthy save, or a migration whose backup is now persisted:
+      // writes open. If the starter pick was skipped while blocked,
+      // offer it now (maybeFirstRun is idempotent).
+      const wasBlocked = this.writesBlocked;
+      this.writesBlocked = false;
+      if (wasBlocked) this.maybeFirstRun();
+    } catch (e) {
+      // Backup failed, or the prompt itself failed: keep the old
+      // save intact, keep writes blocked, and tell the player —
+      // never silently discard.
+      this.backupFailed = true;
+      this.writesBlocked = true;
+      this.notify('Protoplanet couldn\'t back up your save, so nothing was changed. Restart VS Code to try again — your progress is untouched.');
+    }
+  }
+
+  // Unreadable save: the player decides. "Start a new game" is the
+  // explicit choice that authorizes overwriting the active save with
+  // a fresh state. "Restore backup" tries the save under the backup
+  // key (an older usable save — the backup write never clobbers a
+  // good backup with unreadable bytes). Dismissing leaves writes
+  // blocked, so the prompt returns on the next launch.
+  async promptCorruptSave() {
+    const answer = await vscode.window.showWarningMessage(
+      'Your Protoplanet save couldn\'t be read. Your original save is backed up and nothing has been overwritten.',
+      { modal: true },
+      'Start a new game',
+      'Restore backup'
+    );
+    if (answer === 'Start a new game') {
+      this.writesBlocked = false;
+      this.saveNow();
+      this.pushState();
+      this.maybeFirstRun();
+      return;
+    }
+    if (answer === 'Restore backup') {
+      if (await this.recoverFromBackup()) return;
+      this.notify('The backup couldn\'t be read either — your original save is still backed up. Nothing has been overwritten.');
+      return;
+    }
+    // Dismissed: writes stay blocked; the prompt returns next launch.
+  }
+
+  // Adopt the usable save under the backup key, if there is one.
+  // Returns true when a state was restored and writes resumed.
+  async recoverFromBackup() {
+    const raw = this.context.globalState.get(BACKUP_KEY, '');
+    if (!raw) return false;
+    const attempt = Logic.deserializeState(raw);
+    if (attempt.corrupt || attempt.notice !== null) return false;
+    this.state = attempt.state;
+    this.lastBirthKey = this.birthKey();
+    this.writesBlocked = false;
+    this.saveNow();
+    this.pushState();
+    return true;
   }
 
   // -- typing = XP ----------------------------------------------------------
@@ -483,6 +589,11 @@ class ProtoplanetApp {
   // Mineral (250,000 ✦, 1 of 13), Family Mutation Mineral (400,000 ✦,
   // Moon/Rings/Glow/Sky only). The Mystery Mineral is gone
   // (round 15 — Devon).
+  // Round 21 — every purchase asks first: a short native confirm
+  // showing the exact cost, what the player receives, and the
+  // relevant odds (same shared helpers, never hardcoded). Cancel
+  // spends nothing. Insufficient funds still refuses BEFORE any
+  // confirm is shown.
   async openShop() {
     const bal = () => Math.floor(this.state.stardust || 0).toLocaleString();
     const price = (n) => n.toLocaleString(); // 250,000 reads better than 250000
@@ -527,16 +638,42 @@ class ProtoplanetApp {
         ignoreFocusOut: true,
       });
       if (!famPick) return;
+      const famPrice = Logic.CONFIG.SHOP_FAMILY_PICK_PRICE;
+      if ((this.state.stardust || 0) < famPrice) { this.notify(`Not enough Stardust — a Family Mutation Mineral costs ${price(famPrice)} ✦.`); return; }
+      const famOdds = Logic.familyPickOdds(famPick.id);
+      const famNames = (famOdds.mutations || []).map((id) => (Planet.mutationDef(id) || {}).name || id);
+      const famAnswer = await vscode.window.showWarningMessage(
+        `Buy a Family Mutation Mineral (${famPick.label} family) for ${price(famPrice)} ✦? You receive 1 Mutation Mineral — 1 of ${famOdds.mutations.length} (${famNames.join(', ')}), each ${Logic.formatOdds(famOdds.perMutation)} (${Logic.formatOdds(famOdds.perMutation, 'one-in')}). Applying it is a ${Logic.formatOdds(apply.success)} coin flip.`,
+        { modal: true },
+        'Yes, buy it'
+      );
+      if (famAnswer !== 'Yes, buy it') return;
       const res = Logic.buyFamilyPick(this.state, famPick.id);
-      if (!res.ok) { this.notify(`Not enough Stardust — a Family Mutation Mineral costs ${price(Logic.CONFIG.SHOP_FAMILY_PICK_PRICE)} ✦.`); return; }
+      if (!res.ok) { this.notify(`Not enough Stardust — a Family Mutation Mineral costs ${price(famPrice)} ✦.`); return; }
       this.notify(`Family Mutation Mineral: you got a ${Logic.mineralName(res.mineral)}! Spend it from 'Protoplanet: Apply a mineral to your planet'.`);
     } else if (pick.kind === 'birth') {
+      const birthPrice = Logic.CONFIG.SHOP_BIRTH_PRICE;
+      if ((this.state.stardust || 0) < birthPrice) { this.notify(`Not enough Stardust — a Birth Mineral costs ${price(birthPrice)} ✦.`); return; }
+      const birthAnswer = await vscode.window.showWarningMessage(
+        `Buy a Birth Mineral for ${price(birthPrice)} ✦? You receive 1 Birth Mineral — it pays for exactly 1 birth.`,
+        { modal: true },
+        'Yes, buy it'
+      );
+      if (birthAnswer !== 'Yes, buy it') return;
       const res = Logic.buyBirthMineral(this.state);
-      if (!res.ok) { this.notify(`Not enough Stardust — a Birth Mineral costs ${price(Logic.CONFIG.SHOP_BIRTH_PRICE)} ✦.`); return; }
+      if (!res.ok) { this.notify(`Not enough Stardust — a Birth Mineral costs ${price(birthPrice)} ✦.`); return; }
       this.notify(`You bought a ${Logic.mineralName(res.mineral)}!`);
     } else if (pick.kind === 'random') {
+      const randomPrice = Logic.CONFIG.SHOP_RANDOM_MUTATION_PRICE;
+      if ((this.state.stardust || 0) < randomPrice) { this.notify(`Not enough Stardust — a Random Mutation Mineral costs ${price(randomPrice)} ✦.`); return; }
+      const randomAnswer = await vscode.window.showWarningMessage(
+        `Buy a Random Mutation Mineral for ${price(randomPrice)} ✦? You receive 1 Mutation Mineral — 1 of ${mutationCount} mutations, each ${Logic.formatOdds(wheel.perMutation)} (${Logic.formatOdds(wheel.perMutation, 'one-in')}). Applying it is a ${Logic.formatOdds(apply.success)} coin flip.`,
+        { modal: true },
+        'Yes, buy it'
+      );
+      if (randomAnswer !== 'Yes, buy it') return;
       const res = Logic.buyRandomMutationMineral(this.state);
-      if (!res.ok) { this.notify(`Not enough Stardust — a Random Mutation Mineral costs ${price(Logic.CONFIG.SHOP_RANDOM_MUTATION_PRICE)} ✦.`); return; }
+      if (!res.ok) { this.notify(`Not enough Stardust — a Random Mutation Mineral costs ${price(randomPrice)} ✦.`); return; }
       this.notify(`Random Mutation Mineral: you got a ${Logic.mineralName(res.mineral)}! Spend it from 'Protoplanet: Apply a mineral to your planet'.`);
     }
     this.saveNow();
@@ -1377,6 +1514,11 @@ class ProtoplanetApp {
   }
 
   async maybeFirstRun() {
+    // Round 21 — never offer the starter pick while writes are
+    // blocked (backup pending, or an unreadable save awaiting the
+    // player's choice). initSaveProtection / promptCorruptSave call
+    // this again once writes open.
+    if (this.writesBlocked) return;
     if (this.state.starterDone) return;
     const items = Logic.CONFIG.STARTER_TERRAINS.map((id) => {
       const t = Planet.CONFIG.TERRAINS.find((t) => t.id === id);

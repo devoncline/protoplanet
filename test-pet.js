@@ -297,22 +297,26 @@ eq('persist: version stamps 2 on serialize', JSON.parse(L.serializeState(st)).ve
 // backup-needed" (raw JSON handed back for backup + a one-time
 // notice). The caller must stash backupJson under
 // protoplanet.state.backup.v1 BEFORE any save overwrites it.
-eq('persist: empty string -> fresh state, no backup, no notice',
+eq('persist: empty string -> fresh state, no backup, no notice', 
   L.deserializeState('').state.starterDone === false
   && L.deserializeState('').backupJson === null
-  && L.deserializeState('').notice === null, true);
+  && L.deserializeState('').notice === null
+  && L.deserializeState('').corrupt === false, true);
 const garbage = L.deserializeState('not json {');
 eq('persist: garbage JSON -> fresh state', garbage.state.current, null);
 eq('persist: garbage JSON -> raw JSON handed back for backup', garbage.backupJson, 'not json {');
 eq('persist: garbage JSON -> one-time notice', garbage.notice, 'Your save couldn’t be read — backed up, starting fresh.');
+eq('persist: garbage JSON -> flagged corrupt', garbage.corrupt, true);
 const wrongVersion = L.deserializeState('{"version":99}');
 eq('persist: wrong version -> fresh state', wrongVersion.state.current, null);
 eq('persist: wrong version -> raw JSON handed back for backup', wrongVersion.backupJson, '{"version":99}');
 eq('persist: wrong version -> one-time notice', wrongVersion.notice !== null, true);
 eq('persist: wrong version -> not flagged migrated', wrongVersion.migrated, false);
+eq('persist: wrong version -> flagged corrupt', wrongVersion.corrupt, true);
 const badCurrentRes = L.deserializeState('{"version":1,"current":{"seed":"nope"},"past":[],"generation":1,"starterDone":true}');
 eq('persist: malformed current -> fresh state', badCurrentRes.state.current, null);
 eq('persist: malformed current -> raw JSON handed back for backup', badCurrentRes.backupJson !== null, true);
+eq('persist: malformed current -> flagged corrupt', badCurrentRes.corrupt, true);
 
 // --- 11. package.json contract + extension.js wiring ---------------------------
 const pkgPath = path.join(__dirname, 'package.json');
@@ -755,11 +759,13 @@ check('persist: load rebuild credits the salvage mineral (narrowed rule: salvage
   loaded2.discovered.includes('green-moon'));
 eq('persist: round-trip stays version 2', loaded2.version, 2);
 eq('persist: round-trip is not flagged migrated', L.deserializeState(L.serializeState(st)).migrated, false);
+eq('persist: round-trip is not flagged corrupt', L.deserializeState(L.serializeState(st)).corrupt, false);
 eq('persist: round-trip needs no backup', L.deserializeState(L.serializeState(st)).backupJson, null);
 const migrated = L.deserializeState('{"version":1,"current":null,"past":[],"generation":1,"starterDone":true}');
 eq('persist: old save gets NO starter gift', migrated.state.minerals.length, 0);
 eq('persist: old save migrates to version 2', migrated.state.version, 2);
 eq('persist: old save is flagged migrated', migrated.migrated, true);
+eq('persist: old save is not flagged corrupt', migrated.corrupt, false);
 eq('persist: old save raw JSON handed back for backup', migrated.backupJson !== null, true);
 eq('persist: old save needs no notice', migrated.notice, null);
 const legacy = L.deserializeState(JSON.stringify({
@@ -3168,8 +3174,30 @@ check('ext: shop family step can only offer the four families (no Storm/Weird ro
 check('ext: load writes the v1 backup before any save can overwrite it',
   extSrc.includes('Logic.deserializeState(context.globalState.get(STATE_KEY') &&
   extSrc.includes("protoplanet.state.backup.v1") && extSrc.includes('loaded.backupJson'));
-check('ext: load shows the unreadable-save notice once',
-  extSrc.includes('loaded.notice') && extSrc.includes('if (loaded.notice) this.notify(loaded.notice)'));
+// Round 21 — save protection (ChatGPT review, Devon Nov 15): the
+// backup write is AWAITED (initSaveProtection), every save funnels
+// through a saveNow gate that refuses while writes are blocked, and
+// an unreadable save asks the player to choose recovery or a new
+// game instead of starting fresh on its own (the old one-time
+// "starting fresh" notice is gone).
+check('ext: backup write is awaited inside initSaveProtection',
+  extSrc.includes('await this.context.globalState.update(BACKUP_KEY, loaded.backupJson)'));
+check('ext: saveNow refuses while writes are blocked',
+  extSrc.includes('if (this.writesBlocked) return;'));
+check('ext: unreadable save prompts for recovery or a new game',
+  extSrc.includes('promptCorruptSave') && extSrc.includes("'Start a new game'") && extSrc.includes("'Restore backup'"));
+check('ext: backup is not rewritten when the bytes are identical',
+  extSrc.includes('existing !== loaded.backupJson'));
+// Round 21 — shop confirmations (ChatGPT review, Devon Nov 15):
+// every purchase asks first with the exact cost, what the player
+// receives, and the odds from the shared helpers; cancel spends
+// nothing; insufficient funds refuses before any confirm is shown.
+check('ext: shop asks before spending on every purchase',
+  extSrc.includes("'Yes, buy it'") && extSrc.includes('showWarningMessage'));
+check('ext: shop refuses before confirming when funds are short',
+  extSrc.includes("Not enough Stardust — a Birth Mineral costs") &&
+  extSrc.includes("Not enough Stardust — a Random Mutation Mineral costs") &&
+  extSrc.includes("Not enough Stardust — a Family Mutation Mineral costs"));
 check('ext: load takes the state from the deserialize result object',
   extSrc.includes('this.state = loaded.state;'));
 // Round 17 fix L — never auto-apply: the apply command opens the
