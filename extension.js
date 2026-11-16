@@ -1753,7 +1753,7 @@ class TerrabyteApp {
 <div id="wrap"><pre class="pp-grid" id="grid"></pre><div id="xpbar"><div id="xpfill"></div></div><div id="xplabel">XP 0 / 100</div></div>
 <div id="stageName">Your planet is hatching&hellip;</div>
 <div id="mutationLabel" style="display:none"></div>
-<p id="stageDesc">Pick a starter and start typing &mdash; every character grows it.</p>
+<p id="stageDesc">Pick a starter from the dropdown at the top &mdash; every character grows it.</p>
 <div id="meta"></div>
 <script nonce="${nonce}" src="${planetJsUri}"></script>
 <script nonce="${nonce}">
@@ -1896,6 +1896,11 @@ class TerrabyteApp {
       state = null;
       lastCrop = null;
       gridEl.innerHTML = '';
+      // No planet, no chip: the floating Stardust chip has nothing to
+      // float over in the empty state, and it lands on the XP bar
+      // (Devon, Nov 16 — F5 feedback). Hidden here, shown again by
+      // the 'state' handler below.
+      sdChipEl.style.display = 'none';
       const barEl0 = document.getElementById('xpbar');
       const fillEl0 = document.getElementById('xpfill');
       const labelEl0 = document.getElementById('xplabel');
@@ -1910,7 +1915,7 @@ class TerrabyteApp {
       descEl.style.display = '';
       descEl.textContent = msg.destroyed
         ? 'Nothing is growing \u2014 start a new planet from the Command Palette, or grow an old one from the Index.'
-        : 'Pick a starter and start typing \u2014 every character grows it.';
+        : 'Pick a starter from the dropdown at the top \u2014 every character grows it.';
       document.getElementById('meta').textContent = '';
       layout();
       return;
@@ -1925,6 +1930,9 @@ class TerrabyteApp {
     // fragments, shimmer); only the morph is gone.
     stageStartSec = sec - 10; // settled — no birth morph
     state = msg;
+    // A planet exists again, so the Stardust chip comes back (it is
+    // hidden in the 'empty' handler above).
+    sdChipEl.style.display = '';
     // Round 25 (Devon, Nov 16) — the stage line carries the growing
     // planet's name first: "GJ-364c · Stage 7/7 · Civilization".
     // The detail panel and Index cards keep their own lines.
@@ -2261,7 +2269,11 @@ class TerrabyteApp {
   .phubRules b { color: #ffd75f; font-weight: 700; }
   .prestigeSlots { display: flex; gap: 1px; background: #1e1e1e; margin-top: 10px; }
   .prestigeSlot { flex: 1 1 0; background: #050505; padding: 10px 12px; display: flex; gap: 12px; align-items: center; min-width: 0; }
-  .prestigeSlot.empty { align-items: flex-start; }
+  /* Empty prestige slot — centered, not flush-left: with no art the
+     body would sit at the slot's 12px padding while the filled slot's
+     text starts after its 120px art, so it read as shoved into the
+     corner (Devon, Nov 16 — F5 feedback). */
+  .prestigeSlot.empty { justify-content: center; align-items: center; text-align: center; }
   .pslotArt { width: 120px; flex: none; }
   .pslotBody { min-width: 0; }
   .pslotName { font-size: 13px; font-weight: 700; }
