@@ -85,7 +85,7 @@ star, plus an Index of your whole collection. Finishing more planets
 unlocks more rings. Click a planet to zoom in and
 see its details.
 
-![The solar system — finished planets on the orrery](images/listing-solar-system-real-1125a.png)
+![The solar system — finished planets on the orrery](images/listing-solar-system-1116.gif)
 
 ## Share a planet
 
