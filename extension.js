@@ -2176,6 +2176,20 @@ class TerrabyteApp {
   .disc { position: absolute; transform: translate(-50%, -50%) scale(var(--inv-zoom, 1)); cursor: pointer; }
   .disc:hover { outline: 1px solid rgba(232, 182, 76, 0.7); outline-offset: 2px; border-radius: 4px; }
   .disc.sel { outline: 1px solid #e8b64c; outline-offset: 2px; border-radius: 4px; }
+  /* Round 27 — hover earn-rate label (Devon, Nov 16): while a planet
+     is hovered (the gold outline), its Stardust per character shows
+     at the outline's top-right corner, so earners compare at a
+     glance. The same :hover that draws the outline shows the label,
+     so they appear and disappear together — no JS hover handling.
+     pointer-events: none keeps it from ever blocking a click on the
+     disc. The corners of the disc box are empty art (the planet is
+     round), so the label sits in free space, never over the planet. */
+  .disc .rate { display: none; position: absolute; top: 0; right: 0;
+    transform: translate(50%, -50%); z-index: 2; pointer-events: none;
+    font-size: 10px; font-weight: 700; color: #ffd75f; white-space: nowrap;
+    background: rgba(0, 0, 0, 0.75); border: 1px solid rgba(232, 182, 76, 0.6);
+    border-radius: 3px; padding: 1px 5px; }
+  .disc:hover .rate { display: block; }
   .star { position: absolute; transform: translate(-50%, -50%) scale(var(--inv-zoom, 1)); text-align: center; }
   /* Bottom-centre strip: zoom controls + the one-line hint. Overlay
      chrome only — it never takes space from the orrery. */
@@ -2912,7 +2926,11 @@ class TerrabyteApp {
         // made it messy). Names live in the detail sheet and the
         // Index tiles.
         var d0 = discDetailNow();
-        disc.innerHTML = '<div class="pp-grid" style="--pp-fs:' + cellFont(d0.cellW, d0.cellH) + 'px;--pp-ch:' + d0.cellH + 'px"></div>';
+        // Round 27 — hover earn-rate label: the planet's Stardust per
+        // character, the same earnRateText the Index cards show, at the
+        // outline's top-right corner while hovered (see .disc .rate).
+        disc.innerHTML = '<div class="pp-grid" style="--pp-fs:' + cellFont(d0.cellW, d0.cellH) + 'px;--pp-ch:' + d0.cellH + 'px"></div>'
+          + '<div class="rate">✦' + slot.planet.earnRateText + '/char</div>';
         worldEl.appendChild(disc);
         discs.push({ el: disc, planet: slot.planet, ring: i });
       } else {

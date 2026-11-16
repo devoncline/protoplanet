@@ -46,9 +46,10 @@ there's no forced rebirth. When you want a new planet, you start one.
 Your first planet is free. After that, a new planet costs one Birth Mineral.
 
 The planet lives in the Explorer sidebar, with your stage and XP in the
-status bar. Pick a starter terrain on your first run — icy, lava, jungle,
-rocky, or ocean — and every planet gets a catalog-style name tied to its
-seed. Same seed, same planet.
+status bar. Pick a starter terrain on your first run: icy, lava, jungle,
+rocky, or ocean. Every planet gets a catalog-style name tied to its
+seed. Same seed, same planet. No two planets are the same. Every one is
+procedurally generated from its seed.
 
 Your progress is saved automatically — close VS Code and reopen it, and
 your planet, XP, Stardust, and minerals are all still there. The
