@@ -1318,7 +1318,14 @@ check('ext: sun edge carries flames (tongues grow/die at different angles, not a
 (function () {
   const sysHtml = extSrc.slice(extSrc.indexOf('  getSystemHtml(webview) {'), extSrc.indexOf('  getPrestigeHtml(webview) {'));
   check('ext: sun and discs re-render every tick (never frozen, no more 2.2fps discs)',
-    sysHtml.includes('renderDiscs();\n    renderStar();') && !sysHtml.includes('tick % 2') && !sysHtml.includes('tick % 3'));
+    sysHtml.includes('renderDiscs();') && sysHtml.includes('renderStar();') && !sysHtml.includes('tick % 2') && !sysHtml.includes('tick % 3'));
+  // Round 18: the per-tick re-renders pause while a pointer is pressed
+  // (re-rendering destroys the nodes under the cursor and Chrome then
+  // never generates the click) — but only during the press, never on a
+  // cadence. The guard is a press flag, not a tick counter.
+  check('ext: disc/star re-renders pause only while pressed (round 18)',
+    sysHtml.includes('if (!pressActive) {') && sysHtml.includes('pressing = true')
+    && !sysHtml.includes('tick % 2') && !sysHtml.includes('tick % 3'));
 })();
 // The sun re-renders at a resolution matching its on-screen size
 // (Devon, Nov 12 — continuous zoom detail): starHtml takes

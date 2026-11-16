@@ -2740,8 +2740,11 @@ class ProtoplanetApp {
     // Round 4: the blended disc changes with zoom even when the cozy
     // grid size doesn't (the blend itself moves), so a zoom change
     // alone must re-render — otherwise the disc would lag a small
-    // scroll until the 450ms tick caught up.
-    if (d.cols !== discCols || d.rows !== discRows || zoom !== discZoomSeen) renderDiscs();
+    // scroll until the 450ms tick caught up. Round 18: not while a
+    // pointer is pressed — same click-killer as the tick (a re-render
+    // mid-press means Chrome never generates the click). The disc art
+    // just lags the zoom by one frame until the press ends.
+    if ((d.cols !== discCols || d.rows !== discRows || zoom !== discZoomSeen) && !pressingNow()) renderDiscs();
   }
 
   // --- detail sheet + zoom-to-planet -----------------------------------------
@@ -3310,6 +3313,27 @@ class ProtoplanetApp {
     return best;
   }
   var panning = null, dragged = false, suppressClick = false, downPos = null;
+  // Round 18 — the click-killer (Devon, Nov 15, live F5 + CDP repro):
+  // the 150ms tick re-renders every disc grid (innerHTML), which destroys
+  // the nodes under the cursor. If that happens between pointerdown and
+  // pointerup, Chrome never generates the click event at all — the press
+  // silently does nothing. A normal press lasts ~80-150ms, so it straddled
+  // the tick most of the time: clicks only worked when the press happened
+  // to fall between ticks (the 2nd/7th/19th-try pattern Devon filmed).
+  // While ANY pointer is pressed in this panel, the tick skips the
+  // node-destroying re-renders (discs, star, detail art). A press lasts
+  // ~100ms, so at most one 150ms frame is skipped — invisible. The flag
+  // self-heals: a press that never gets its pointerup (released outside
+  // the window) stops blocking re-renders after 1s.
+  var pressing = false, pressStarted = 0;
+  document.addEventListener('pointerdown', function () {
+    pressing = true; pressStarted = Date.now();
+  });
+  // Shared by the tick and the zoom refresh: true while a press is
+  // active (and fresh). Both skip node-destroying re-renders then.
+  function pressingNow() {
+    return pressing && (Date.now() - pressStarted < 1000);
+  }
   orreryEl.addEventListener('pointerdown', function (e) {
     panning = { x: e.clientX, y: e.clientY, panX: panX, panY: panY };
     downPos = { x: e.clientX, y: e.clientY };
@@ -3335,6 +3359,7 @@ class ProtoplanetApp {
     }
   });
   window.addEventListener('pointerup', function () {
+    pressing = false;
     orreryEl.classList.remove('panning');
     if (panning && dragged) {
       suppressClick = true;
@@ -3342,6 +3367,14 @@ class ProtoplanetApp {
     }
     panning = null;
   });
+  // A cancelled press (browser takes over, pointer leaves) must also
+  // release the flag, or the re-renders stay paused (see pressing).
+  window.addEventListener('pointercancel', function () {
+    pressing = false;
+    panning = null;
+    orreryEl.classList.remove('panning');
+  });
+  window.addEventListener('blur', function () { pressing = false; });
   orreryEl.addEventListener('wheel', function (e) {
     // Scroll zooms, no Ctrl needed (Devon, Nov 13 — the Index is its
     // own screen now, so there is no page to scroll on this panel).
@@ -3548,11 +3581,19 @@ class ProtoplanetApp {
     // sun now re-render every 150ms tick (~7fps, the same cadence as
     // the sidebar pet, which Devon said looks good). A disc render is
     // ~3-6ms, so even a full 12-ring system stays inside the budget.
-    renderDiscs();
-    renderStar(); // the sun churns + flares ~7x/sec now — never frozen while the planets orbit. Outside the hover/detail guard on purpose: hovering a planet shouldn't freeze the sun.
+    // Round 18: skip these while a pointer is pressed (see pressing
+    // above) — re-rendering destroys the nodes under the cursor and
+    // Chrome then never generates the click. A press lasts ~100ms, so
+    // at most one frame is skipped. The sun still churns while hovering
+    // (hover is not a press), per the Round 2 note.
+    var pressActive = pressingNow();
+    if (!pressActive) {
+      renderDiscs();
+      renderStar(); // the sun churns + flares ~7x/sec now — never frozen while the planets orbit. Outside the hover/detail guard on purpose: hovering a planet shouldn't freeze the sun.
+    }
     // The sheet's art re-renders every tick while it is open, so the
     // zoomed planet keeps shimmering — the drift itself is paused.
-    if (detailOpen && selected) fillDetailArt();
+    if (detailOpen && selected && !pressActive) fillDetailArt();
   }, 150);
 
   // --- state from the extension --------------------------------------------------
