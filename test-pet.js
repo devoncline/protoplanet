@@ -1726,40 +1726,62 @@ check('ext: the fed-mineral line is gone from the prestige panel (round 10)',
 // mid-collision and on the result screen (caught by stills).
 check('ext: prestige CSS makes [hidden] actually hide', extSrc.includes('[hidden] { display: none !important; }'));
 
-// --- 15. Share card (P0, Nov 12 — Devon picked it first) ------------------
-// The filename and the README markdown are pure petLogic helpers, so
-// the panel and the tests agree on exactly what gets shared. A seed
-// hatches the exact same planet, so the seed is the shareable planet.
+// --- 15. Share card (P0, Nov 12 — Devon picked it first; round 28
+// redesign: animated GIF + ready-to-post caption) ------------------
+// The filename, the post caption and the GIF caption/geometry are
+// pure petLogic helpers, so the panel and the tests agree on exactly
+// what gets shared. A seed hatches the exact same planet, so the
+// seed is the shareable planet.
 const sharePlanet = {
-  name: 'K2-277c', seed: 805839337, stageName: 'Civilization',
-  mutationLabel: 'MUTATION · Green Moon', generation: 5, chars: 2400,
-  terrainLabel: 'Toxic world',
+  name: 'GJ-364c', seed: 948502300, stageIdx: 6, stageName: 'Civilization',
+  mutations: [], generation: 1, chars: 2210, earnRateText: '12',
+  terrainLabel: 'Icy world',
 };
+const SHARE_URL = 'https://marketplace.visualstudio.com/items?itemName=devoncline.terrabyte';
 eq('share: filename slugifies the catalog name',
-  L.shareCardFilename('K2-277c', 5), 'terrabyte-k2-277c-gen5.png');
+  L.shareCardFilename('K2-277c', 5), 'terrabyte-k2-277c-gen5.gif');
 eq('share: filename strips spaces and dots',
-  L.shareCardFilename('TOI 700.d', 2), 'terrabyte-toi-700-d-gen2.png');
+  L.shareCardFilename('TOI 700.d', 2), 'terrabyte-toi-700-d-gen2.gif');
 eq('share: filename falls back for an empty name',
-  L.shareCardFilename('', 1), 'terrabyte-planet-gen1.png');
+  L.shareCardFilename('', 1), 'terrabyte-planet-gen1.gif');
 eq('share: filename defaults the generation to 1',
-  L.shareCardFilename('Kepler-442b'), 'terrabyte-kepler-442b-gen1.png');
-const shareMd = L.shareCardMarkdown(sharePlanet, 'terrabyte-k2-277c-gen5.png');
-check('share: markdown embeds the PNG file',
-  shareMd.includes('![K2-277c — Terrabyte](terrabyte-k2-277c-gen5.png)'), shareMd);
-check('share: markdown names the planet, terrain, stage and chars',
-  shareMd.includes('**K2-277c** · Toxic world · Civilization · grown from 2,400 characters'), shareMd);
-check('share: markdown carries the mutation label when the planet has one',
-  shareMd.includes('MUTATION · Green Moon'), shareMd);
-check('share: markdown embeds the seed in backticks',
-  shareMd.includes('Seed `805839337`'), shareMd);
-check('share: markdown links the Terrabyte repo',
-  shareMd.includes('[Terrabyte](https://github.com/devoncline/terrabyte)'), shareMd);
-// A plain planet (no mutation) gets a clean card — no mutation line.
-const plainMd = L.shareCardMarkdown({ ...sharePlanet, mutationLabel: null }, 'terrabyte-k2-277c-gen5.png');
-check('share: markdown has no mutation line for a plain planet',
-  !plainMd.includes('MUTATION'), plainMd);
-check('share: plain card still embeds the seed',
-  plainMd.includes('Seed `805839337`'), plainMd);
+  L.shareCardFilename('Kepler-442b'), 'terrabyte-kepler-442b-gen1.gif');
+
+// The post caption: what the planet was born with (or the stage it
+// hit), plus the seed and the Marketplace link. Exact strings —
+// this is what lands on the clipboard.
+eq('share: post caption for a plain Civilization planet',
+  L.sharePostCaption(sharePlanet, '948502300-icy'),
+  `My planet GJ-364c hit Civilization. Seed 948502300-icy if you want to hatch the same one. ${SHARE_URL}`);
+eq('share: post caption for a newborn planet',
+  L.sharePostCaption({ ...sharePlanet, stageIdx: 0, stageName: 'Shattered' }, '948502300-icy'),
+  `My new planet GJ-364c was just born. Seed 948502300-icy if you want to hatch the same one. ${SHARE_URL}`);
+eq('share: post caption with one mutation',
+  L.sharePostCaption({ ...sharePlanet, mutations: ['big-moon'] }, '948502300-icy'),
+  `My planet GJ-364c was born with a Big Moon. Seed 948502300-icy if you want to hatch the same one. ${SHARE_URL}`);
+eq('share: post caption with two mutations',
+  L.sharePostCaption({ ...sharePlanet, mutations: ['big-moon', 'glowing-oceans'] }, '948502300-icy'),
+  `My planet GJ-364c was born with a Big Moon and Glowing Oceans. Seed 948502300-icy if you want to hatch the same one. ${SHARE_URL}`);
+eq('share: post caption with three mutations (Oxford comma)',
+  L.sharePostCaption({ ...sharePlanet, mutations: ['big-moon', 'glowing-oceans', 'crystal-crust'] }, '948502300-icy'),
+  `My planet GJ-364c was born with a Big Moon, Glowing Oceans, and Crystal Crust. Seed 948502300-icy if you want to hatch the same one. ${SHARE_URL}`);
+eq('share: post caption falls back to the mutation id for an unknown id',
+  L.sharePostCaption({ ...sharePlanet, mutations: ['bogus-id'] }, '948502300-icy'),
+  `My planet GJ-364c was born with a bogus-id. Seed 948502300-icy if you want to hatch the same one. ${SHARE_URL}`);
+
+// The GIF caption: the lines drawn onto the GIF itself. Round 28
+// follow-up (Devon, Nov 16): the stage line is the stage NUMBER
+// ("Stage 7 of 7", not the stage name) plus the real Stardust earn
+// rate, so the caption says how fast the planet earns.
+const gifCap = L.shareGifCaption(sharePlanet, '948502300-icy');
+eq('share: GIF caption names the planet', gifCap.name, 'GJ-364c');
+eq('share: GIF caption seed line', gifCap.seedLine, 'Seed 948502300-icy');
+eq('share: GIF caption stage line', gifCap.stageLine, 'Stage 7 of 7 · grown from 2,210 characters · ✦12/char');
+const gifCap0 = L.shareGifCaption({ ...sharePlanet, stageIdx: 0, stageName: 'Shattered', chars: 0, earnRateText: '1' }, '948502300-icy');
+eq('share: GIF caption stage line for a newborn planet', gifCap0.stageLine, 'Stage 1 of 7 · grown from 0 characters · ✦1/char');
+const gifCapMut = L.shareGifCaption({ ...sharePlanet, mutations: ['big-moon'], earnRateText: '18' }, '948502300-icy');
+eq('share: GIF caption stage line uses the real earn rate (one mutation)',
+  gifCapMut.stageLine, 'Stage 7 of 7 · grown from 2,210 characters · ✦18/char');
 
 // 15a. Seed-hatch terrain tag (Nov 12): a planet whose terrain was
 // pinned by a starter pick shares its seed tagged with the terrain;
@@ -1772,40 +1794,122 @@ eq('share: bare seed when no terrain is stored',
   L.shareSeedFor({ seed: 948502300 }), '948502300');
 eq('share: bare seed for an unknown terrain',
   L.shareSeedFor({ seed: 948502300, terrain: 'bogus' }), '948502300');
-const taggedMd = L.shareCardMarkdown(
-  { ...sharePlanet, seed: 948502300, terrain: 'icy', terrainLabel: 'Icy world', name: 'GJ-364c', mutationLabel: null },
-  'terrabyte-gj-364c-gen1.png');
-check('share: markdown embeds the tagged seed for a starter-picked planet',
-  taggedMd.includes('Seed `948502300-icy`'), taggedMd);
-check('share: markdown still names the tagged planet',
-  taggedMd.includes('**GJ-364c** · Icy world'), taggedMd);
 
-// 15b. package.json + extension.js wiring for the Share panel.
+// 15b. GIF geometry (round 28, PoC v7): 72 frames at 80ms spanning
+// two ring-wave periods, ring-fit zoom, content-bbox crop expanded
+// to a fixed 3:2 art aspect (expand, never shrink).
+const gjStandin = Planet.generatePlanet(948502300, 'icy');
+const gjGeo = L.shareGifGeometry(gjStandin, 6);
+check('share: GIF geometry matches the PoC for the GJ-364c stand-in',
+  gjGeo.zoom === Math.min(Planet.stageScale(6), Planet.ringFitZoom(gjStandin, 6, 136, 76))
+  && gjGeo.box.x0 === 0 && gjGeo.box.y0 === 13 && gjGeo.box.cols === 136 && gjGeo.box.rows === 51
+  && gjGeo.width === 1088 && gjGeo.height === 854,
+  JSON.stringify(gjGeo));
+check('share: GIF geometry stays inside the 136x76 grid',
+  gjGeo.box.x0 >= 0 && gjGeo.box.y0 >= 0
+  && gjGeo.box.x0 + gjGeo.box.cols <= 136 && gjGeo.box.y0 + gjGeo.box.rows <= 76);
+check('share: GIF art aspect is ~3:2 for the stand-in',
+  // Integer rows: 51 rows gives 1088/734.4 = 1.4815, the closest
+  // integer row count to exact 3:2 (50 rows would be 1.5111).
+  Math.abs((gjGeo.cols * 8) / (gjGeo.rows * 14.4) - 3 / 2) < 0.03);
+eq('share: GIF frame count is 72', gjGeo.frameCount, 72);
+eq('share: GIF frame delay is 8cs', gjGeo.delayCs, 8);
+eq('share: GIF sec step spans two ring-wave periods',
+  gjGeo.secStep, (2 * Math.PI * 2 / 2.2) / 72);
+// A steep-tilt planet has a content bbox taller than 3:2 allows: the
+// box must go TALLER than 3:2 (aspect < 3:2) and still contain the
+// whole content bbox — never shrunk. Scan a few seeds for the first
+// tall one, so the test does not depend on one seed's tilt.
+(function () {
+  const secStep = (2 * Math.PI * 2 / 2.2) / 72;
+  function contentBox(planet, stageIdx) {
+    const zoom = Math.min(Planet.stageScale(stageIdx), Planet.ringFitZoom(planet, stageIdx, 136, 76));
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (let i = 0; i < 72; i++) {
+      const grid = Planet.render(planet, stageIdx, 10, i * secStep, zoom, undefined, undefined, true);
+      for (let y = 0; y < grid.length; y++) for (let x = 0; x < grid[y].length; x++) {
+        if (grid[y][x][1] !== null) {
+          if (x < minX) minX = x; if (x > maxX) maxX = x;
+          if (y < minY) minY = y; if (y > maxY) maxY = y;
+        }
+      }
+    }
+    return { minX, maxX, minY, maxY };
+  }
+  let tallSeed = null, tallBox = null;
+  for (const seed of [1, 2, 4, 5, 13, 123, 777]) {
+    const box = contentBox(Planet.generatePlanet(seed, 'icy'), 6);
+    const cols = Math.min(135, box.maxX + 3) - Math.max(0, box.minX - 3) + 1;
+    const rows = Math.min(75, box.maxY + 3) - Math.max(0, box.minY - 3) + 1;
+    if ((cols * 8) / (rows * 14.4) < 3 / 2) { tallSeed = seed; tallBox = box; break; }
+  }
+  check('share: found a steep-tilt seed for the tall-box test', tallSeed !== null, 'seeds tried: 1, 2, 4, 5, 13, 123, 777');
+  if (tallSeed === null) return;
+  const geo = L.shareGifGeometry(Planet.generatePlanet(tallSeed, 'icy'), 6);
+  const artAspect = (geo.cols * 8) / (geo.rows * 14.4);
+  check('share: steep-tilt GIF box is taller than 3:2', artAspect < 3 / 2, 'seed ' + tallSeed + ', aspect ' + artAspect.toFixed(3));
+  check('share: steep-tilt GIF box still contains the full content bbox',
+    geo.box.x0 <= tallBox.minX && geo.box.y0 <= tallBox.minY
+    && geo.box.x0 + geo.box.cols - 1 >= tallBox.maxX && geo.box.y0 + geo.box.rows - 1 >= tallBox.maxY,
+    'seed ' + tallSeed + ', box ' + JSON.stringify(geo.box) + ' vs content ' + tallBox.minX + ',' + tallBox.minY + '..' + tallBox.maxX + ',' + tallBox.maxY);
+})();
+
+// 15c. package.json + extension.js wiring for the Share panel.
 check('pkg: sharePlanet command', cmds.some((c) => c.command === 'terrabyte.sharePlanet'));
 check('ext: registers sharePlanet', extSrc.includes("'terrabyte.sharePlanet'"));
 check('ext: share panel HTML exists', extSrc.includes('getShareHtml'));
 check('ext: share panel is a dedicated webview panel', extSrc.includes("'terrabyte.share'"));
 check('ext: share builds its view model from the shared renderable helper', extSrc.includes('shareViewModel') && extSrc.includes('renderablePlanet'));
 check('ext: share filename comes from petLogic', extSrc.includes('Logic.shareCardFilename'));
-check('ext: share markdown comes from petLogic', extSrc.includes('Logic.shareCardMarkdown'));
-check('ext: share handles the download message', extSrc.includes("msg.type === 'downloadPng'"));
+check('ext: share post caption comes from petLogic', extSrc.includes('Logic.sharePostCaption'));
+check('ext: share GIF caption comes from petLogic', extSrc.includes('Logic.shareGifCaption'));
+check('ext: share GIF geometry comes from petLogic', extSrc.includes('Logic.shareGifGeometry'));
+check('ext: share handles the download message', extSrc.includes("msg.type === 'downloadGif'"));
+check('ext: share handles the copy post message', extSrc.includes("msg.type === 'copyPost'"));
 check('ext: share asks where to save (save dialog)', extSrc.includes('showSaveDialog'));
-check('ext: share writes the PNG bytes to disk', extSrc.includes('workspace.fs.writeFile'));
+check('ext: share writes the GIF bytes to disk', extSrc.includes('workspace.fs.writeFile'));
 check('ext: share copies the seed through the host clipboard', extSrc.includes("msg.type === 'copySeed'") && extSrc.includes('env.clipboard.writeText'));
-check('ext: share copies the markdown through the host clipboard', extSrc.includes("msg.type === 'copyMarkdown'"));
-check('ext: share panel draws the PNG on a canvas', extSrc.includes('pngCanvas') && extSrc.includes('toBlob'));
-check('ext: share canvas uses the full-density render (same grid as the panel)', extSrc.includes('P.render(state.planet, state.stageIdx,') && extSrc.includes('sec, 1.0);'));
-// drawPng passed P.CONFIG.W/H as stage0Style/smokeScale (Nov 12 —
-// stage 0 drew as a sparse 264-cell core instead of 670). The fix
-// calls render with just the zoom and lets the defaults apply.
-check('ext: share PNG render call passes no stage0Style/smokeScale args',
-  extSrc.includes('Math.max(0, sec - stageStartSec), sec, 1.0);') && !extSrc.includes('P.CONFIG.W, P.CONFIG.H)'));
-check('ext: share canvas colors cells from the ANSI palette', extSrc.includes('P.ansi256ToRgb'));
+check('ext: share copies the post caption through the host clipboard', extSrc.includes("msg.type === 'copyPost'") && extSrc.includes('shareViewModel().postCaption'));
+check('ext: share panel loads the GIF encoder', extSrc.includes('gifEncoder'));
+check('ext: share panel encodes the GIF in the webview', extSrc.includes('window.TerrabyteGif.buildShareGif'));
 check('ext: share panel shows the seed', extSrc.includes('id="seedText"'));
-check('ext: share panel shows the README block', extSrc.includes('id="markdownBlock"'));
-check('ext: share panel has all three actions', extSrc.includes('id="downloadPngBtn"') && extSrc.includes('id="copySeedBtn"') && extSrc.includes('id="copyMarkdownBtn"'));
+check('ext: share panel has all three actions', extSrc.includes('id="downloadGifBtn"') && extSrc.includes('id="copySeedBtn"') && extSrc.includes('id="copyPostBtn"'));
+// Round 28 follow-up (Devon, Nov 16): the preview is WYSIWYG — it
+// renders with the GIF's ring-fit zoom and crop box, and the layout
+// scales to the GIF's column count, so what he sees is what the
+// download produces.
+check('ext: share preview renders with the GIF zoom and crop box',
+  extSrc.includes('state.gif.zoom') && extSrc.includes('state.gif.box')
+  && extSrc.includes('P.cropGrid(grid, state.gif.box)'));
+check('ext: share preview layout scales to the GIF columns',
+  extSrc.includes('state.gif.cols'));
+// Round 28 follow-up: the mutation pill is the violet name-only pill
+// (same treatment as the sidebar/Index pills), not the gold
+// "MUTATION · …" label. The violet block with the border-radius is
+// unique to the share pill; renderMeta reads the name from
+// P.mutationNames, and the old state.mutationLabel read is gone.
+check('ext: share mutation pill is the violet name-only pill',
+  extSrc.includes('background: rgba(183, 140, 255, 0.12); border: 1px solid rgba(183, 140, 255, 0.6);\n    border-radius: 3px; padding: 1px 6px; margin: 0 0 8px; }')
+  && extSrc.includes('P.mutationNames(state.planet)')
+  && !extSrc.includes('state.mutationLabel'));
+// Round 28 follow-up: the panel meta line is the GIF caption's stage
+// line, verbatim — the panel and the GIF agree by construction.
+check('ext: share panel meta line is the GIF caption stage line',
+  extSrc.includes('state.gifCaption.stageLine'));
+// Round 28 follow-up: the seed is a labeled field — a gold SEED
+// label plus the value in a gold-tinted bordered chip — not a bare
+// dark square.
+check('ext: share seed is a labeled field, not a bare dark square',
+  extSrc.includes('<span class="seedLabel">Seed</span>')
+  && extSrc.includes('border: 1px solid rgba(232, 182, 76, .4)'));
 check('ext: share panel reuses the fixed-cell renderer', extSrc.includes('gridToHtml'));
 check('ext: share panel pushes live state on typing', extSrc.includes('postShareState'));
+// Round 28: no PNG / Markdown share code left in the panel or host.
+check('ext: no PNG download left in the share panel', !extSrc.includes('downloadPng'));
+check('ext: no Markdown copy left in the share panel', !extSrc.includes('copyMarkdown'));
+check('ext: no GitHub README block left in the share panel', !extSrc.includes('GitHub README'));
+check('ext: no shareCardMarkdown left in extension.js', !extSrc.includes('shareCardMarkdown'));
+
 
 // --- 16. Seed hatch (Nov 12) ------------------------------------------------
 // A seed hatches the same base planet, mutations stripped — the
@@ -1976,10 +2080,10 @@ check('ext: hatchFromSeed validates with parseSeedInput', extSrc.includes('Logic
 check('ext: hatchFromSeed calls Logic.hatchFromSeed', extSrc.includes('Logic.hatchFromSeed(this.state'));
 check('ext: hatchFromSeed passes the parsed terrain through', extSrc.includes('Logic.hatchFromSeed(this.state, parsed.seed, parsed.terrain)'));
 check('ext: hatchFromSeed confirms with a modal warning', extSrc.includes('Yes, hatch it'));
-check('ext: share view model carries the shared seed', extSrc.includes('shareSeed: Logic.shareSeedFor(p)'));
+check('ext: share view model carries the shared seed', extSrc.includes('Logic.shareSeedFor(p)'));
 check('ext: share copies the shared seed string', extSrc.includes('shareViewModel().shareSeed'));
 check('ext: share panel shows the shared seed', extSrc.includes('state.shareSeed || state.seed'));
-check('ext: share PNG caption uses the shared seed', extSrc.includes("(state.shareSeed || state.seed)"));
+check('ext: share GIF uses the GIF caption from the view model', extSrc.includes('state.gifCaption'));
 
 // 17. Instrument redesign (Devon, Nov 12): the solar-system panel is
 // two full-screen modes (Orrery / Index) in the Instrument style —
@@ -2200,14 +2304,16 @@ check('ext: share PNG caption uses the shared seed', extSrc.includes("(state.sha
   check('ext: orrery discs and index tiles still have no starfield layer',
     !sysHtml.includes('class="disc pp-frame"') && !sysHtml.includes('class="tile pp-frame"')
     && !sysHtml.includes('class="art pp-frame"'));
-  // Share: the card is a frame with star-free art; the PNG still
-  // draws the starred render (a standalone image keeps its sky).
+  // Share: the card is a frame with star-free art; the GIF is
+  // encoded in the webview from the stored planet (round 28 — no
+  // canvas PNG anymore). Round 28 follow-up: the render takes the
+  // GIF's zoom (WYSIWYG preview), so the call reads `zoom` now.
   check('ext: share card is a starfield frame with star-free art',
     shareHtml.includes('id="wrap" class="pp-frame"')
-    && shareHtml.includes('P.render(state.planet, state.stageIdx, t, sec, undefined, undefined, undefined, true)'));
-  check('ext: share PNG still draws the starred render',
-    shareHtml.includes('P.render(state.planet, state.stageIdx,')
-    && shareHtml.includes('Math.max(0, sec - stageStartSec), sec, 1.0);'));
+    && shareHtml.includes('P.render(state.planet, state.stageIdx, t, sec, zoom, undefined, undefined, true)'));
+  check('ext: share GIF is encoded from the stored planet, not a canvas',
+    shareHtml.includes('window.TerrabyteGif.buildShareGif(P, state.planet, state.stageIdx, state.gif, state.gifCaption')
+    && !shareHtml.includes('pngCanvas'));
   // Sidebar: skipped on purpose — its grid already fills the frame
   // exactly (layout() scales the cells to the wrap width).
   check('ext: sidebar pet has no starfield layer (grid already fills the frame)',

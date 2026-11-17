@@ -108,6 +108,11 @@ Every planet has a seed. Share it and a friend can hatch the same base
 planet on their machine — same terrain, rings, moons, and name, but
 without your mutations. Those stay yours.
 
+The Share panel downloads your planet as an animated GIF with its name,
+seed, and stage captioned on it, ready to post. Copy post gives you a
+ready-to-post caption with the seed and a link to the extension, and
+Copy seed copies just the seed.
+
 ## Commands
 
 | Command | What it does |
@@ -119,7 +124,7 @@ without your mutations. Those stay yours.
 | Terrabyte: Prestige two planets | Combine two Civilization planets into a child |
 | Terrabyte: Open prestige | Open the prestige picker |
 | Terrabyte: Open solar system | Open the orrery and Index |
-| Terrabyte: Share planet | Share the current planet (PNG, seed, or Markdown) |
+| Terrabyte: Share planet | Share the current planet (animated GIF, seed, or post caption) |
 | Terrabyte: Hatch from seed | Hatch a planet from a shared seed |
 | Terrabyte: View mineral inventory | See your minerals |
 | Terrabyte: Open shop | Buy minerals with Stardust |

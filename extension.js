@@ -1439,14 +1439,15 @@ class TerrabyteApp {
   }
 
   // -- share card (P0, Nov 12 — Devon picked it first from the
-  // popularity assessment). One click: a panel with the planet card —
-  // the live ASCII render plus name, seed, stage and mutation — a
-  // Download PNG button (the art as a real PNG, postable to X/Reddit
-  // or a README), a Copy seed button (the seed hatches the exact same
-  // planet, so it IS the shareable planet), and a Markdown block for
-  // a GitHub README. The panel is a dumb view like the others: the
-  // filename and markdown come from petLogic.js, the PNG bytes are
-  // drawn in the webview and only written to disk here.
+  // popularity assessment; round 28 redesign). One click: a panel
+  // with the planet card — the live ASCII render plus name, seed,
+  // stage and mutation — a Download GIF button (the planet as an
+  // animated GIF, postable to X/Reddit), a Copy seed button (the seed
+  // hatches the exact same planet, so it IS the shareable planet),
+  // and a Copy post button (a ready-to-post caption with the seed
+  // and a link to the extension). The panel is a dumb view like the
+  // others: the filename and captions come from petLogic.js, the GIF
+  // bytes are encoded in the webview and only written to disk here.
   openShare() {
     if (!this.state.current) {
       vscode.window.showInformationMessage('No planet yet — pick a starter first, then share it.');
@@ -1471,16 +1472,33 @@ class TerrabyteApp {
   }
 
   // Everything the card needs: the renderable planet (same shared
-  // helper as the Solar System and Prestige panels) plus the PNG
-  // filename and the README markdown from petLogic.js. `shareSeed` is
-  // the seed as it is shared — the bare seed, or seed-terrain when
-  // the planet's terrain was pinned by a starter pick (Nov 12
-  // seed-hatch fix): the panel, the copy button and the PNG caption
-  // all show the same string.
+  // helper as the Solar System and Prestige panels) plus the GIF
+  // filename, the post caption, the GIF caption and the GIF geometry
+  // from petLogic.js. `shareSeed` is the seed as it is shared — the
+  // bare seed, or seed-terrain when the planet's terrain was pinned
+  // by a starter pick (Nov 12 seed-hatch fix): the panel, the copy
+  // button and the GIF caption all show the same string. `gif` is the
+  // geometry the webview encoder needs (zoom, crop box, size, frame
+  // count); it is computed from the STORED planet traits
+  // (p.planet), never re-rolled from the seed.
   shareViewModel() {
     const p = this.renderablePlanet(this.state.current, 'current');
     const filename = Logic.shareCardFilename(p.name, p.generation);
-    return { type: 'share', ...p, filename, shareSeed: Logic.shareSeedFor(p), markdown: Logic.shareCardMarkdown(p, filename) };
+    const shareSeed = Logic.shareSeedFor(p);
+    // Round 28 — the GIF geometry costs 72 full renders (~0.5s),
+    // and postShareState runs on every keystroke while the panel is
+    // open. Cache it: the geometry only changes when the planet's
+    // seed, terrain, stage or mutations change, never on plain typing.
+    const gifKey = [p.seed, p.terrain, p.stageIdx, (p.mutations || []).join('+')].join(':');
+    if (!this._shareGifCache || this._shareGifCache.key !== gifKey) {
+      this._shareGifCache = { key: gifKey, gif: Logic.shareGifGeometry(p.planet, p.stageIdx) };
+    }
+    return {
+      type: 'share', ...p, filename, shareSeed,
+      postCaption: Logic.sharePostCaption(p, shareSeed),
+      gifCaption: Logic.shareGifCaption(p, shareSeed),
+      gif: this._shareGifCache.gif,
+    };
   }
 
   postShareState() {
@@ -1490,28 +1508,28 @@ class TerrabyteApp {
     if (this.sharePanel && this.state.current) this.sharePanel.webview.postMessage(this.shareViewModel());
   }
 
-  // Messages from the panel: copy the seed / markdown to the
-  // clipboard, or save the PNG the panel drew on its canvas. The
-  // panel never touches the clipboard or the disk itself — it asks,
-  // the host decides. A cancelled save dialog is silent (no popup).
+  // Messages from the panel: copy the seed / post caption to the
+  // clipboard, or save the GIF the panel encoded. The panel never
+  // touches the clipboard or the disk itself — it asks, the host
+  // decides. A cancelled save dialog is silent (no popup).
   async onShareMessage(msg) {
     if (!msg || typeof msg !== 'object') return;
     if (msg.type === 'copySeed' && this.state.current) {
       await vscode.env.clipboard.writeText(this.shareViewModel().shareSeed);
       if (this.sharePanel) this.sharePanel.webview.postMessage({ type: 'copied', what: 'seed' });
-    } else if (msg.type === 'copyMarkdown') {
-      await vscode.env.clipboard.writeText(this.shareViewModel().markdown);
-      if (this.sharePanel) this.sharePanel.webview.postMessage({ type: 'copied', what: 'markdown' });
-    } else if (msg.type === 'downloadPng' && typeof msg.dataUrl === 'string' && typeof msg.filename === 'string') {
-      const m = msg.dataUrl.match(/^data:image\/png;base64,(.+)$/);
-      if (!m) return; // not a PNG data URL — ignore, don't write garbage
+    } else if (msg.type === 'copyPost') {
+      await vscode.env.clipboard.writeText(this.shareViewModel().postCaption);
+      if (this.sharePanel) this.sharePanel.webview.postMessage({ type: 'copied', what: 'post' });
+    } else if (msg.type === 'downloadGif' && typeof msg.dataUrl === 'string' && typeof msg.filename === 'string') {
+      const m = msg.dataUrl.match(/^data:image\/gif;base64,(.+)$/);
+      if (!m) return; // not a GIF data URL — ignore, don't write garbage
       const folder = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0])
         ? vscode.workspace.workspaceFolders[0].uri
         : vscode.Uri.file(os.homedir());
       const uri = await vscode.window.showSaveDialog({
         defaultUri: vscode.Uri.joinPath(folder, msg.filename),
-        filters: { 'PNG image': ['png'] },
-        saveLabel: 'Save planet card',
+        filters: { 'GIF image': ['gif'] },
+        saveLabel: 'Save planet GIF',
       });
       if (!uri) return; // cancelled
       await vscode.workspace.fs.writeFile(uri, Buffer.from(m[1], 'base64'));
@@ -4757,6 +4775,9 @@ class TerrabyteApp {
     const planetJsUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, 'planet.js')
     );
+    const gifEncoderJsUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.context.extensionUri, 'gifEncoder.js')
+    );
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -4791,26 +4812,32 @@ class TerrabyteApp {
   .pp-stars { position: absolute; inset: 0; overflow: hidden; z-index: 0; }
   .pp-planet { position: relative; z-index: 1; width: fit-content; margin: 0 auto; }
   h1 { font-size: 20px; margin: 14px 0 4px; }
-  #mutationLabel { display: inline-block; font-size: 11px; font-weight: 700;
-    letter-spacing: .12em; text-transform: uppercase; color: #ffd75f;
-    background: rgba(255, 215, 95, .12); border: 1px solid rgba(255, 215, 95, .55);
-    border-radius: 3px; padding: 2px 7px; margin: 0 0 8px; }
+  /* Round 28 follow-up (Devon, Nov 16): the mutation pill matches
+     the Index/sidebar pills — violet, name only, no "MUTATION ·"
+     prefix and no gold. Same color and filled-tint treatment as the
+     sidebar pill (round 25). */
+  #mutationLabel { display: inline-block; font-size: 10px; font-weight: 700;
+    letter-spacing: .08em; text-transform: uppercase; color: #c9a6ff;
+    background: rgba(183, 140, 255, 0.12); border: 1px solid rgba(183, 140, 255, 0.6);
+    border-radius: 3px; padding: 1px 6px; margin: 0 0 8px; }
   #meta { font-size: 13px; opacity: .8; margin: 0 0 4px; line-height: 1.5; }
-  #seedLine { font-size: 13px; margin: 0 0 14px; }
-  #seedLine code { font-family: ${FONT_STACK}; background: #1a1a1a;
-    border: 1px solid #333; border-radius: 3px; padding: 1px 6px; }
+  /* Round 28 follow-up (Devon, Nov 16): the seed is a labeled field,
+     not a bare dark square — a dim gold "SEED" label plus the value
+     in mono inside a gold-tinted bordered chip. */
+  #seedLine { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 0 0 14px; }
+  #seedLine .seedLabel { font-size: 10px; font-weight: 700; letter-spacing: .14em;
+    text-transform: uppercase; color: #e8b64c; opacity: .85; }
+  #seedLine code { font-family: ${FONT_STACK}; color: #ddd; background: transparent;
+    border: 1px solid rgba(232, 182, 76, .4); border-radius: 4px; padding: 3px 9px; }
   button { font-family: var(--vscode-font-family); font-size: 13px;
     border-radius: 6px; border: 1px solid var(--vscode-widget-border, #333);
     background: var(--vscode-button-secondaryBackground, #2a2a2a);
     color: var(--vscode-button-secondaryForeground, #ddd);
     padding: 7px 14px; margin: 0 8px 8px 0; cursor: pointer; }
   button:hover { background: var(--vscode-button-secondaryHoverBackground, #3a3a3a); }
-  #downloadPngBtn { background: #e8b64c; border-color: #e8b64c; color: #111; font-weight: 600; }
-  #downloadPngBtn:hover { background: #ffd75f; }
-  h2 { font-size: 14px; margin: 18px 0 6px; }
-  #markdownBlock { background: #0b0b0b; border: 1px solid #262626; border-radius: 6px;
-    padding: 10px 12px; font-size: 12px; line-height: 1.6; white-space: pre-wrap;
-    word-break: break-all; font-family: ${FONT_STACK}; margin: 0 0 10px; }
+  #downloadGifBtn { background: #e8b64c; border-color: #e8b64c; color: #111; font-weight: 600; }
+  #downloadGifBtn:hover { background: #ffd75f; }
+  #downloadGifBtn:disabled { opacity: .6; cursor: wait; }
   #hint { font-size: 12px; opacity: .6; margin: 0; line-height: 1.5; }
 </style>
 </head>
@@ -4820,18 +4847,16 @@ class TerrabyteApp {
   <h1 id="planetName">Your planet</h1>
   <div id="mutationLabel" style="display:none"></div>
   <p id="meta"></p>
-  <p id="seedLine">Seed <code id="seedText"></code></p>
+  <p id="seedLine"><span class="seedLabel">Seed</span> <code id="seedText"></code></p>
   <div>
-    <button type="button" id="downloadPngBtn">Download PNG</button>
+    <button type="button" id="downloadGifBtn">Download GIF</button>
     <button type="button" id="copySeedBtn">Copy seed</button>
-    <button type="button" id="copyMarkdownBtn">Copy Markdown</button>
+    <button type="button" id="copyPostBtn">Copy post</button>
   </div>
-  <h2>GitHub README</h2>
-  <pre id="markdownBlock"></pre>
-  <p id="hint">The seed hatches the same base planet &mdash; a friend can paste it into their own Terrabyte and grow the same world. The PNG is the planet art, ready to post.</p>
+  <p id="hint">The seed hatches the same base planet. A friend can paste it into their own Terrabyte and grow the same world. The GIF is the planet art, ready to post.</p>
 </div>
-<canvas id="pngCanvas" style="display:none"></canvas>
 <script nonce="${nonce}" src="${planetJsUri}"></script>
+<script nonce="${nonce}" src="${gifEncoderJsUri}"></script>
 <script nonce="${nonce}">
 (function () {
   var vscodeApi = acquireVsCodeApi();
@@ -4848,7 +4873,13 @@ class TerrabyteApp {
   // so one glyph advance == one cell width.
   function layout() {
     var avail = Math.max(50, wrapEl.clientWidth - 12);
-    var scale = avail / (P.CONFIG.W * P.CONFIG.CELL_W);
+    // Round 28 follow-up (WYSIWYG): the preview uses the GIF's crop,
+    // so the layout scales to the GIF's column count, not the full
+    // 136-col grid — otherwise the preview is sized for a grid it no
+    // longer shows. Before the first state message, fall back to the
+    // full grid, as before.
+    var cols = (state && state.gif && state.gif.cols) || P.CONFIG.W;
+    var scale = avail / (cols * P.CONFIG.CELL_W);
     var newW = Math.max(1, +(10 * scale).toFixed(2));
     var newH = Math.max(1.8, +(18 * scale).toFixed(2));
     if (newW === cellW && newH === cellH && root.style.getPropertyValue('--pp-fs')) return;
@@ -4898,13 +4929,17 @@ class TerrabyteApp {
   }
   function renderMeta() {
     document.getElementById('planetName').textContent = state.name;
+    // Violet pill, name only (round 28 follow-up, Devon Nov 16): the
+    // same P.mutationNames the sidebar pill uses — "Big Moon", or
+    // "Big Moon + Glowing Oceans" for several. The CSS uppercases it.
     var mutEl = document.getElementById('mutationLabel');
-    if (state.mutationLabel) { mutEl.textContent = state.mutationLabel; mutEl.style.display = 'inline-block'; }
+    var mutNames = P.mutationNames(state.planet);
+    if (mutNames) { mutEl.textContent = mutNames; mutEl.style.display = 'inline-block'; }
     else { mutEl.style.display = 'none'; }
-    document.getElementById('meta').textContent =
-      state.stageName + ' \\u00b7 grown from ' + state.chars + ' characters';
+    // The meta line is the GIF caption's stage line, verbatim — the
+    // panel and the GIF agree by construction (round 28 follow-up).
+    document.getElementById('meta').textContent = state.gifCaption.stageLine;
     document.getElementById('seedText').textContent = state.shareSeed || state.seed;
-    document.getElementById('markdownBlock').textContent = state.markdown;
   }
 
   window.addEventListener('message', function (e) {
@@ -4930,14 +4965,14 @@ class TerrabyteApp {
       // the player knows it landed. No popup for a copy.
       var btn = msg.what === 'seed'
         ? document.getElementById('copySeedBtn')
-        : document.getElementById('copyMarkdownBtn');
+        : document.getElementById('copyPostBtn');
       var orig = btn.textContent;
       btn.textContent = 'Copied!';
       setTimeout(function () { btn.textContent = orig; }, 1200);
     } else if (msg.type === 'saved') {
-      // The host confirms the PNG hit the disk — flash the Download
+      // The host confirms the GIF hit the disk — flash the Download
       // button. No popup for a save either.
-      var dl = document.getElementById('downloadPngBtn');
+      var dl = document.getElementById('downloadGifBtn');
       var dlOrig = dl.textContent;
       dl.textContent = 'Saved!';
       setTimeout(function () { dl.textContent = dlOrig; }, 1200);
@@ -4949,71 +4984,57 @@ class TerrabyteApp {
     sec += 0.15;
     if (!state) return;
     var t = Math.max(0, sec - stageStartSec);
-    gridEl.innerHTML = P.gridToHtml(P.render(state.planet, state.stageIdx, t, sec, undefined, undefined, undefined, true), cellW, cellH);
+    // Round 28 follow-up (WYSIWYG): the preview renders with the
+    // GIF's ring-fit zoom and crop box, so what he sees is what the
+    // download produces. Still live — sec keeps advancing.
+    var zoom = (state.gif && state.gif.zoom !== undefined) ? state.gif.zoom : undefined;
+    var grid = P.render(state.planet, state.stageIdx, t, sec, zoom, undefined, undefined, true);
+    if (state.gif && state.gif.box) grid = P.cropGrid(grid, state.gif.box);
+    gridEl.innerHTML = P.gridToHtml(grid, cellW, cellH);
     fillStars(wrapEl, sec);
   }, 150);
 
-  // --- PNG: the same planet, drawn cell by cell on a canvas ------------------
-  // Full grid (136x76, the same grid the panel shows) at 8px cells —
-  // 1088px wide, postable on X/Reddit and in a README. The cozy grid
-  // (68x38) was tried first: at 16px cells the disc reads as a loose
-  // scatter of letters, the night side as a hole, and the starfield
-  // 'i's as big green letters everywhere. The full grid at 8px cells
-  // is dense and reads as the sphere Devon knows.
-  var PNG_CELL_W = 8, PNG_CELL_H = PNG_CELL_W * (P.CONFIG.CELL_H / P.CONFIG.CELL_W);
-  function drawPng() {
-    if (!state) return null;
-    // The render takes (zoom, stage0Style, smokeScale) after sec —
-    // P.CONFIG.W/H are NOT stage0Style/smokeScale. Passing them drew
-    // stage 0 as a sparse non-exploded core (264 cells instead of
-    // 670) with a smokeScale of 76; stage 6+ was unaffected. The
-    // defaults are what the panel shows: exploded core, smoke 1,
-    // stars on.
-    var grid = P.render(state.planet, state.stageIdx,
-      Math.max(0, sec - stageStartSec), sec, 1.0);
-    var canvas = document.getElementById('pngCanvas');
-    var captionH = 56;
-    canvas.width = P.CONFIG.W * PNG_CELL_W;
-    canvas.height = Math.round(P.CONFIG.H * PNG_CELL_H) + captionH;
-    var ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#050505';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.font = '13px ' + FONT_STACK; // monospace advance ~0.6em == 8px cell
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    for (var y = 0; y < grid.length; y++) {
-      for (var x = 0; x < grid[y].length; x++) {
-        var cell = grid[y][x];
-        if (cell[1] === null) continue; // empty sky stays the dark background
-        var rgb = P.ansi256ToRgb(cell[1]);
-        ctx.fillStyle = 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')';
-        ctx.fillText(cell[0], (x + 0.5) * PNG_CELL_W, (y + 0.5) * PNG_CELL_H);
-      }
+  // --- GIF: the planet as an animated GIF ----------------------------------
+  // gifEncoder.js (loaded above) renders the stored planet at the
+  // geometry the host computed (state.gif: ring-fit zoom, crop box,
+  // size, 72 frames at 80ms) with the caption from state.gifCaption,
+  // and encodes it in chunks so the panel never freezes. The bytes
+  // come back here as a data URL for the host to save.
+  function bytesToBase64(bytes) {
+    var CHUNK = 0x8000;
+    var out = '';
+    for (var i = 0; i < bytes.length; i += CHUNK) {
+      out += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
     }
-    ctx.fillStyle = '#e8b64c';
-    ctx.font = '20px ' + FONT_STACK;
-    ctx.fillText(state.name + ' \\u00b7 seed ' + (state.shareSeed || state.seed),
-      canvas.width / 2, Math.round(P.CONFIG.H * PNG_CELL_H) + 28);
-    return canvas;
+    return btoa(out);
   }
 
-  document.getElementById('downloadPngBtn').addEventListener('click', function () {
-    var canvas = drawPng();
-    if (!canvas) return;
-    canvas.toBlob(function (blob) {
-      if (!blob) return;
-      var reader = new FileReader();
-      reader.onload = function () {
-        vscodeApi.postMessage({ type: 'downloadPng', dataUrl: reader.result, filename: state.filename });
-      };
-      reader.readAsDataURL(blob);
-    }, 'image/png');
+  document.getElementById('downloadGifBtn').addEventListener('click', function () {
+    if (!state) return;
+    var btn = document.getElementById('downloadGifBtn');
+    if (!window.TerrabyteGif || !window.TerrabyteGif.buildShareGif) {
+      btn.textContent = "Couldn't make the GIF, try again";
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = 'Making your GIF...';
+    window.TerrabyteGif.buildShareGif(P, state.planet, state.stageIdx, state.gif, state.gifCaption, function (done, total) {
+      btn.textContent = 'Making your GIF... ' + done + '/' + total;
+    }).then(function (bytes) {
+      var dataUrl = 'data:image/gif;base64,' + bytesToBase64(bytes);
+      vscodeApi.postMessage({ type: 'downloadGif', dataUrl: dataUrl, filename: state.filename });
+      btn.disabled = false;
+      btn.textContent = 'Download GIF';
+    }).catch(function () {
+      btn.disabled = false;
+      btn.textContent = "Couldn't make the GIF, try again";
+    });
   });
   document.getElementById('copySeedBtn').addEventListener('click', function () {
     vscodeApi.postMessage({ type: 'copySeed' });
   });
-  document.getElementById('copyMarkdownBtn').addEventListener('click', function () {
-    vscodeApi.postMessage({ type: 'copyMarkdown' });
+  document.getElementById('copyPostBtn').addEventListener('click', function () {
+    vscodeApi.postMessage({ type: 'copyPost' });
   });
 
   vscodeApi.postMessage({ type: 'ready' });
@@ -5076,4 +5097,4 @@ function deactivate() {
   if (activeApp) activeApp.saveNow();
 }
 
-module.exports = { activate, deactivate };
+module.exports = { activate, deactivate, TerrabyteApp };

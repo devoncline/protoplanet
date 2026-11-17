@@ -1805,19 +1805,15 @@ function hatchFromSeed(state, seed, terrain) {
 }
 
 // ---------------------------------------------------------------------------
-// Share card (P0, Nov 12 — Devon picked it first from the popularity
-// assessment). One click: the planet's art + name, seed, stage and
-// mutation, as a PNG for X/Reddit and a Markdown block for a README.
-// The PNG itself is rendered in the webview (canvas from the planet
-// grid); these pure helpers build the filename and the README markdown
-// so the panel and the tests agree on exactly what gets shared.
+// Share (round 28): the GIF card + post caption.
+// The share panel downloads an animated GIF of the planet (rendered in
+// the webview by gifEncoder.js) and copies a ready-to-post caption.
 // A seed hatches the exact same planet — same seed = same planet —
-// so the seed IS the shareable planet: the markdown embeds it so a
+// so the seed IS the shareable planet: the caption embeds it so a
 // friend can paste it into their own Terrabyte and grow the same
-// world. The image line points at the downloaded PNG file, which
-// sits next to the README wherever the player puts it.
+// world.
 // ---------------------------------------------------------------------------
-const SHARE_REPO_URL = 'https://github.com/devoncline/terrabyte';
+const SHARE_MARKETPLACE_URL = 'https://marketplace.visualstudio.com/items?itemName=devoncline.terrabyte';
 
 // The seed as it is SHARED (Nov 12 seed-hatch fix): the bare seed
 // when the planet's terrain is what its seed rolls anyway, otherwise
@@ -1836,27 +1832,116 @@ function shareSeedFor(planet) {
   return `${planet.seed}-${terrain}`;
 }
 
-// terrabyte-k2-277c-gen5.png — the catalog name slugified, so the
+// terrabyte-k2-277c-gen5.gif — the catalog name slugified, so the
 // file is readable and unique per planet (names are unique in a
 // collection, and the generation disambiguates across collections).
 function shareCardFilename(name, generation) {
   const slug = String(name || 'planet').toLowerCase()
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'planet';
-  return `terrabyte-${slug}-gen${generation || 1}.png`;
+  return `terrabyte-${slug}-gen${generation || 1}.gif`;
 }
 
-// The README block. `planet` is the renderable shape from
-// extension.js (name, seed, stageName, mutationLabel, generation,
-// chars, terrainLabel). The mutation line only appears when the
-// planet has one — a plain planet's card stays clean.
-function shareCardMarkdown(planet, filename) {
-  const lines = [];
-  lines.push(`![${planet.name} — Terrabyte](${filename})`);
-  lines.push('');
-  lines.push(`**${planet.name}** · ${planet.terrainLabel || 'Terrabyte'} · ${planet.stageName} · grown from ${Number(planet.chars || 0).toLocaleString()} characters`);
-  if (planet.mutationLabel) lines.push(planet.mutationLabel);
-  lines.push(`Seed \`${shareSeedFor(planet)}\` — hatch the same base planet in [Terrabyte](${SHARE_REPO_URL}).`);
-  return lines.join('\n');
+// The ready-to-post caption: what the planet was born with (or the
+// stage it hit), plus the seed and a link to the extension. `planet`
+// is the renderable shape (name, stageIdx, stageName, mutations =
+// array of mutation ids). Mutation display names come from
+// Planet.mutationDef, falling back to the id.
+function sharePostCaption(planet, shareSeed) {
+  const names = (planet.mutations || []).map((id) => {
+    const d = Planet.mutationDef(id);
+    return d ? d.name : id;
+  });
+  const seedPart = `Seed ${shareSeed} if you want to hatch the same one. ${SHARE_MARKETPLACE_URL}`;
+  if (names.length === 1) {
+    return `My planet ${planet.name} was born with a ${names[0]}. ${seedPart}`;
+  }
+  if (names.length === 2) {
+    return `My planet ${planet.name} was born with a ${names[0]} and ${names[1]}. ${seedPart}`;
+  }
+  if (names.length >= 3) {
+    const last = names[names.length - 1];
+    return `My planet ${planet.name} was born with a ${names.slice(0, -1).join(', ')}, and ${last}. ${seedPart}`;
+  }
+  if (planet.stageIdx > 0) {
+    return `My planet ${planet.name} hit ${planet.stageName}. ${seedPart}`;
+  }
+  return `My new planet ${planet.name} was just born. ${seedPart}`;
+}
+
+// The caption drawn onto the GIF itself: the planet name, the seed,
+// and the stage line — "Stage 7 of 7 · grown from 2,210 characters
+// · ✦18/char" (round 28 follow-up, Devon Nov 16): the stage NUMBER
+// (not the stage name) plus the real Stardust earn rate, so the
+// caption says how fast the planet earns. `planet` is the renderable
+// shape (name, stageIdx, chars, earnRateText).
+function shareGifCaption(planet, shareSeed) {
+  const rateText = planet.earnRateText || formatRate(planet.earnRate || 0);
+  return {
+    name: planet.name,
+    seedLine: `Seed ${shareSeed}`,
+    stageLine: `Stage ${planet.stageIdx + 1} of ${Planet.STAGES.length} · grown from ${Number(planet.chars || 0).toLocaleString('en-US')} characters · ✦${rateText}/char`,
+  };
+}
+
+// The GIF geometry (round 28, PoC v7): 72 frames at 80ms, spanning
+// exactly two ring-wave periods (5.712s; wave speed 2.2 is an engine
+// constant), ring-fit zoom, content-bbox crop expanded to a fixed
+// 3:2 art aspect (expand, never shrink). Pure: same planet + stage
+// gives the same geometry. `planet` is the stored traits object,
+// `stageIdx` the display stage.
+function shareGifGeometry(planet, stageIdx) {
+  const FRAME_COUNT = 72;
+  const DELAY_CS = 8;
+  const CELL_W = 8;
+  const CELL_H = CELL_W * (Planet.CONFIG.CELL_H / Planet.CONFIG.CELL_W); // 14.4
+  const CAPTION_H = 120;
+  const secStep = (2 * Math.PI * 2 / 2.2) / FRAME_COUNT;
+  const zoom = Math.min(Planet.stageScale(stageIdx), Planet.ringFitZoom(planet, stageIdx, 136, 76));
+  // Content bbox: the union over all 72 frames of every non-empty
+  // cell (noStars, t=10 settled), so the ring wave and the moon never
+  // clip at the loop.
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (let i = 0; i < FRAME_COUNT; i++) {
+    const grid = Planet.render(planet, stageIdx, 10, i * secStep, zoom, undefined, undefined, true);
+    for (let y = 0; y < grid.length; y++) {
+      for (let x = 0; x < grid[y].length; x++) {
+        if (grid[y][x][1] !== null) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+  }
+  // An empty render has no content box — fall back to the full grid
+  // so the GIF still has a frame.
+  if (!isFinite(minX)) { minX = 0; maxX = 135; minY = 0; maxY = 75; }
+  const PAD = 3;
+  const cx0 = Math.max(0, minX - PAD), cx1 = Math.min(135, maxX + PAD);
+  const cy0 = Math.max(0, minY - PAD), cy1 = Math.min(75, maxY + PAD);
+  let cols = cx1 - cx0 + 1, rows = cy1 - cy0 + 1;
+  const ccx = (cx0 + cx1) / 2, ccy = (cy0 + cy1) / 2;
+  // Expand to a fixed 3:2 art aspect — never shrink below the content
+  // box, so a diagonal ring gets a taller box and a flat ring gets
+  // padding top and bottom. Centered on the content bbox center,
+  // clamped to the 136x76 grid.
+  const ASPECT = 3 / 2;
+  const rowsForAspect = Math.ceil((cols * CELL_W) / (ASPECT * CELL_H));
+  if (rowsForAspect > rows) rows = rowsForAspect;
+  else cols = Math.ceil((rows * CELL_H * ASPECT) / CELL_W);
+  cols = Math.min(136, cols); rows = Math.min(76, rows);
+  const box = {
+    x0: Math.max(0, Math.min(136 - cols, Math.round(ccx - cols / 2))),
+    y0: Math.max(0, Math.min(76 - rows, Math.round(ccy - rows / 2))),
+    cols, rows,
+  };
+  return {
+    zoom, box, cols, rows,
+    width: cols * CELL_W,
+    height: Math.round(rows * CELL_H) + CAPTION_H,
+    frameCount: FRAME_COUNT, delayCs: DELAY_CS, secStep,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -2108,6 +2193,6 @@ module.exports = {
   salvageLostMutations, salvageLostMessage,
   buyBirthMineral, buyRandomMutationMineral, buyFamilyPick,
   mineralInventory,
-  shareCardFilename, shareCardMarkdown, SHARE_REPO_URL,
+  shareCardFilename, sharePostCaption, shareGifCaption, shareGifGeometry, SHARE_MARKETPLACE_URL,
   serializeState, deserializeState, migrateV1toV2,
 };
